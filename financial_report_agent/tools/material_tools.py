@@ -13,11 +13,6 @@ from agentscope.tool import ToolResponse, Toolkit
 from ..memory.short_term import ShortTermMemoryStore
 
 class MaterialTools:
-    """封装所有“拉数据 + 存成 material”的工具逻辑。
-
-    - ShortTermMemoryStore 作为内部依赖 self.short_term
-    - 外部注册到 Toolkit 的都是实例方法，签名只暴露业务参数
-    """
 
     def __init__(self, short_term: Optional[ShortTermMemoryStore] = None) -> None:
         self.short_term = short_term
