@@ -12,21 +12,21 @@ from .material_tools import *
 
 
 # -------- Local File Reader --------
-def local_file_reader(symbol: str, limit: int = 3) -> ToolResponse:
-    """读取本地相关公司的研报，以 demonstration 形式写入 short-term memory。
-
-    Args:
-        symbol (str):
-            股票代码或公司名称。
-        limit (int):
-            最多读取多少篇研报。
-    """
-    # 真实实现中这里应该去 data/reports/ 下面扫文件并做解析
-    text = f"[local_file_reader] 读取 {symbol} 的最近 {limit} 篇本地研报（示例占位）。"
-    return ToolResponse(
-        content=[TextBlock(type="text", text=text)],
-        metadata={"symbol": symbol, "limit": limit},
-    )
+# def local_file_reader(symbol: str, limit: int = 3) -> ToolResponse:
+#     """读取本地相关公司的研报，以 demonstration 形式写入 short-term memory。
+#
+#     Args:
+#         symbol (str):
+#             股票代码或公司名称。
+#         limit (int):
+#             最多读取多少篇研报。
+#     """
+#     # 真实实现中这里应该去 data/reports/ 下面扫文件并做解析
+#     text = f"[local_file_reader] 读取 {symbol} 的最近 {limit} 篇本地研报（示例占位）。"
+#     return ToolResponse(
+#         content=[TextBlock(type="text", text=text)],
+#         metadata={"symbol": symbol, "limit": limit},
+#     )
 
 
 
@@ -63,7 +63,7 @@ def local_file_reader(symbol: str, limit: int = 3) -> ToolResponse:
 # -------- Toolkit Builder --------
 def build_searcher_toolkit(
     short_term: ShortTermMemoryStore,
-    tool_use_store: ToolUseExperienceStore,
+    # tool_use_store: ToolUseExperienceStore,
 ) -> Toolkit:
     """创建 Searcher 专用 Toolkit。
     """

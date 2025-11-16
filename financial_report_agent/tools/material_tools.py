@@ -34,14 +34,7 @@ class MaterialTools:
             csv_text = df.to_csv(index=False)
             self.short_term.save_material(ref_id=ref_id, content=csv_text, ext="csv")
         return len(df)
-    
 
-    def _save_df_to_material(self, df: pd.DataFrame, ref_id: str) -> int:
-            """DataFrame 存入 short-term material（CSV），返回行数。"""
-            if self.short_term is not None:
-                csv_text = df.to_csv(index=False)
-                self.short_term.save_material(ref_id=ref_id, content=csv_text, ext="csv")
-            return len(df)
 
     def _preview_df(self, df: pd.DataFrame, max_rows: int | None = None) -> tuple[str, int, int, list[str]]:
         """生成 DataFrame 文本预览及相关统计。"""
@@ -84,15 +77,15 @@ class MaterialTools:
             metadata=meta,
         )
 
-    def _read_df_from_material(
-        self,
-        ref_id: str,
-    ) -> Optional[pd.DataFrame]:
-        """从 short-term material 中读取 CSV 并还原为 DataFrame。"""
-        csv_text = self.short_term.load_material(ref_id=ref_id, ext="csv")
-        if not csv_text:
-            return None
-        return pd.read_csv(io.StringIO(csv_text))
+    # def _read_df_from_material(
+    #     self,
+    #     ref_id: str,
+    # ) -> Optional[pd.DataFrame]:
+    #     """从 short-term material 中读取 CSV 并还原为 DataFrame。"""
+    #     csv_text = self.short_term.load_material(ref_id=ref_id, ext="csv")
+    #     if not csv_text:
+    #         return None
+    #     return pd.read_csv(io.StringIO(csv_text))
 
 
     def add_exchange_prefix(self, symbol: str, type: str) -> str:

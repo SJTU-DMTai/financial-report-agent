@@ -8,7 +8,7 @@ from typing import Any
 
 @dataclass
 class OutlineExperienceStore:
-    """用简单的文件系统实现 Outline 的长期经验库。
+    """实现 Outline 的长期经验库。（使用本地文件记录memory展示结构，不包含具体实现）
     """
 
     base_dir: Path
@@ -37,7 +37,7 @@ class OutlineExperienceStore:
 
 @dataclass
 class ToolUseExperienceStore:
-    """记录工具调用经验 <tool_name, list of exp>。"""
+    """记录工具调用经验 <tool_name, list of exp>。（使用本地文件记录memory展示结构，不包含具体实现）"""
 
     base_path: Path
 

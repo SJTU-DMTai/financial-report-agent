@@ -25,12 +25,14 @@ async def run_workflow(task_desc: str) -> str:
     short_term = ShortTermMemoryStore(
         base_dir=Path("data/memory/short_term"),
     )
-    outline_store = OutlineExperienceStore(
-        base_dir=Path("data/memory/long_term/outlines"),
-    )
-    tool_use_store = ToolUseExperienceStore(
-        base_path=Path("data/memory/long_term/tool_use"),
-    )
+
+    # 由于 Tool-Use Experience 和 Outline Experience 还没有实现
+    # outline_store = OutlineExperienceStore(
+    #     base_dir=Path("data/memory/long_term/outlines"),
+    # )
+    # tool_use_store = ToolUseExperienceStore(
+    #     base_path=Path("data/memory/long_term/tool_use"),
+    # )
 
     # ----- 2. 创建底层模型 -----
     model = create_chat_model(stream=False)
@@ -38,7 +40,7 @@ async def run_workflow(task_desc: str) -> str:
     # ----- 3. 创建 Searcher Agent -----
     searcher_toolkit = build_searcher_toolkit(
         short_term=short_term,
-        tool_use_store=tool_use_store,
+        # tool_use_store=tool_use_store,
     )
 
     searcher = create_searcher_agent(model=model, toolkit=searcher_toolkit)

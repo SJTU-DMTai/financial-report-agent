@@ -4,6 +4,7 @@
 log*.txt
 *.out
 data/memory/short_term/material/*
+.idea/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
