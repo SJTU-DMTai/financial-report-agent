@@ -6,8 +6,8 @@ from typing import Any
 from agentscope.message import TextBlock
 from agentscope.tool import Toolkit, ToolResponse
 
-from ..memory.short_term import ShortTermMemoryStore
-from ..memory.long_term import ToolUseExperienceStore
+from memory.short_term import ShortTermMemoryStore
+from memory.long_term import ToolUseExperienceStore
 from .material_tools import *
 
 

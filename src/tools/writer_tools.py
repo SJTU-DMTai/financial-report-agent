@@ -8,7 +8,7 @@ from agentscope.agent import ReActAgent
 from agentscope.message import Msg, TextBlock
 from agentscope.tool import Toolkit, ToolResponse
 
-from ..memory.short_term import ShortTermMemoryStore
+from memory.short_term import ShortTermMemoryStore
 from .material_tools import *
 
 
@@ -286,5 +286,6 @@ def build_writer_toolkit(
     toolkit.register_tool_function(
         tools.read_table_material
     )
+    toolkit.tools
 
     return toolkit

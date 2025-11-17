@@ -6,20 +6,19 @@ from agentscope.formatter import DashScopeChatFormatter
 from agentscope.tool import Toolkit
 from agentscope.model import DashScopeChatModel
 
-from ..config.prompts import WRITER_SYS_PROMPT
+from prompt import prompt_dict
 
 
-def create_writer_agent(
+def create_planner_agent(
     model: DashScopeChatModel,
     toolkit: Toolkit,
 ) -> ReActAgent:
     return ReActAgent(
-        name="Writer",
-        sys_prompt=WRITER_SYS_PROMPT,
+        name="Planner",
+        sys_prompt=prompt_dict['planner_sys_prompt'],
         model=model,
         memory=InMemoryMemory(),
         formatter=DashScopeChatFormatter(),
         toolkit=toolkit,
         parallel_tool_calls=True,
-        max_iters=50
     )

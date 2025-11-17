@@ -6,8 +6,8 @@ from agentscope.agent import ReActAgent
 from agentscope.message import Msg, TextBlock
 from agentscope.tool import Toolkit, ToolResponse
 
-from ..memory.short_term import ShortTermMemoryStore
-from ..memory.long_term import OutlineExperienceStore
+from memory.short_term import ShortTermMemoryStore
+from memory.long_term import OutlineExperienceStore
 
 
 # ---- Outline Tool: Read / Replace / Save to long-term ----
@@ -92,7 +92,7 @@ def searcher_tool(searcher: ReActAgent) -> Callable[[str], ToolResponse]:
 
 
 # ---- Toolkit Builder ----
-def build_planner_toolkit(
+def build_outline_toolkit(
     short_term: ShortTermMemoryStore,
     outline_store: OutlineExperienceStore,
     searcher: ReActAgent,
