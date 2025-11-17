@@ -10,12 +10,111 @@ import pandas as pd
 from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse, Toolkit
 
-from ..memory.short_term import ShortTermMemoryStore
+from memory.short_term import ShortTermMemoryStore
+
+def _preview_df(df: pd.DataFrame, max_rows: int | None = None) -> tuple[str, int, int, list[str]]:
+    """生成 DataFrame 文本预览及相关统计。"""
+    total_rows = len(df)
+
+    if max_rows is None:
+        preview_df = df  # 全部数据
+        preview_rows = total_rows
+    else:
+        preview_df = df.head(max_rows)
+        preview_rows = min(max_rows, total_rows)
+
+    preview_str = preview_df.to_string(index=False)
+    columns_names = list(df.columns)
+    return preview_str, total_rows, preview_rows, columns_names
+
+def _build_tool_response_from_df(
+    df: pd.DataFrame,
+    ref_id: str,
+    header: str,
+    preview_rows: int = 10,
+    extra_meta: Optional[Dict[str, Any]] = None,
+) -> ToolResponse:
+    """统一构造 ToolResponse，包含预览文本和基础 metadata。"""
+    preview_str, total_rows, used_rows, columns_names = _preview_df(df, preview_rows)  # 预览的时候返回前10行
+    text = (
+        f"{header} 共 {total_rows} 条记录，"
+        f"Material 已写入 ref_id='{ref_id}'（CSV 格式）。\n\n"
+        f"以下为全部列名：\n"
+        f"{columns_names}\n"
+        f"以下为前 {used_rows} 行预览：\n"
+        f"{preview_str}"
+    )
+    meta: Dict[str, Any] = {"ref_id": ref_id, "row_count": total_rows}
+    if extra_meta:
+        meta.update(extra_meta)
+    return ToolResponse(
+        content=[TextBlock(type="text", text=text)],
+        metadata=meta,
+    )
+
+def add_exchange_prefix(symbol: str, type: str) -> str:
+    """
+    根据股票代码判断交易所，并按大小写返回带前缀的 symbol。
+    由于akshare的stock_gdfx_free_top_10_em和stock_gdfx_top_10_em
+    和stock_zygc_em需要传带交易所的股票代码
+    """
+    code = symbol.strip()
+    t = type.lower()
+    # 前缀映射
+    prefix_upper = {"SH": "SH", "SZ": "SZ", "BJ": "BJ", "HK": "HK"}
+    prefix_lower = {"SH": "sh", "SZ": "sz", "BJ": "bj", "HK": "hk"}
+
+    if code.isdigit() and len(code) == 5:
+        exchange = "HK"
+    else:
+        exchange = None
+
+    # 其他交易所规则
+    if exchange is None:
+        # 上交所
+        if code.startswith(("600", "601", "603", "605", "688", "900", "730", "700")):
+            exchange = "SH"
+
+        # 深交所
+        elif code.startswith(("001", "002", "003", "200", "080")) or code.startswith("30"):
+            exchange = "SZ"
+
+        # 北交所
+        elif code.startswith(("43", "83", "87", "920")):
+            exchange = "BJ"
+
+        else:
+            return code
+
+    # 返回大小写
+    if t == "upper":
+        return prefix_upper[exchange] + code
+    elif t == "lower":
+        return prefix_lower[exchange] + code
+    else:
+        raise ValueError("type 需为 'upper' 或 'lower'。")
+
 
 class MaterialTools:
 
     def __init__(self, short_term: Optional[ShortTermMemoryStore] = None) -> None:
         self.short_term = short_term
+        self.tools = [
+            self.fetch_disclosure_material,
+            self.fetch_business_composition_material,
+            self.fetch_business_description_material,
+            self.fetch_stock_news_material,
+            self.fetch_balance_sheet_material,
+            self.fetch_history_price_material,
+            self.fetch_cashflow_table_material,
+            self.fetch_profit_table_material,
+            self.fetch_realtime_price_material,
+            self.fetch_top10_shareholders_material,
+            self.fetch_top10_float_shareholders_material,
+            self.fetch_shareholder_change_material,
+            self.fetch_shareholder_count_detail_material,
+            self.fetch_main_shareholders_material
+        ]
 
     # ========== 内部函数（不注册为 tool） ==========
 
@@ -31,104 +130,7 @@ class MaterialTools:
         return len(df)
 
 
-    def _preview_df(self, df: pd.DataFrame, max_rows: int | None = None) -> tuple[str, int, int, list[str]]:
-        """生成 DataFrame 文本预览及相关统计。"""
-        total_rows = len(df)
-
-        if max_rows is None:
-            preview_df = df  # 全部数据
-            preview_rows = total_rows
-        else:
-            preview_df = df.head(max_rows)
-            preview_rows = min(max_rows, total_rows)
-
-        preview_str = preview_df.to_string(index=False)
-        columns_names = list(df.columns)
-        return preview_str, total_rows, preview_rows, columns_names
-
-    def _build_tool_response_from_df(
-        self,
-        df: pd.DataFrame,
-        ref_id: str,
-        header: str,
-        preview_rows: int = 10,
-        extra_meta: Optional[Dict[str, Any]] = None,
-    ) -> ToolResponse:
-        """统一构造 ToolResponse，包含预览文本和基础 metadata。"""
-        preview_str, total_rows, used_rows, columns_names = self._preview_df(df, preview_rows)  # 预览的时候返回前10行
-        text = (
-            f"{header} 共 {total_rows} 条记录，"
-            f"Material 已写入 ref_id='{ref_id}'（CSV 格式）。\n\n"
-            f"以下为全部列名：\n"
-            f"{columns_names}\n"
-            f"以下为前 {used_rows} 行预览：\n"
-            f"{preview_str}"
-        )
-        meta: Dict[str, Any] = {"ref_id": ref_id, "row_count": total_rows}
-        if extra_meta:
-            meta.update(extra_meta)
-        return ToolResponse(
-            content=[TextBlock(type="text", text=text)],
-            metadata=meta,
-        )
-
-    # def _read_df_from_material(
-    #     self,
-    #     ref_id: str,
-    # ) -> Optional[pd.DataFrame]:
-    #     """从 short-term material 中读取 CSV 并还原为 DataFrame。"""
-    #     csv_text = self.short_term.load_material(ref_id=ref_id, ext="csv")
-    #     if not csv_text:
-    #         return None
-    #     return pd.read_csv(io.StringIO(csv_text))
-
-
-    def add_exchange_prefix(self, symbol: str, type: str) -> str:
-        """
-        根据股票代码判断交易所，并按大小写返回带前缀的 symbol。
-        由于akshare的stock_gdfx_free_top_10_em和stock_gdfx_top_10_em
-        和stock_zygc_em需要传带交易所的股票代码
-        """
-        code = symbol.strip()
-        t = type.lower()
-        # 前缀映射
-        prefix_upper = {"SH": "SH", "SZ": "SZ", "BJ": "BJ", "HK": "HK"}
-        prefix_lower = {"SH": "sh", "SZ": "sz", "BJ": "bj", "HK": "hk"}
-
-        if code.isdigit() and len(code) == 5:
-            exchange = "HK"
-        else:
-            exchange = None
-
-        # 其他交易所规则
-        if exchange is None:
-            # 上交所
-            if code.startswith(("600", "601", "603", "605", "688", "900", "730", "700")):
-                exchange = "SH"
-
-            # 深交所
-            elif code.startswith(("001", "002", "003", "200", "080")) or code.startswith("30"):
-                exchange = "SZ"
-
-            # 北交所
-            elif code.startswith(("43", "83", "87", "920")):
-                exchange = "BJ"
-
-            else:
-                return code
-
-        # 返回大小写
-        if t == "upper":
-            return prefix_upper[exchange] + code
-        elif t == "lower":
-            return prefix_lower[exchange] + code
-        else:
-            raise ValueError("type 需为 'upper' 或 'lower'。")
-
-
-
     # ===================== 股价数据 =====================
-
 
     async def fetch_realtime_price_material(
         self,
@@ -159,7 +161,7 @@ class MaterialTools:
 
         self._save_df_to_material(df, ref_id)
         header = f"[fetch_realtime_price_material] 股价实时行情（symbol={symbol or 'ALL'}）"
-        return self._build_tool_response_from_df(
+        return _build_tool_response_from_df(
             df,
             ref_id=ref_id,
             header=header,
@@ -222,7 +224,7 @@ class MaterialTools:
             f"[fetch_history_price_material] {symbol} {period} 股价历史行情 "
             f"{start_date}~{end_date} adjust='{adjust or '无'}'"
         )
-        return self._build_tool_response_from_df(
+        return _build_tool_response_from_df(
             df,
             ref_id=ref_id,
             header=header,
@@ -237,8 +239,6 @@ class MaterialTools:
 
 
     # ===================== 金融新闻 =====================
-
-
     async def fetch_stock_news_material(
         self,
         symbol: str,
@@ -262,13 +262,12 @@ class MaterialTools:
 
         self._save_df_to_material(df, ref_id)
         header = f"[fetch_stock_news_material] 个股新闻（symbol={symbol}）"
-        return self._build_tool_response_from_df(
+        return _build_tool_response_from_df(
             df,
             ref_id=ref_id,
             header=header,
             extra_meta={"symbol": symbol},
         )
-
 
     async def fetch_disclosure_material(
         self,
@@ -328,7 +327,7 @@ class MaterialTools:
             f"[fetch_disclosure_material] 信息披露公告（symbol={symbol}, market={market}, "
             f"category={category or '全部'}, {start_date}~{end_date}）"
         )
-        return self._build_tool_response_from_df(
+        return _build_tool_response_from_df(
             df,
             ref_id=ref_id,
             header=header,
@@ -344,8 +343,6 @@ class MaterialTools:
 
 
     # ===================== 财务报表 =====================
-
-
     async def fetch_balance_sheet_material(
         self,
         symbol: str,
@@ -376,7 +373,7 @@ class MaterialTools:
 
         self._save_df_to_material(df, ref_id)
         header = f"[fetch_balance_sheet_material] 资产负债表（symbol={symbol}, indicator={indicator}）"
-        return self._build_tool_response_from_df(
+        return _build_tool_response_from_df(
             df,
             ref_id=ref_id,
             header=header,
@@ -414,7 +411,7 @@ class MaterialTools:
 
         self._save_df_to_material(df, ref_id)
         header = f"[fetch_profit_table_material] 利润表（symbol={symbol}, indicator={indicator}）"
-        return self._build_tool_response_from_df(
+        return _build_tool_response_from_df(
             df,
             ref_id=ref_id,
             header=header,
@@ -451,7 +448,7 @@ class MaterialTools:
 
         self._save_df_to_material(df, ref_id)
         header = f"[fetch_cashflow_table_material] 现金流量表（symbol={symbol}, indicator={indicator}）"
-        return self._build_tool_response_from_df(
+        return _build_tool_response_from_df(
             df,
             ref_id=ref_id,
             header=header,
@@ -492,7 +489,7 @@ class MaterialTools:
 
         self._save_df_to_material(df, ref_id)
         header = f"[fetch_top10_float_shareholders_material] 十大流通股东（symbol={symbol}, date={date}）"
-        return self._build_tool_response_from_df(
+        return _build_tool_response_from_df(
             df,
             ref_id=ref_id,
             header=header,
@@ -528,7 +525,7 @@ class MaterialTools:
 
         self._save_df_to_material(df, ref_id)
         header = f"[fetch_top10_shareholders_material] 十大股东（symbol={symbol}, date={date}）"
-        return self._build_tool_response_from_df(
+        return _build_tool_response_from_df(
             df,
             ref_id=ref_id,
             header=header,
@@ -559,7 +556,7 @@ class MaterialTools:
 
         self._save_df_to_material(df, ref_id)
         header = f"[fetch_main_shareholders_material] 主要股东（stock={stock}）"
-        return self._build_tool_response_from_df(
+        return _build_tool_response_from_df(
             df,
             ref_id=ref_id,
             header=header,
@@ -590,7 +587,7 @@ class MaterialTools:
 
         self._save_df_to_material(df, ref_id)
         header = f"[fetch_shareholder_count_detail_material] 股东户数详情（symbol={symbol}）"
-        return self._build_tool_response_from_df(
+        return _build_tool_response_from_df(
             df,
             ref_id=ref_id,
             header=header,
@@ -621,7 +618,7 @@ class MaterialTools:
 
         self._save_df_to_material(df, ref_id)
         header = f"[fetch_shareholder_change_material] 股东持股变动（symbol={symbol}）"
-        return self._build_tool_response_from_df(
+        return _build_tool_response_from_df(
             df,
             ref_id=ref_id,
             header=header,
@@ -630,8 +627,6 @@ class MaterialTools:
 
 
     # ===================== 业务范围 =====================
-
-
     async def fetch_business_description_material(
         self,
         symbol: str,
@@ -655,7 +650,7 @@ class MaterialTools:
 
         self._save_df_to_material(df, ref_id)
         header = f"[fetch_business_description_material] 主营介绍（symbol={symbol}）"
-        return self._build_tool_response_from_df(
+        return _build_tool_response_from_df(
             df,
             ref_id=ref_id,
             header=header,
@@ -686,7 +681,7 @@ class MaterialTools:
 
         self._save_df_to_material(df, ref_id)
         header = f"[fetch_business_composition_material] 主营构成（symbol={symbol}）"
-        return self._build_tool_response_from_df(
+        return _build_tool_response_from_df(
             df,
             ref_id=ref_id,
             header=header,
@@ -723,7 +718,7 @@ class MaterialTools:
                 metadata={"ref_id": ref_id, "found": False},
             )
 
-        preview_str, total_rows, used_rows, _ = self._preview_df(df, max_rows)
+        preview_str, total_rows, used_rows, _ = _preview_df(df, max_rows)
         text = (
             f"[read_table_material] 成功读取 ref_id='{ref_id}' 对应的表格，"
             f"共 {total_rows} 条记录。以下为前 {used_rows} 行预览：\n"

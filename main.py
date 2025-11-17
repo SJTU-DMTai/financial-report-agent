@@ -1,6 +1,6 @@
 import asyncio
 
-from financial_report_agent.pipelines.workflow import run_workflow
+from src.pipelines.workflow import run_workflow
 
 
 async def main() -> None:

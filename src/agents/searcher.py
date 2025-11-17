@@ -6,16 +6,18 @@ from agentscope.formatter import DashScopeChatFormatter
 from agentscope.tool import Toolkit
 from agentscope.model import DashScopeChatModel
 
-from ..config.prompts import PLANNER_SYS_PROMPT
+from prompt import prompt_dict
 
 
-def create_planner_agent(
+def create_searcher_agent(
     model: DashScopeChatModel,
     toolkit: Toolkit,
 ) -> ReActAgent:
+    """Searcher 使用 ReActAgent 实现。
+    """
     return ReActAgent(
-        name="Planner",
-        sys_prompt=PLANNER_SYS_PROMPT,
+        name="Searcher",
+        sys_prompt=prompt_dict['searcher_sys_prompt'],
         model=model,
         memory=InMemoryMemory(),
         formatter=DashScopeChatFormatter(),

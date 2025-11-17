@@ -10,8 +10,8 @@ import os
 
 import pandas as pd
 import pytest
-from financial_report_agent.tools import material_tools as mt
-from financial_report_agent.memory.short_term import ShortTermMemoryStore
+from src.tools import material_tools as mt
+from src.memory.short_term import ShortTermMemoryStore
 
 short_term_memory_path = ROOT / "data" / "memory" / "short_term"
 
