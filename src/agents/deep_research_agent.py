@@ -11,10 +11,10 @@ from copy import deepcopy
 import shortuuid
 from pydantic import BaseModel
 
-from prompt import prompt_dict
-from utils.data_model import SubtasksDecomposition, WebExtraction, FollowupJudge, ReflectFailure
+from ..prompt import prompt_dict
+from ..utils.data_model import SubtasksDecomposition, WebExtraction, FollowupJudge, ReflectFailure
 
-from utils.process import (
+from ..utils.process import (
     truncate_search_result,
     get_dynamic_tool_call_json,
     get_structure_output,

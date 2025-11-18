@@ -8,7 +8,7 @@ from agentscope.agent import ReActAgent
 from agentscope.message import Msg, TextBlock
 from agentscope.tool import Toolkit, ToolResponse
 
-from memory.short_term import ShortTermMemoryStore
+from ..memory.short_term import ShortTermMemoryStore
 from .material_tools import *
 
 
@@ -207,8 +207,21 @@ class WriterTools:
                 metadata={"pdf_path": None},
             )
 
-        full_html = "<html><body>\n" + "\n<hr/>\n".join(body_parts) + "\n</body></html>"
-
+        body_html = "\n<hr/>\n".join(body_parts)
+        full_html = f"""<!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <style>
+                body {{
+                    font-family: "Noto Sans CJK SC", "Microsoft YaHei", "SimSun", "Songti SC", sans-serif;
+                }}
+            </style>
+        </head>
+        <body>
+        {body_html}
+        </body>
+        </html>"""
         # 3. 调用 pdfkit 生成 PDF
         out_dir = Path(output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -219,7 +232,11 @@ class WriterTools:
         #     pdfkit.from_string(full_html, str(pdf_path), configuration=config)
         # else:
         #     pdfkit.from_string(full_html, str(pdf_path))
-        pdfkit.from_string(full_html, str(pdf_path))
+
+        options = {
+            "encoding": "UTF-8",
+        }
+        pdfkit.from_string(full_html, str(pdf_path), options=options)
         text = f"[html_to_pdf] 已输出 PDF: {pdf_path}"
         return ToolResponse(
             content=[TextBlock(type="text", text=text)],
@@ -286,6 +303,5 @@ def build_writer_toolkit(
     toolkit.register_tool_function(
         tools.read_table_material
     )
-    toolkit.tools
 
     return toolkit

@@ -6,11 +6,12 @@ from agentscope.formatter import DashScopeChatFormatter
 from agentscope.tool import Toolkit
 from agentscope.model import DashScopeChatModel
 
-from prompt import prompt_dict
+from ..prompt import prompt_dict
 
 
 def create_planner_agent(
-    model: DashScopeChatModel,
+    model,
+    formatter,
     toolkit: Toolkit,
 ) -> ReActAgent:
     return ReActAgent(
@@ -18,7 +19,7 @@ def create_planner_agent(
         sys_prompt=prompt_dict['planner_sys_prompt'],
         model=model,
         memory=InMemoryMemory(),
-        formatter=DashScopeChatFormatter(),
+        formatter=formatter,
         toolkit=toolkit,
         parallel_tool_calls=True,
     )
