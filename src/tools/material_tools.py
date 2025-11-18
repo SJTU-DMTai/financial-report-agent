@@ -10,7 +10,8 @@ import pandas as pd
 from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse, Toolkit
 
-from memory.short_term import ShortTermMemoryStore
+from ..memory.short_term import ShortTermMemoryStore
+
 
 def _preview_df(df: pd.DataFrame, max_rows: int | None = None) -> tuple[str, int, int, list[str]]:
     """生成 DataFrame 文本预览及相关统计。"""
@@ -27,12 +28,13 @@ def _preview_df(df: pd.DataFrame, max_rows: int | None = None) -> tuple[str, int
     columns_names = list(df.columns)
     return preview_str, total_rows, preview_rows, columns_names
 
+
 def _build_tool_response_from_df(
-    df: pd.DataFrame,
-    ref_id: str,
-    header: str,
-    preview_rows: int = 10,
-    extra_meta: Optional[Dict[str, Any]] = None,
+        df: pd.DataFrame,
+        ref_id: str,
+        header: str,
+        preview_rows: int = 10,
+        extra_meta: Optional[Dict[str, Any]] = None,
 ) -> ToolResponse:
     """统一构造 ToolResponse，包含预览文本和基础 metadata。"""
     preview_str, total_rows, used_rows, columns_names = _preview_df(df, preview_rows)  # 预览的时候返回前10行
@@ -51,6 +53,7 @@ def _build_tool_response_from_df(
         content=[TextBlock(type="text", text=text)],
         metadata=meta,
     )
+
 
 def add_exchange_prefix(symbol: str, type: str) -> str:
     """
@@ -119,9 +122,9 @@ class MaterialTools:
     # ========== 内部函数（不注册为 tool） ==========
 
     def _save_df_to_material(
-        self,
-        df: pd.DataFrame,
-        ref_id: str
+            self,
+            df: pd.DataFrame,
+            ref_id: str
     ) -> int:
         """DataFrame 存入 short-term material（CSV），返回行数。"""
         if self.short_term is not None:
@@ -129,13 +132,12 @@ class MaterialTools:
             self.short_term.save_material(ref_id=ref_id, content=csv_text, ext="csv")
         return len(df)
 
-
     # ===================== 股价数据 =====================
 
     async def fetch_realtime_price_material(
-        self,
-        symbol: str | None = None,
-        ref_id: str | None = None
+            self,
+            symbol: str | None = None,
+            ref_id: str | None = None
     ) -> ToolResponse:
         """获取沪深京 A 股实时行情数据，并将结果保存为表格。
         适用场景：需要查询某只 A 股当前价格、涨跌幅、成交量等实时指标；需要一次性拉取全市场实时行情，作为选股或打分模型的输入。
@@ -168,15 +170,14 @@ class MaterialTools:
             extra_meta={"symbol": symbol},
         )
 
-
     async def fetch_history_price_material(
-        self,
-        symbol: str,
-        period: str = "daily",
-        start_date: str = "20100101",
-        end_date: str = "20991231",
-        adjust: str = "",
-        ref_id: str | None = None,
+            self,
+            symbol: str,
+            period: str = "daily",
+            start_date: str = "20100101",
+            end_date: str = "20991231",
+            adjust: str = "",
+            ref_id: str | None = None,
     ) -> ToolResponse:
         """获取指定 A 股股票的历史行情（日/周/月），并写入表格。
         拉取指定股票在给定时间区间和周期上的历史行情数据（开盘价、收盘价、成交量、涨跌幅等），
@@ -237,12 +238,11 @@ class MaterialTools:
             },
         )
 
-
     # ===================== 金融新闻 =====================
     async def fetch_stock_news_material(
-        self,
-        symbol: str,
-        ref_id: str | None = None,
+            self,
+            symbol: str,
+            ref_id: str | None = None,
     ) -> ToolResponse:
         """获取指定个股的新闻资讯数据，并写入表格.
         相关的最新新闻资讯（默认为当日最近约 100 条），包括新闻标题、内容摘要、发布时间、来源和链接等，
@@ -270,14 +270,14 @@ class MaterialTools:
         )
 
     async def fetch_disclosure_material(
-        self,
-        symbol: str,
-        market: str = "沪深京",
-        keyword: str = "",
-        category: str = "",
-        start_date: str = "20000101",
-        end_date: str = "20991231",
-        ref_id: str | None = None,
+            self,
+            symbol: str,
+            market: str = "沪深京",
+            keyword: str = "",
+            category: str = "",
+            start_date: str = "20000101",
+            end_date: str = "20991231",
+            ref_id: str | None = None,
     ) -> ToolResponse:
         """获取指定股票的信息披露公告，并写入表格。
         抓取指定 symbol 在给定时间区间内的各类信息披露公告，
@@ -341,13 +341,12 @@ class MaterialTools:
             },
         )
 
-
     # ===================== 财务报表 =====================
     async def fetch_balance_sheet_material(
-        self,
-        symbol: str,
-        indicator: str = "按报告期",
-        ref_id: str | None = None,
+            self,
+            symbol: str,
+            indicator: str = "按报告期",
+            ref_id: str | None = None,
     ) -> ToolResponse:
         """获取指定股票的资产负债表数据，并写入表格。
         抓取企业历年或各报告期的资产负债表数据，并将结果保存。
@@ -380,12 +379,11 @@ class MaterialTools:
             extra_meta={"symbol": symbol, "indicator": indicator},
         )
 
-
     async def fetch_profit_table_material(
-        self,
-        symbol: str,
-        indicator: str = "按报告期",
-        ref_id: str | None = None,
+            self,
+            symbol: str,
+            indicator: str = "按报告期",
+            ref_id: str | None = None,
     ) -> ToolResponse:
         """获取指定股票的利润表数据，并写入表格。
         抓取企业历年或各报告期的利润表数据，并保存。
@@ -418,12 +416,11 @@ class MaterialTools:
             extra_meta={"symbol": symbol, "indicator": indicator},
         )
 
-
     async def fetch_cashflow_table_material(
-        self,
-        symbol: str,
-        indicator: str = "按报告期",
-        ref_id: str | None = None,
+            self,
+            symbol: str,
+            indicator: str = "按报告期",
+            ref_id: str | None = None,
     ) -> ToolResponse:
         """获取指定股票的现金流量表数据，并写入表格。
         抓取企业历年或各报告期的现金流量表数据（约 75 个字段），并将结果保存。
@@ -455,15 +452,13 @@ class MaterialTools:
             extra_meta={"symbol": symbol, "indicator": indicator},
         )
 
-
     # ===================== 股东信息 =====================
 
-
     async def fetch_top10_float_shareholders_material(
-        self,
-        symbol: str,
-        date: str,
-        ref_id: str | None = None,
+            self,
+            symbol: str,
+            date: str,
+            ref_id: str | None = None,
     ) -> ToolResponse:
         """获取指定股票在某一报告期的十大流通股东，并写入表格。
 
@@ -482,7 +477,7 @@ class MaterialTools:
                 Material 标识，默认值为 f"{symbol}_top10_free_{date}"。
         """
 
-        df = ak.stock_gdfx_free_top_10_em(symbol=self.add_exchange_prefix(symbol,"lower"), date=date)
+        df = ak.stock_gdfx_free_top_10_em(symbol=add_exchange_prefix(symbol, "lower"), date=date)
 
         if ref_id is None:
             ref_id = f"{symbol}_top10_free_{date}"
@@ -496,12 +491,11 @@ class MaterialTools:
             extra_meta={"symbol": symbol, "date": date},
         )
 
-
     async def fetch_top10_shareholders_material(
-        self,
-        symbol: str,
-        date: str,
-        ref_id: str | None = None,
+            self,
+            symbol: str,
+            date: str,
+            ref_id: str | None = None,
     ) -> ToolResponse:
         """获取指定股票在某一报告期的十大股东（总股本口径），并写入表格。
         抓取指定 symbol 和 date 对应的股东名称、股份类型、
@@ -518,7 +512,7 @@ class MaterialTools:
             ref_id (Optional[str]):
                 Material 标识，默认值为 f"{symbol}_top10_{date}"。
         """
-        df = ak.stock_gdfx_top_10_em(symbol=self.add_exchange_prefix(symbol,"lower"), date=date)
+        df = ak.stock_gdfx_top_10_em(symbol=add_exchange_prefix(symbol, "lower"), date=date)
 
         if ref_id is None:
             ref_id = f"{symbol}_top10_{date}"
@@ -532,11 +526,10 @@ class MaterialTools:
             extra_meta={"symbol": symbol, "date": date},
         )
 
-
     async def fetch_main_shareholders_material(
-        self,
-        stock: str,
-        ref_id: str | None = None,
+            self,
+            stock: str,
+            ref_id: str | None = None,
     ) -> ToolResponse:
         """获取指定股票的主要股东信息，并写入表格。
         抓取所有历史披露的主要股东信息，
@@ -563,11 +556,10 @@ class MaterialTools:
             extra_meta={"stock": stock},
         )
 
-
     async def fetch_shareholder_count_detail_material(
-        self,
-        symbol: str,
-        ref_id: str | None = None,
+            self,
+            symbol: str,
+            ref_id: str | None = None,
     ) -> ToolResponse:
         """获取指定股票的股东户数详情，并写入表格。
         获取指定 symbol 的全部历史数据，包括股东户数统计截止日、区间涨跌幅、股东户数本次/上次/增减及其比例、户均持股市值与数量、
@@ -594,11 +586,10 @@ class MaterialTools:
             extra_meta={"symbol": symbol},
         )
 
-
     async def fetch_shareholder_change_material(
-        self,
-        symbol: str,
-        ref_id: str | None = None,
+            self,
+            symbol: str,
+            ref_id: str | None = None,
     ) -> ToolResponse:
         """获取指定股票的股东持股变动统计信息，并写入表格。
         抓取所有披露的股东持股变动记录，包括公告日期、变动股东、变动数量、交易均价、剩余股份总数、变动期间和变动途径等。
@@ -625,12 +616,11 @@ class MaterialTools:
             extra_meta={"symbol": symbol},
         )
 
-
     # ===================== 业务范围 =====================
     async def fetch_business_description_material(
-        self,
-        symbol: str,
-        ref_id: str | None = None,
+            self,
+            symbol: str,
+            ref_id: str | None = None,
     ) -> ToolResponse:
         """获取指定股票的主营业务介绍，并写入表格。
         抓取公司主营业务、产品类型、产品名称及经营范围等字段，
@@ -657,11 +647,10 @@ class MaterialTools:
             extra_meta={"symbol": symbol},
         )
 
-
     async def fetch_business_composition_material(
-        self,
-        symbol: str,
-        ref_id: str | None = None,
+            self,
+            symbol: str,
+            ref_id: str | None = None,
     ) -> ToolResponse:
         """获取指定股票的主营构成数据，并写入表格。
         抓取按产品、地区等维度划分的主营收入、成本、利润、及对应比例和毛利率等历史数据。
@@ -674,7 +663,7 @@ class MaterialTools:
                 Material 标识，默认值为 f"{symbol}_business_composition_em"。
         """
 
-        df = ak.stock_zygc_em(symbol=self.add_exchange_prefix(symbol,"upper"))
+        df = ak.stock_zygc_em(symbol=add_exchange_prefix(symbol, "upper"))
 
         if ref_id is None:
             ref_id = f"{symbol}_business_composition_em"
@@ -688,14 +677,12 @@ class MaterialTools:
             extra_meta={"symbol": symbol},
         )
 
-
     # ===================== 通用读取函数 =====================
 
-
     def read_table_material(
-        self,
-        ref_id: str,
-        max_rows: int | None = None,  # 默认显示全部
+            self,
+            ref_id: str,
+            max_rows: int | None = None,  # 默认显示全部
     ) -> ToolResponse:
         """读取任意表格 Material，并返回预览信息。
 
@@ -710,7 +697,7 @@ class MaterialTools:
 
         """
         df = self.short_term.load_material(ref_id=ref_id, ext="csv")
-        
+
         if df is None:
             text = f"[read_table_material] 未找到 ref_id='{ref_id}' 对应的 Material。"
             return ToolResponse(

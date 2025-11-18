@@ -1,0 +1,14 @@
+# config.yaml
+models:
+  default: deepseek   # 默认使用的模型 id
+
+  deepseek:
+    provider: openrouter
+    model_name: deepseek/deepseek-chat-v3.1:free
+    base_url_env: https://openrouter.ai/api/v1
+    stream: true
+
+  qwen_dashscope:
+    provider: dashscope
+    model_name: qwen3-max
+    stream: true

@@ -5,12 +5,13 @@ from agentscope.memory import InMemoryMemory
 from agentscope.formatter import DashScopeChatFormatter
 from agentscope.tool import Toolkit
 from agentscope.model import DashScopeChatModel
-
-from prompt import prompt_dict
+from agentscope.model import OpenAIChatModel
+from ..prompt import prompt_dict
 
 
 def create_searcher_agent(
-    model: DashScopeChatModel,
+    model,
+    formatter,
     toolkit: Toolkit,
 ) -> ReActAgent:
     """Searcher 使用 ReActAgent 实现。
@@ -20,7 +21,7 @@ def create_searcher_agent(
         sys_prompt=prompt_dict['searcher_sys_prompt'],
         model=model,
         memory=InMemoryMemory(),
-        formatter=DashScopeChatFormatter(),
+        formatter=formatter,
         toolkit=toolkit,
         parallel_tool_calls=True,
     )
