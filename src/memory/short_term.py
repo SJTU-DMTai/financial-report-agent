@@ -4,7 +4,7 @@ from pathlib import Path
 import pandas as pd
 import json
 from io import StringIO
-
+import shutil
 
 @dataclass
 class ShortTermMemoryStore:
@@ -25,10 +25,53 @@ class ShortTermMemoryStore:
     def manuscript_dir(self) -> Path:
         return self.base_dir / "manuscript"
 
+    @property
+    def demonstration_dir(self) -> Path:
+        return self.base_dir / "demonstration"
+    
+    @property
+    def demonstration_path(self) -> Path:
+        return self.base_dir / "demonstration" / "demonstration.md"
+    
+
+    def __post_init__(self):
+        # 转移之前的short_term memory，避免对当前任务造成干扰
+        history_dir = self.base_dir / "history_short_term"
+        history_dir.mkdir(parents=True, exist_ok=True)
+
+        targets = [
+            self.outline_path,
+            self.material_dir,
+            self.manuscript_dir,
+        ]
+
+        for target in targets:
+            if target.exists():
+                dest = history_dir / target.name
+
+                # 目录移动
+                if target.is_dir():
+                    if dest.exists():
+                        shutil.rmtree(dest)
+                    shutil.copytree(target, dest)
+                    shutil.rmtree(target)
+
+                # 文件移动
+                else:
+                    shutil.copy2(target, dest)
+                    target.unlink()
+
+        # 重建空目录结构，避免后续调用失败
+        self.material_dir.mkdir(parents=True, exist_ok=True)
+        self.manuscript_dir.mkdir(parents=True, exist_ok=True)
+
+
     def ensure_dirs(self) -> None:
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.material_dir.mkdir(parents=True, exist_ok=True)
         self.manuscript_dir.mkdir(parents=True, exist_ok=True)
+        self.demonstration_dir.mkdir(parents=True, exist_ok=True)
+
 
     # ---- Outline ----
     def load_outline(self) -> str:
@@ -51,7 +94,17 @@ class ShortTermMemoryStore:
         if not path.exists():
             return ""
         return path.read_text(encoding="utf-8")
+    
+    # ---- demonstration ----
+    def load_demonstration(self) -> str:
+        if not self.demonstration_path.exists():
+            return ""
+        return self.demonstration_path.read_text(encoding="utf-8")
 
+    def save_demonstration(self, content: str) -> None:
+        self.ensure_dirs()
+        self.demonstration_path.write_text(content, encoding="utf-8")
+    
     # -----------------------------------------
     # Material 存储
     # -----------------------------------------
