@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import pdfkit
 import re
 from typing import List, Tuple
 from agentscope.agent import ReActAgent
@@ -70,7 +69,6 @@ class WriterTools:
     ) -> ToolResponse:
         """根据现有的 outline.md 生成按章节拆分的 HTML 草稿骨架。
         调用此工具时，将根据大纲内容，自动创建对应章节的初始 HTML 草稿，并返回生成的章节 ID 列表。
-
         """
         outline = self.short_term.load_outline()
         if not outline.strip():
@@ -136,7 +134,7 @@ class WriterTools:
                     要更新的章节唯一标识符。
                 new_html (str):
                     用于替换原章节的完整 HTML 内容。
-            """
+        """
         self.short_term.save_manuscript_section(section_id, new_html)
         return ToolResponse(
             content=[TextBlock(type="text", text=f"[replace_manuscript_section] 已更新 {section_id}")],
@@ -154,96 +152,6 @@ class WriterTools:
         return ToolResponse(
             content=[TextBlock(type="text", text=text)],
             metadata={"chart_path": str(fake_path)},
-        )
-
-    # ---- PDF Converter ----
-    def html_to_pdf(
-        self,
-        output_filename: str = "report.pdf",
-        output_dir: str = "data/output/reports",
-    ) -> ToolResponse:
-        """将所有 Manuscript 章节按顺序合并并导出为 PDF 文件。
-
-        此工具会自动收集当前已生成的全部章节（例如 sec_01_xxx.html 等），
-        按章节编号的字典序排序后依次拼接为一个完整的 HTML 文档，并最终导出 PDF。
-        仅需提供输出文件名及输出目录（如有需要），工具将负责：
-        - 自动读取所有已有章节
-        - 按章节序号排序
-        - 拼接内容
-        - 生成 PDF 文件并返回文件路径
-
-        Args:
-            output_filename (str):
-                生成的 PDF 文件名。默认为 "report.pdf"。
-            output_dir (str):
-                PDF 输出目录。若不存在会自动创建。
-
-        """
-        assert self.short_term is not None
-
-        # 1. 收集所有 section 文件并按文件名排序
-        sec_files = sorted(self.short_term.manuscript_dir.glob("sec_*.html"))
-        if not sec_files:
-            text = "[html_to_pdf] 未找到任何章节文件 (sec_*.html)，无法生成 PDF。"
-            return ToolResponse(
-                content=[TextBlock(type="text", text=text)],
-                metadata={"pdf_path": None},
-            )
-
-        # 2. 按顺序拼接 body 片段
-        body_parts: list[str] = []
-        section_ids: list[str] = []
-        for path in sec_files:
-            html_fragment = path.read_text(encoding="utf-8")
-            if not html_fragment:
-                continue
-            body_parts.append(html_fragment)
-            section_ids.append(path.stem)  # 比如 sec_01_行业分析
-
-        if not body_parts:
-            text = "[html_to_pdf] 所有章节为空，无法生成 PDF。"
-            return ToolResponse(
-                content=[TextBlock(type="text", text=text)],
-                metadata={"pdf_path": None},
-            )
-
-        body_html = "\n<hr/>\n".join(body_parts)
-        full_html = f"""<!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="utf-8">
-            <style>
-                body {{
-                    font-family: "Noto Sans CJK SC", "Microsoft YaHei", "SimSun", "Songti SC", sans-serif;
-                }}
-            </style>
-        </head>
-        <body>
-        {body_html}
-        </body>
-        </html>"""
-        # 3. 调用 pdfkit 生成 PDF
-        out_dir = Path(output_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        pdf_path = out_dir / output_filename
-
-        # if wkhtmltopdf_path:
-        #     config = pdfkit.configuration(wkhtmltopdf=wkhtmltopdf_path)
-        #     pdfkit.from_string(full_html, str(pdf_path), configuration=config)
-        # else:
-        #     pdfkit.from_string(full_html, str(pdf_path))
-
-        options = {
-            "encoding": "UTF-8",
-        }
-        pdfkit.from_string(full_html, str(pdf_path), options=options)
-        text = f"[html_to_pdf] 已输出 PDF: {pdf_path}"
-        return ToolResponse(
-            content=[TextBlock(type="text", text=text)],
-            metadata={
-                "pdf_path": str(pdf_path),
-                "sections": section_ids,
-            },
         )
 
 
@@ -289,7 +197,6 @@ def build_writer_toolkit(
     toolkit.register_tool_function(writer_tools.replace_manuscript_section)
     # toolkit.register_tool_function(generate_chart)
 
-    toolkit.register_tool_function(writer_tools.html_to_pdf)
 
     toolkit.register_tool_function(writer_tools.searcher_tool(searcher))
 

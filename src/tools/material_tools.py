@@ -6,10 +6,12 @@ import io
 
 import akshare as ak
 import pandas as pd
-
+import re
+from urllib.parse import urlparse, parse_qs
+import requests
+import fitz
 from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse, Toolkit
-
 from ..memory.short_term import ShortTermMemoryStore
 
 
@@ -310,6 +312,67 @@ class MaterialTools:
 
         """
 
+
+            # 内部工具函数：从公告链接 + 公告时间 拼出 PDF URL
+        def _build_pdf_url(link: str, announce_date: str) -> str | None:
+            if not isinstance(link, str) or not link:
+                return None
+
+            announcement_id = None
+            try:
+                parsed = urlparse(link)
+                qs = parse_qs(parsed.query)
+                if "announcementId" in qs and qs["announcementId"]:
+                    announcement_id = qs["announcementId"][0]
+                else:
+                    # 兜底：用正则从 URL 中提取
+                    m = re.search(r"announcementId=(\d+)", link)
+                    if m:
+                        announcement_id = m.group(1)
+            except Exception:
+                pass
+
+            if not announcement_id:
+                return None
+
+            # 公告时间列一般形如 "2023-12-09" 或 "2023-12-09 00:00:00"
+            if not isinstance(announce_date, str):
+                announce_date = str(announce_date)
+            date_str = announce_date.split()[0]  # 去掉可能的时间部分
+            # 替换可能存在的分隔符为 "-"
+            date_str = (
+                date_str.replace(".", "-")
+                        .replace("/", "-")
+            )
+
+            return f"https://static.cninfo.com.cn/finalpage/{date_str}/{announcement_id}.PDF"
+
+        # 内部工具函数：下载 PDF 并用 PyMuPDF 抽取文本
+        def _fetch_pdf_text(pdf_url: str, referer: str | None = None) -> str:
+            if not pdf_url:
+                return ""
+            try:
+                headers = {
+                    "User-Agent": "Mozilla/5.0",
+                }
+                if referer:
+                    headers["Referer"] = referer
+
+                resp = requests.get(pdf_url, headers=headers, timeout=20)
+                resp.raise_for_status()
+
+                with fitz.open(stream=resp.content, filetype="pdf") as doc:
+                    texts: list[str] = []
+                    for page in doc:
+                        t = page.get_text().strip()
+                        if t:
+                            texts.append(t)
+                return "\n".join(texts)
+            except Exception:
+                # 出错就返回空字符串，避免整个流程中断；具体错误可按需改成日志记录
+                return ""
+
+
         df = ak.stock_zh_a_disclosure_report_cninfo(
             symbol=symbol,
             market=market,
@@ -318,9 +381,39 @@ class MaterialTools:
             start_date=start_date,
             end_date=end_date,
         )
+        if df is None or df.empty:
+            if ref_id is None:
+                ref_id = f"{symbol}_disclosure_{category or 'all'}_{start_date}_{end_date}"
+            # self._save_df_to_material(df, ref_id)
+            header = (
+                f"[fetch_disclosure_material] 信息披露公告搜索结果为空，可以修改或者放宽搜索条件（symbol={symbol}, market={market}, "
+                f"category={category or '全部'}, {start_date}~{end_date}）"
+            )
+            return _build_tool_response_from_df(
+                df,
+                ref_id=ref_id,
+                header=header,
+            )
+
+        # 2. 遍历 df 行，构造 PDF URL 并抽文本
+        texts: list[str] = []
+        for _, row in df.iterrows():
+            link = row.get("公告链接")
+            announce_date = row.get("公告时间")
+            pdf_url = _build_pdf_url(link, announce_date)
+            text = _fetch_pdf_text(pdf_url, referer=link)
+            texts.append(text)
+
+        # 3. 新增「公告」列，删除「公告链接」列
+        df["公告"] = texts
+        if "公告链接" in df.columns:
+            df = df.drop(columns=["公告链接"])
+
 
         if ref_id is None:
             ref_id = f"{symbol}_disclosure_{category or 'all'}_{start_date}_{end_date}"
+
+
 
         self._save_df_to_material(df, ref_id)
         header = (

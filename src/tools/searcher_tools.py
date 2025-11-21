@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from typing import List, Dict, Any
 
+from duckduckgo_search import DDGS
 from agentscope.message import TextBlock
 from agentscope.tool import Toolkit, ToolResponse
 
@@ -57,6 +59,63 @@ from .material_tools import *
 #     )
 
 
+async def search_engine(keywords: str, max_results: int = 10) -> ToolResponse:
+    """使用 DuckDuckGo 进行 Web 搜索并返回摘要信息。
+
+    - 调用 DuckDuckGo 的搜索引擎接口，根据给定关键词返回若干条搜索结果的摘要，适合获取大致信息或者是新闻等。
+    - 如果需要完整、可核查的原文内容，或者是结构化数据请调用其他工具。
+
+    Args:
+        keywords (str):
+            搜索关键词。
+        max_results (int):
+            返回的最大结果数量。
+    """
+    try:
+        # 1) 调用 DuckDuckGo 搜索接口
+        raw_results = DDGS().text(
+            keywords=keywords,
+            region="cn-zh",
+            max_results=max_results,
+        )
+
+        # 2) 标准化结果结构：title / url / description
+        normalized: List[Dict[str, Any]] = []
+        for r in raw_results:
+            normalized.append(
+                {
+                    "title": r.get("title", "无标题"),
+                    "url": r.get("href", "无链接"),
+                    "description": r.get("body", "无摘要"),
+                }
+            )
+
+        # 3) 将结果格式化为纯文本，供 TextBlock 使用
+        if not normalized:
+            text = f"[search_engine] 对关键词「{keywords}」未找到结果。"
+        else:
+            lines: List[str] = [f"[search_engine] 搜索关键词：{keywords}", ""]
+            for i, item in enumerate(normalized, start=1):
+                title = item.get("title", "无标题")
+                url = item.get("url", "无链接")
+                desc = item.get("description", "无摘要")
+                lines.append(f"{i}. {title}")
+                lines.append(f"   URL: {url}")
+                lines.append(f"   摘要: {desc}")
+                lines.append("")  # 空行分隔
+            text = "\n".join(lines)
+
+    except Exception as e:
+        text = f"[search_engine] 搜索出错：{e}"
+
+    return ToolResponse(
+        content=[
+            TextBlock(
+                type="text",
+                text=text,
+            ),
+        ],
+    )
 # -------- Toolkit Builder --------
 def build_searcher_toolkit(
         short_term: ShortTermMemoryStore,
@@ -79,6 +138,8 @@ def build_searcher_toolkit(
     #     save_tool_use_experience,
     #     preset_kwargs={"store": tool_use_store},
     # )
+
+    toolkit.register_tool_function(search_engine)
 
     # -------- Material Tools --------
 
