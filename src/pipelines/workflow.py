@@ -22,7 +22,7 @@ async def run_workflow(task_desc: str, output_filename: str) -> str:
     )
 
     # 解析demonstration report，第二遍解析同一个report可以注释掉
-    pdf_to_markdown(short_term=short_term)
+    # pdf_to_markdown(short_term=short_term)
 
 
     # outline_store = OutlineExperienceStore(
