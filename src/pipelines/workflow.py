@@ -6,14 +6,11 @@ from agentscope.message import Msg
 
 from src.utils.instance import create_chat_model, create_agent_formatter, create_searcher_formatter
 from src.memory.short_term import ShortTermMemoryStore
-from src.tools.searcher_tools import build_searcher_toolkit
-from src.tools.writer_tools import build_writer_toolkit
-from src.tools.planner_tools import build_planner_toolkit
-from src.agents.searcher import create_searcher_agent
-from src.agents.writer import create_writer_agent
-from src.agents.planner import create_planner_agent
-from src.utils.file_converter import html_to_pdf,pdf_to_markdown
-async def run_workflow(task_desc: str) -> str:
+from src.agents.searcher import create_searcher_agent, build_searcher_toolkit
+from src.agents.writer import create_writer_agent, build_writer_toolkit
+from src.agents.planner import create_planner_agent, build_planner_toolkit
+from src.utils.file_converter import md_to_pdf,pdf_to_markdown
+async def run_workflow(task_desc: str, output_filename: str) -> str:
     """围绕一个 task description 执行完整的研报生成流程。
 
     返回值：Writer 最终输出消息中的文本内容（其中包含 PDF 路径）。
@@ -21,10 +18,10 @@ async def run_workflow(task_desc: str) -> str:
 
     # ----- 1. 准备 memory store -----
     short_term = ShortTermMemoryStore(
-        base_dir=Path("data/memory/short_term"),
+        base_dir=Path("/financial-report-agent/data/memory/short_term"),
     )
 
-    # 解析demonstration report
+    # 解析demonstration report，第二遍解析同一个report可以注释掉
     pdf_to_markdown(short_term=short_term)
 
 
@@ -63,6 +60,9 @@ async def run_workflow(task_desc: str) -> str:
     )
     writer = create_writer_agent(model=model, formatter=create_agent_formatter(), toolkit=writer_toolkit)
 
+    # print("\n=== 打印 JSON Schema (get_json_schemas) ===")
+    # schemas = writer_toolkit.get_json_schemas()
+    # print(schemas)
     # ----- 5. 调用 Planner：生成 / 修订 outline.md -----
     planner_input = Msg(
         name="User",
@@ -86,7 +86,7 @@ async def run_workflow(task_desc: str) -> str:
         role="user",
     )
     final_msg = await writer(writer_input)
-    html_to_pdf(short_term=short_term)
+    md_to_pdf(short_term=short_term,output_filename=output_filename+".pdf")
 
     # Msg.get_text_content() 在官方文档中用于从消息里取纯文本
     return final_msg.get_text_content()

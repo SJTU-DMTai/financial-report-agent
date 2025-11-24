@@ -9,3 +9,7 @@ class Config:
         models = self.data["models"]
         model_id = models["default"]
         return models[model_id]
+    
+    def get_font_path(self, key: str = "chinese") -> str | None:
+            font_cfg = self.data.get("font", {})
+            return font_cfg.get(key)

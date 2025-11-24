@@ -5,8 +5,7 @@ from typing import Any, List
 from abc import ABC, abstractmethod
 
 class RoughTokenCounter(TokenCounterBase):
-    """极简、轻量级 token 计数器.
-
+    """极简、轻量级 token 计数器
     - 实现 TokenCounterBase 接口: async count(messages: list[dict]) -> int
     """
 

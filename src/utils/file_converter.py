@@ -12,75 +12,169 @@ from docling.datamodel.document import (
     ListItem,
     DocItem
 )
+import markdown
+import re
 
-def html_to_pdf(
+def _replace_chart_placeholders(md_text: str, manuscript_dir: Path) -> str:
+    """
+    将 Markdown 中形如
+        ![说明文字](chart:chart_id)
+    的图片占位符替换为真实图片路径，例如
+        ![说明文字](/abs/path/to/manuscript_dir/chart_id.png)
+    """
+    pattern = re.compile(
+        r'!\[(?P<alt>.*?)\]\(chart:(?P<chart_id>[a-zA-Z0-9_\-]+)\)'
+    )
+
+    def repl(match: re.Match) -> str:
+        alt = match.group("alt")
+        chart_id = match.group("chart_id")
+        img_path = manuscript_dir / f"{chart_id}.png"
+        # 使用 POSIX 路径，避免反斜杠问题
+        return f'![{alt}]({img_path.as_posix()})'
+
+    return pattern.sub(repl, md_text)
+
+
+def _normalize_tables(md_text: str) -> str:
+    """
+    1. 保证表格块前有一个空行；
+    2. 删除表格内部行之间的“空行”，让表格行连续。
+    """
+    lines = md_text.splitlines()
+
+    def is_table_line(line: str) -> bool:
+        # 简单判断：以 | 开头并且包含至少两个 |
+        return bool(re.match(r'^\s*\|.*\|\s*$', line))
+
+    new_lines: list[str] = []
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+
+        # 2) 删除“表格行之间的空行”
+        if stripped == "":
+            if (
+                i > 0
+                and i + 1 < len(lines)
+                and is_table_line(lines[i - 1])
+                and is_table_line(lines[i + 1])
+            ):
+                # 这是“前后都是表格行”的空行，跳过
+                continue
+
+        # 1) 如果这是表格行，且前一行是非空非表格行，则补一个空行
+        if is_table_line(line):
+            if new_lines and new_lines[-1].strip() != "" and not is_table_line(new_lines[-1]):
+                new_lines.append("")  # 补一行空行
+
+        new_lines.append(line)
+
+    return "\n".join(new_lines)
+
+def md_to_pdf(
         short_term : ShortTermMemoryStore,
         output_filename: str = "report.pdf",
         output_dir: str = "data/output/reports",
     ):
-        """将所有 Manuscript 章节按顺序合并并导出为 PDF 文件。
-        """
+    """将所有 Manuscript 章节按顺序合并并导出为 PDF 文件。
+    """
+    # 1. 收集所有 section 文件并按文件名排序
+    sec_files = sorted(short_term.manuscript_dir.glob("sec_*.md"))
+    if not sec_files:
+        return "[md_to_pdf] 未找到任何章节文件 (sec_*.md)，无法生成 PDF。"
 
-        # 1. 收集所有 section 文件并按文件名排序
-        sec_files = sorted(short_term.manuscript_dir.glob("sec_*.html"))
-        if not sec_files:
-            text = "[html_to_pdf] 未找到任何章节文件 (sec_*.html)，无法生成 PDF。"
+    # 2. 按顺序把每个 Markdown 章节渲染为 HTML，并拼接 body 片段
+    body_parts: list[str] = []
+    section_ids: list[str] = []
 
-        # 2. 按顺序拼接 body 片段
-        body_parts: list[str] = []
-        section_ids: list[str] = []
-        for path in sec_files:
-            html_fragment = path.read_text(encoding="utf-8")
-            if not html_fragment:
-                continue
-            body_parts.append(html_fragment)
-            section_ids.append(path.stem)  # 比如 sec_01_行业分析
+    for path in sec_files:
+        md_text = path.read_text(encoding="utf-8").strip()
+        if not md_text:
+            continue
 
-        if not body_parts:
-            text = "[html_to_pdf] 所有章节为空，无法生成 PDF。"
+        md_text = _replace_chart_placeholders(md_text, short_term.manuscript_dir)
+        md_text = _normalize_tables(md_text)
+        print(md_text+"\n\n")
+        # 将 Markdown 转为 HTML 片段
+        html_fragment = markdown.markdown(
+            md_text,
+            extensions=[
+                "extra",        # 支持表格、脚注等常用扩展
+                "tables",
+                "fenced_code",
+            ],
+            output_format="html",
+        )
+        print(html_fragment+"\n\n")
+        body_parts.append(html_fragment)
+        section_ids.append(path.stem)  # 比如 sec_01_行业分析
 
+    if not body_parts:
+        return "[md_to_pdf] 所有章节为空，无法生成 PDF。"
 
-        body_html = "\n<hr/>\n".join(body_parts)
-        full_html = f"""<!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="utf-8">
-            <style>
-                body {{
-                    font-family: "Noto Sans CJK SC", "Microsoft YaHei", "SimSun", "Songti SC", sans-serif;
-                }}
-            </style>
-        </head>
-        <body>
-        {body_html}
-        </body>
-        </html>"""
-        # 3. 调用 pdfkit 生成 PDF
-        out_dir = Path(output_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        pdf_path = out_dir / output_filename
+    # 章节之间用分隔线（也可以加上分页样式）
+    body_html = '\n<hr style="page-break-after: always; border: none;" />\n'.join(body_parts)
 
-        # if wkhtmltopdf_path:
-        #     config = pdfkit.configuration(wkhtmltopdf=wkhtmltopdf_path)
-        #     pdfkit.from_string(full_html, str(pdf_path), configuration=config)
-        # else:
-        #     pdfkit.from_string(full_html, str(pdf_path))
+    full_html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        body {{
+            font-family: "Noto Sans CJK SC", "Microsoft YaHei", "SimSun", "Songti SC", sans-serif;
+            font-size: 19px; 
+            line-height: 1.7;
+        }}
+        h1, h2, h3, h4, h5, h6 {{
+            font-weight: bold;
+        }}
+        code, pre {{
+            font-family: "JetBrains Mono", "Consolas", "Courier New", monospace;
+        }}
+        img {{
+            max-width: 100%;
+            height: auto;
+            display: block;
+            margin: 12px auto;
+        }}
+        table {{
+            border-collapse: collapse;
+            width: 100%;
+        }}
+        table, th, td {{
+            border: 1px solid #ccc;
+        }}
+        th, td {{
+            padding: 4px 8px;
+        }}
+    </style>
+</head>
+<body>
+{body_html}
+</body>
+</html>"""
 
-        options = {
-            "encoding": "UTF-8",
-        }
-        pdfkit.from_string(full_html, str(pdf_path), options=options)
-        text = f"[html_to_pdf] 已输出 PDF: {pdf_path}"
+    # 3. 调用 pdfkit 生成 PDF
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    pdf_path = out_dir / output_filename
 
-        return text
+    options = {
+        "encoding": "UTF-8",
+        "enable-local-file-access": None,
+    }
+    pdfkit.from_string(full_html, str(pdf_path), options=options)
 
+    text = f"[md_to_pdf] 已输出 PDF: {pdf_path}"
+    return text
 
 
 def pdf_to_markdown(
     short_term : ShortTermMemoryStore,
 ):
     """
-    将 PDF 转换为结构化 Markdown，提取图片和表格并以特定格式嵌入。
+    将 demonstration report PDF 转换为结构化 Markdown，提取图片和表格并以特定格式嵌入。
     """
     # 1. 路径与目录准备
     output_dir = short_term.demonstration_dir

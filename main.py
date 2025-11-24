@@ -3,12 +3,26 @@ import asyncio
 from src.pipelines.workflow import run_workflow
 
 
+# async def main() -> None:
+#     task_desc = "生成当前季度宁德时代（股票代码为300750）的深度研究报告，重点分析盈利能力、估值与风险。"
+#     output_filename = "宁德时代深度研报"
+#     result = await run_workflow(task_desc=task_desc, output_filename=output_filename)
+#     print("===== 最终输出=====")
+#     print(result)
+
+# async def main() -> None:
+#     task_desc = "生成当前季度海康威视（股票代码为002415）的深度研究报告，重点分析盈利结构、估值变化与海外业务风险。"
+#     output_filename = "海康威视深度研报"
+#     result = await run_workflow(task_desc=task_desc, output_filename=output_filename)
+#     print("===== 最终输出=====")
+#     print(result)
+
 async def main() -> None:
-    task_desc = "生成当前季度宁德时代（股票代码为300750）的深度研究报告，重点分析盈利能力、估值与风险。"
-    result = await run_workflow(task_desc=task_desc)
+    task_desc = "生成当前季度迈瑞医疗（股票代码为300760）的深度研究报告，重点分析商业模式、现金流质量与创新驱动因素。"
+    output_filename = "迈瑞医疗深度研报"
+    result = await run_workflow(task_desc=task_desc, output_filename=output_filename)
     print("===== 最终输出=====")
     print(result)
-
 
 if __name__ == "__main__":
     asyncio.run(main())
