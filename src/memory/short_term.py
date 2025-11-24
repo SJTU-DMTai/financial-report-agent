@@ -84,13 +84,13 @@ class ShortTermMemoryStore:
         self.outline_path.write_text(content, encoding="utf-8")
 
     # ---- Manuscript ----
-    def save_manuscript_section(self, section_id: str, html: str) -> None:
+    def save_manuscript_section(self, section_id: str, md: str) -> None:
         self.ensure_dirs()
-        path = self.manuscript_dir / f"{section_id}.html"
-        path.write_text(html, encoding="utf-8")
+        path = self.manuscript_dir / f"{section_id}.md"
+        path.write_text(md, encoding="utf-8")
 
     def load_manuscript_section(self, section_id: str) -> str:
-        path = self.manuscript_dir / f"{section_id}.html"
+        path = self.manuscript_dir / f"{section_id}.md"
         if not path.exists():
             return ""
         return path.read_text(encoding="utf-8")
