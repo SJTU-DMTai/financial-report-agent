@@ -43,7 +43,6 @@ def build_writer_toolkit(
     toolkit = Toolkit()
 
     manuscript_tools = ManuscriptTools(short_term=short_term)
-    toolkit.register_tool_function(manuscript_tools.draft_manuscript_from_outline)
 
     toolkit.register_tool_function(manuscript_tools.read_manuscript_section)
 
@@ -58,7 +57,7 @@ def build_writer_toolkit(
 
     material_tools = MaterialTools(short_term=short_term)
     toolkit.register_tool_function(
-        material_tools.read_table_material
+        material_tools.read_material
     )
 
     return toolkit

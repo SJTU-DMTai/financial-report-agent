@@ -9,12 +9,18 @@ from src.memory.short_term import ShortTermMemoryStore
 from src.agents.searcher import create_searcher_agent, build_searcher_toolkit
 from src.agents.writer import create_writer_agent, build_writer_toolkit
 from src.agents.planner import create_planner_agent, build_planner_toolkit
+from src.agents.verifier import create_verifier_agent, build_verifier_toolkit
+
 from src.utils.file_converter import md_to_pdf,pdf_to_markdown
+from src.utils.parse_verdict import parse_verifier_verdict
+import config
 async def run_workflow(task_desc: str, output_filename: str) -> str:
     """围绕一个 task description 执行完整的研报生成流程。
 
     返回值：Writer 最终输出消息中的文本内容（其中包含 PDF 路径）。
     """
+
+    cfg = config.Config()
 
     # ----- 1. 准备 memory store -----
     short_term = ShortTermMemoryStore(
@@ -47,7 +53,7 @@ async def run_workflow(task_desc: str, output_filename: str) -> str:
     # schemas = searcher_toolkit.get_json_schemas()
     # print(schemas)
 
-    # ----- 4. 创建 Planner / Writer Agent -----
+    # ----- 4. 创建 Planner / Writer / Verifier Agent -----
     planner_toolkit = build_planner_toolkit(
         short_term=short_term,
         searcher=searcher,
@@ -60,9 +66,13 @@ async def run_workflow(task_desc: str, output_filename: str) -> str:
     )
     writer = create_writer_agent(model=model, formatter=create_agent_formatter(), toolkit=writer_toolkit)
 
-    # print("\n=== 打印 JSON Schema (get_json_schemas) ===")
-    # schemas = writer_toolkit.get_json_schemas()
-    # print(schemas)
+    verifier_toolkit = build_verifier_toolkit(
+        short_term=short_term,
+    )
+    verifier = create_verifier_agent(model=model, formatter=create_agent_formatter(), toolkit=verifier_toolkit)
+    
+
+
     # ----- 5. 调用 Planner：生成 / 修订 outline.md -----
     planner_input = Msg(
         name="User",
@@ -75,17 +85,93 @@ async def run_workflow(task_desc: str, output_filename: str) -> str:
     
     outline_msg = await planner(planner_input)
     print(outline_msg.get_text_content())
+
+
     # ----- 6. 调用 Writer：基于 outline.md 写 Manuscript 并导出 PDF -----
 
-    writer_input = Msg(
-        name="User",
-        content=(
-                "下面是本次任务描述，请你基于 outline.md 开始写作：\n\n"
-                + task_desc
-        ),
-        role="user",
-    )
-    final_msg = await writer(writer_input)
+    # writer_input = Msg(
+    #     name="User",
+    #     content=(
+    #             "下面是本次任务描述，请你基于 outline.md 开始写作：\n\n"
+    #             + task_desc
+    #     ),
+    #     role="user",
+    # )
+    # final_msg = await writer(writer_input)
+
+    sections = short_term.draft_manuscript_from_outline()
+
+    for section_id, title, section_outline in sections:
+        print(f"\n====== 开始写作章节 {section_id} ======\n")
+
+        # 先让 Writer 写这一章的初稿
+        writer_input = Msg(
+            name="User",
+            content=(
+                "下面是本次任务描述：\n\n"
+                f"{task_desc}\n\n"
+                f"请你首先阅读 section_id={section_id} 的章节 Markdown 草稿并根据其中内容开始撰写。\n"
+            ),
+            role="user",
+        )
+
+
+        draft_msg = await writer(writer_input)
+        print("[Writer 初稿输出]")
+        print(draft_msg.get_text_content())
+
+        max_verify_rounds = cfg.get_max_verify_rounds()
+        # 进入 Verifier 审核 loop
+        for round_idx in range(1, max_verify_rounds + 1):
+            print(f"\n--- Verifier 审核轮次 {round_idx}：章节 {section_id} ---\n")
+
+            verifier_input = Msg(
+                name="User",
+                content=(
+                    f"下面是任务描述：{task_desc}\n"
+                    f"当前章节: section_id={section_id}。\n\n"
+                    f"下面是本章节 outline: {section_outline}\n\n"
+                    "请开始审核此章节，并给出结构化输出的结论。"
+                ),
+                role="user",
+            )
+
+            verify_msg = await verifier(verifier_input)
+            verdict_text = verify_msg.get_text_content()
+            print("[Verifier 审核结果]")
+            print(verdict_text)
+
+            passed, problems, reason = parse_verifier_verdict(verdict_text)
+
+            if passed:
+                print(f"[审核通过] 章节 {section_id} 审核通过。进入下一章节。")
+                break
+
+            if round_idx == max_verify_rounds:
+                print(f"[多次审核未通过] 章节 {section_id} 多次审核未通过，达到最大重写次数，标记为需要人工复核。")
+                break
+
+            # 如果没通过，把 Verifier 的结构化结论反馈给 Writer，让其在同一个 section 上重写
+            problems_text = problems if problems else verdict_text
+
+            writer_fix_input = Msg(
+                name="User",
+                content=(
+                    "下面是 Verifier 对本章节的详细审核意见，请你在 **同一个 section_id** "
+                    f"（section_id={section_id}） 的基础上进行修改，而不是新建章节。\n\n"
+                    f"未通过原因：{reason}\n"
+                    f"问题如下：{problems_text}\n\n"
+                    "请根据这些问题逐条修改本章节内容，并通过工具接口覆盖已有稿件。"
+                ),
+                role="user",
+            )
+            draft_msg = await writer(writer_fix_input)
+            print("[Writer 根据审核意见修改后的输出]")
+            print(draft_msg.get_text_content())
+            
+
+
+
     md_to_pdf(short_term=short_term,output_filename=output_filename+".pdf")
 
     # Msg.get_text_content() 在官方文档中用于从消息里取纯文本

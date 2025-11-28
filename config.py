@@ -13,3 +13,7 @@ class Config:
     def get_font_path(self, key: str = "chinese") -> str | None:
             font_cfg = self.data.get("font", {})
             return font_cfg.get(key)
+    
+    def get_max_verify_rounds(self) -> int:
+        verify_config = self.data["verify_config"]
+        return verify_config["max_verify_rounds"]

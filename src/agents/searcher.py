@@ -117,7 +117,7 @@ def build_searcher_toolkit(
     )
 
     toolkit.register_tool_function(
-        material_tools.read_table_material
+        material_tools.read_material
     )
 
     return toolkit

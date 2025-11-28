@@ -12,8 +12,8 @@ import requests
 import fitz
 from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse, Toolkit
-from ..memory.short_term import ShortTermMemoryStore
-
+from ..memory.short_term import ShortTermMemoryStore, MaterialType
+import json
 
 def _preview_df(df: pd.DataFrame, max_rows: int | None = None) -> tuple[str, int, int, list[str]]:
     """生成 DataFrame 文本预览及相关统计。"""
@@ -101,27 +101,158 @@ def add_exchange_prefix(symbol: str, type: str) -> str:
 
 
 class MaterialTools:
-
     def __init__(self, short_term: Optional[ShortTermMemoryStore] = None) -> None:
         self.short_term = short_term
-        self.tools = [
-            self.fetch_disclosure_material,
-            self.fetch_business_composition_material,
-            self.fetch_business_description_material,
-            self.fetch_stock_news_material,
-            self.fetch_balance_sheet_material,
-            self.fetch_history_price_material,
-            self.fetch_cashflow_table_material,
-            self.fetch_profit_table_material,
-            self.fetch_realtime_price_material,
-            self.fetch_top10_shareholders_material,
-            self.fetch_top10_float_shareholders_material,
-            self.fetch_shareholder_change_material,
-            self.fetch_shareholder_count_detail_material,
-            self.fetch_main_shareholders_material
-        ]
+
+    def read_material(
+            self,
+            ref_id: str,
+            start_index: int | None = None,
+            end_index: int | None = None,
+            query_key: str | None = None,
+    ) -> ToolResponse:
+        """
+        统一读取material。支持读取全文或通过参数筛选其中部分。
+        如果start_index， end_index，query_key都为空表示读取全文。
+        
+        Args:
+            ref_id (str): Material 的唯一标识 ID。
+            start_index (int | None): 
+                - 对于表格：起始行号（包含）。
+                - 对于文本/Markdown：起始行号（包含）。
+                - 如果为空表示从第0行开始。
+            end_index (int | None): 
+                - 对于表格：结束行号（不包含）。
+                - 对于文本/Markdown：结束行号（不包含）。
+                - 如果为空表示到最后一行结束。
+            query_key (str | None):
+                - 对于 JSON：需要获取的顶层 Key（如 "financials"），或简单的层级路径。
+                - 对于表格：可选，用于筛选特定列（如 "Date,Close"）。
+        """
+        
+        meta = self.short_term.get_material_meta(ref_id) 
+
+        if not meta:
+            return ToolResponse(
+    
+                content=[TextBlock(type="text", text=f"[read_material]未找到该 ID 对应的 Material")],
+                metadata={"ref_id": ref_id}
+            )
+        try:
+            # 2. 策略分发 (Strategy Dispatch)
+            if meta.m_type == MaterialType.TABLE:
+                return self._read_table_impl(ref_id, start_index, end_index, query_key)
+            elif meta.m_type == MaterialType.TEXT:
+                return self._read_text_impl(ref_id, start_index, end_index)
+            # elif meta.m_type == MaterialType.JSON:
+            #     return self._read_json_impl(ref_id, query_key)
+            else:  
+                return ToolResponse(
+                content=[TextBlock(type="text", text=f"[read_material]不支持的文件类型: {meta.m_type}")],
+                metadata={"ref_id": ref_id}
+                )
+        except Exception as e:
+            return ToolResponse(
+            content=[TextBlock(type="text", text=f"[read_material]读取失败: {str(e)}")],
+            metadata={"ref_id": ref_id}
+            )
+
 
     # ========== 内部函数（不注册为 tool） ==========
+
+    def _read_table_impl(self, ref_id, start, end, cols):
+        df = self.short_term.load_material(ref_id) 
+        
+        # 1. 列筛选 (Horizontal Slicing)
+        if cols:
+            col_list = [c.strip() for c in cols.split(",")]
+            # 容错处理：只保留存在的列
+            valid_cols = [c for c in col_list if c in df.columns]
+            if valid_cols:
+                df = df[valid_cols]
+
+        # 2. 行筛选 (Vertical Slicing)
+        total_rows = len(df)
+        start = start if start is not None else 0
+        end = end if end is not None else total_rows
+        
+        # 边界保护
+        if start < 0: start = 0
+        if end > total_rows: end = total_rows
+        
+        sliced_df = df.iloc[start:end]
+        
+        # 转换为 Markdown 或 CSV 字符串给 LLM
+        preview_str = sliced_df.to_markdown(index=False)
+        
+        text = (f"[read_material] ID: {ref_id}\n"
+                f"范围: 行 {start} 到 {end} (共 {total_rows} 行)\n"
+                f"内容:\n{preview_str}")
+                
+        return ToolResponse(
+            content=[TextBlock(type="text", text=text)],
+            metadata={"ref_id": ref_id, "type": "table", "rows": len(sliced_df)}
+        )
+
+    def _read_text_impl(self, ref_id, start_line, end_line):
+        # 适用于 .txt, .md
+        content = self.short_term.load_material(ref_id) # 返回 str
+        lines = content.split('\n')
+        total_lines = len(lines)
+
+        start = start_line if start_line is not None else 0
+        end = end_line if end_line is not None else total_lines
+
+        # 截取
+        sliced_lines = lines[start:end]
+        preview_str = "\n".join(sliced_lines)
+
+        text = (f"[read_material] ID: {ref_id}\n"
+                f"范围: 行 {start} 到 {end} (共 {total_lines} 行)\n"
+                f"内容:\n{preview_str}")
+        
+        return ToolResponse(
+            content=[TextBlock(type="text", text=text)],
+            metadata={"ref_id": ref_id, "type": "text", "lines": len(sliced_lines)}
+        )
+
+    # def _read_json_impl(self, ref_id, key_path):
+    #     data = self.short_term.load_material(ref_id) # 返回 dict 或 list
+
+    #     result = data
+    #     found_path = "root"
+        
+    #     # 简单的 Key 定位逻辑
+    #     if key_path:
+    #         # 假设 key_path 是 "financials.2023.q1" 这种点分格式
+    #         keys = key_path.split('.')
+    #         try:
+    #             for k in keys:
+    #                 if isinstance(result, dict) and k in result:
+    #                     result = result[k]
+    #                 elif isinstance(result, list) and k.isdigit():
+    #                     result = result[int(k)]
+    #                 else:
+    #                     return self._create_error_response(ref_id, f"Key '{k}' not found in path {key_path}")
+    #             found_path = key_path
+    #         except Exception as e:
+    #             return self._create_error_response(ref_id, f"JSON 解析错误: {str(e)}")
+
+    #     # 将结果转回字符串，注意控制长度
+    #     json_str = json.dumps(result, ensure_ascii=False, indent=2)
+    #     # 如果太长，截断（这里只是简单的字符截断，生产环境可以更智能）
+    #     if len(json_str) > 2000: 
+    #         json_str = json_str[:2000] + "\n... (content truncated)"
+
+    #     text = (f"[read_material] ID: {ref_id}\n"
+    #             f"路径: {found_path}\n"
+    #             f"内容:\n{json_str}")
+
+    #     return ToolResponse(
+    #         content=[TextBlock(type="text", text=text)],
+    #         metadata={"ref_id": ref_id, "type": "json"}
+    #     )
+
 
     def _save_df_to_material(
             self,
@@ -130,8 +261,7 @@ class MaterialTools:
     ) -> int:
         """DataFrame 存入 short-term material（CSV），返回行数。"""
         if self.short_term is not None:
-            csv_text = df.to_csv(index=False)
-            self.short_term.save_material(ref_id=ref_id, content=csv_text, ext="csv")
+            self.short_term.save_material(ref_id=ref_id, content=df)
         return len(df)
 
     # ===================== 股价数据 =====================
@@ -772,45 +902,45 @@ class MaterialTools:
 
     # ===================== 通用读取函数 =====================
 
-    def read_table_material(
-            self,
-            ref_id: str,
-            max_rows: int | None = None,  # 默认显示全部
-    ) -> ToolResponse:
-        """读取任意表格 Material，并返回预览信息。
+    # def read_table_material(
+    #         self,
+    #         ref_id: str,
+    #         max_rows: int | None = None,  # 默认显示全部
+    # ) -> ToolResponse:
+    #     """读取任意表格 Material，并返回预览信息。
 
-        Args:
-            ref_id (str):
-                Material 标识，用于定位需要读取的表格。
-            max_rows (int | None):
-                用于控制预览行数：
-                - 为 None（默认）：预览全部数据；
-                - 为正整数：仅预览前 max_rows 行。
+    #     Args:
+    #         ref_id (str):
+    #             Material 标识，用于定位需要读取的表格。
+    #         max_rows (int | None):
+    #             用于控制预览行数：
+    #             - 为 None（默认）：预览全部数据；
+    #             - 为正整数：仅预览前 max_rows 行。
 
 
-        """
-        df = self.short_term.load_material(ref_id=ref_id, ext="csv")
+    #     """
+    #     df = self.short_term.load_material(ref_id=ref_id)
 
-        if df is None:
-            text = f"[read_table_material] 未找到 ref_id='{ref_id}' 对应的 Material。"
-            return ToolResponse(
-                content=[TextBlock(type="text", text=text)],
-                metadata={"ref_id": ref_id, "found": False},
-            )
+    #     if df is None:
+    #         text = f"[read_table_material] 未找到 ref_id='{ref_id}' 对应的 Material。"
+    #         return ToolResponse(
+    #             content=[TextBlock(type="text", text=text)],
+    #             metadata={"ref_id": ref_id, "found": False},
+    #         )
 
-        preview_str, total_rows, used_rows, _ = _preview_df(df, max_rows)
-        text = (
-            f"[read_table_material] 成功读取 ref_id='{ref_id}' 对应的表格，"
-            f"共 {total_rows} 条记录。以下为前 {used_rows} 行预览：\n"
-            f"{preview_str}"
-        )
-        return ToolResponse(
-            content=[TextBlock(type="text", text=text)],
-            metadata={
-                "ref_id": ref_id,
-                "row_count": total_rows,
-                "preview_rows": used_rows,
-                "found": True,
-            },
-        )
+    #     preview_str, total_rows, used_rows, _ = _preview_df(df, max_rows)
+    #     text = (
+    #         f"[read_table_material] 成功读取 ref_id='{ref_id}' 对应的表格，"
+    #         f"共 {total_rows} 条记录。以下为前 {used_rows} 行预览：\n"
+    #         f"{preview_str}"
+    #     )
+    #     return ToolResponse(
+    #         content=[TextBlock(type="text", text=text)],
+    #         metadata={
+    #             "ref_id": ref_id,
+    #             "row_count": total_rows,
+    #             "preview_rows": used_rows,
+    #             "found": True,
+    #         },
+    #     )
 
