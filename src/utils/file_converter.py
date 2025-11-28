@@ -95,7 +95,7 @@ def md_to_pdf(
 
         md_text = _replace_chart_placeholders(md_text, short_term.manuscript_dir)
         md_text = _normalize_tables(md_text)
-        print(md_text+"\n\n")
+        # print(md_text+"\n\n")
         # 将 Markdown 转为 HTML 片段
         html_fragment = markdown.markdown(
             md_text,
@@ -106,7 +106,7 @@ def md_to_pdf(
             ],
             output_format="html",
         )
-        print(html_fragment+"\n\n")
+        # print(html_fragment+"\n\n")
         body_parts.append(html_fragment)
         section_ids.append(path.stem)  # 比如 sec_01_行业分析
 

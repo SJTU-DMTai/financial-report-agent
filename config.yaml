@@ -31,3 +31,6 @@ models:
 
 font:
   chinese: /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc
+
+verify_config:
+  max_verify_rounds: 3

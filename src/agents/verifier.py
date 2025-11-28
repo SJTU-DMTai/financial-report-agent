@@ -1,0 +1,53 @@
+from __future__ import annotations
+
+from agentscope.agent import ReActAgent
+from agentscope.memory import InMemoryMemory
+from agentscope.formatter import DashScopeChatFormatter
+from agentscope.tool import Toolkit
+from agentscope.model import DashScopeChatModel
+
+from pathlib import Path
+from agentscope.agent import ReActAgent
+from agentscope.message import Msg, TextBlock
+from agentscope.tool import Toolkit
+from ..tools.material_tools import *
+from ..tools.graphic_tools import *
+from ..tools.manuscipt_tools import *
+from ..tools.outline_tools import *
+from ..tools.search_tools import *
+from ..memory.short_term import ShortTermMemoryStore
+from ..prompt import prompt_dict
+
+
+def create_verifier_agent(
+    model,
+    formatter,
+    toolkit: Toolkit,
+) -> ReActAgent:
+    return ReActAgent(
+        name="Verifier",
+        sys_prompt=prompt_dict['verifier_sys_prompt'],
+        model=model,
+        memory=InMemoryMemory(),
+        formatter=formatter,
+        toolkit=toolkit,
+        parallel_tool_calls=True,
+    )
+
+# ---- Toolkit Builder ----
+def build_verifier_toolkit(
+    short_term: ShortTermMemoryStore,
+) -> Toolkit:
+    toolkit = Toolkit()
+
+    manuscript_tools = ManuscriptTools(short_term=short_term)
+
+    toolkit.register_tool_function(manuscript_tools.read_manuscript_section)
+
+    material_tools = MaterialTools(short_term=short_term)
+    toolkit.register_tool_function(
+        material_tools.read_material
+    )
+
+    return toolkit
+
