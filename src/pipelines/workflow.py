@@ -131,7 +131,7 @@ async def run_workflow(task_desc: str, output_filename: str) -> str:
                     f"下面是任务描述：{task_desc}\n"
                     f"当前章节: section_id={section_id}。\n\n"
                     f"下面是本章节 outline: {section_outline}\n\n"
-                    "请开始审核此章节，并给出结构化输出的结论。"
+                    "请开始调用章节文本读取工具、材料读取工具、字数统计工具进行严格地审核，并给出结构化输出的结论。"
                 ),
                 role="user",
             )
@@ -170,9 +170,5 @@ async def run_workflow(task_desc: str, output_filename: str) -> str:
             print(draft_msg.get_text_content())
             
 
-
-
     md_to_pdf(short_term=short_term,output_filename=output_filename+".pdf")
 
-    # Msg.get_text_content() 在官方文档中用于从消息里取纯文本
-    return final_msg.get_text_content()

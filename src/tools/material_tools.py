@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Optional, Callable, Any, Dict, Union
 
 import io
-
+import time
 import akshare as ak
 import pandas as pd
 import re
@@ -112,7 +112,11 @@ class MaterialTools:
             query_key: str | None = None,
     ) -> ToolResponse:
         """
-        统一读取material。支持读取全文或通过参数筛选其中部分。
+        统一读取material。支持读取全文、通过参数、按行/条目截取其中部分。
+        - 表格（MaterialType.TABLE）：按行号切片，可选按列筛选。
+        - 文本（MaterialType.TEXT）：按行号切片。
+        - JSON（MaterialType.JSON）：按列表索引切片，可通过 query_key 获取特定条目内容。
+
         如果start_index， end_index，query_key都为空表示读取全文。
         
         Args:
@@ -120,13 +124,15 @@ class MaterialTools:
             start_index (int | None): 
                 - 对于表格：起始行号（包含）。
                 - 对于文本/Markdown：起始行号（包含）。
+                - 对于 JSON list：起始条目索引（包含）。
                 - 如果为空表示从第0行开始。
             end_index (int | None): 
                 - 对于表格：结束行号（不包含）。
                 - 对于文本/Markdown：结束行号（不包含）。
-                - 如果为空表示到最后一行结束。
+                - 对于 JSON list：结束条目索引（不包含）。
+                - 如果为空表示到最后一条结束。
             query_key (str | None):
-                - 对于 JSON：需要获取的顶层 Key（如 "financials"），或简单的层级路径。
+                - 对于 JSON list：可选，用于对每个条目提取该字段。
                 - 对于表格：可选，用于筛选特定列（如 "Date,Close"）。
         """
         
@@ -144,12 +150,12 @@ class MaterialTools:
                 return self._read_table_impl(ref_id, start_index, end_index, query_key)
             elif meta.m_type == MaterialType.TEXT:
                 return self._read_text_impl(ref_id, start_index, end_index)
-            # elif meta.m_type == MaterialType.JSON:
-            #     return self._read_json_impl(ref_id, query_key)
+            elif meta.m_type == MaterialType.JSON:
+                return self._read_json_impl(ref_id, start_index, end_index, query_key)
             else:  
                 return ToolResponse(
-                content=[TextBlock(type="text", text=f"[read_material]不支持的文件类型: {meta.m_type}")],
-                metadata={"ref_id": ref_id}
+                    content=[TextBlock(type="text", text=f"[read_material]不支持的文件类型: {meta.m_type}")],
+                    metadata={"ref_id": ref_id}
                 )
         except Exception as e:
             return ToolResponse(
@@ -183,7 +189,7 @@ class MaterialTools:
         sliced_df = df.iloc[start:end]
         
         # 转换为 Markdown 或 CSV 字符串给 LLM
-        preview_str = sliced_df.to_markdown(index=False)
+        preview_str = sliced_df.to_markdown(index=False, disable_numparse=True)
         
         text = (f"[read_material] ID: {ref_id}\n"
                 f"范围: 行 {start} 到 {end} (共 {total_rows} 行)\n"
@@ -216,44 +222,58 @@ class MaterialTools:
             metadata={"ref_id": ref_id, "type": "text", "lines": len(sliced_lines)}
         )
 
-    # def _read_json_impl(self, ref_id, key_path):
-    #     data = self.short_term.load_material(ref_id) # 返回 dict 或 list
+    def _read_json_impl(
+        self,
+        ref_id: str,
+        start_index: int | None,
+        end_index: int | None,
+        key_path: str | None,
+    ) -> ToolResponse:
+        data = self.short_term.load_material(ref_id)  # 返回 dict 或 list，目前只有搜索结果为json list
 
-    #     result = data
-    #     found_path = "root"
+        # if isinstance(data, list):
+        n = len(data)
+        # 处理切片：start_index/end_index 控制“第几条”
+        start = start_index if start_index is not None else 0
+        end = end_index if end_index is not None else n
+
+        # 边界保护
+        start = max(0, min(start, n))
+        end = max(start, min(end, n))
+
+        sliced = data[start:end]
+
         
-    #     # 简单的 Key 定位逻辑
-    #     if key_path:
-    #         # 假设 key_path 是 "financials.2023.q1" 这种点分格式
-    #         keys = key_path.split('.')
-    #         try:
-    #             for k in keys:
-    #                 if isinstance(result, dict) and k in result:
-    #                     result = result[k]
-    #                 elif isinstance(result, list) and k.isdigit():
-    #                     result = result[int(k)]
-    #                 else:
-    #                     return self._create_error_response(ref_id, f"Key '{k}' not found in path {key_path}")
-    #             found_path = key_path
-    #         except Exception as e:
-    #             return self._create_error_response(ref_id, f"JSON 解析错误: {str(e)}")
+        # 如果有 key_path，则提取每条对应字段，否则展示整个条目
+        if key_path:
+            def extract(obj, path):
+                cur = obj
+                for k in path.split("."):
+                    if isinstance(cur, dict) and k in cur:
+                        cur = cur[k]
+                    else:
+                        return None
+                return cur
 
-    #     # 将结果转回字符串，注意控制长度
-    #     json_str = json.dumps(result, ensure_ascii=False, indent=2)
-    #     # 如果太长，截断（这里只是简单的字符截断，生产环境可以更智能）
-    #     if len(json_str) > 2000: 
-    #         json_str = json_str[:2000] + "\n... (content truncated)"
+            sliced = [extract(item, key_path) for item in sliced]
 
-    #     text = (f"[read_material] ID: {ref_id}\n"
-    #             f"路径: {found_path}\n"
-    #             f"内容:\n{json_str}")
+        # 序列化成 JSON 字符串
+        json_str = json.dumps(sliced, ensure_ascii=False, indent=2)
 
-    #     return ToolResponse(
-    #         content=[TextBlock(type="text", text=text)],
-    #         metadata={"ref_id": ref_id, "type": "json"}
-    #     )
+        # 防止过长
+        # if len(json_str) > 4000:
+        #     json_str = json_str[:4000] + "\n... (content truncated)"
 
+        text = (
+            f"[read_material] ID: {ref_id}\n"
+            f"JSON 列表范围 [{start}, {end})，共 {n} 行\n"
+            f"内容:\n{json_str}"
+        )
 
+        return ToolResponse(
+            content=[TextBlock(type="text", text=text)],
+            metadata={"ref_id": ref_id, "type": "json_list"}
+        )
     def _save_df_to_material(
             self,
             df: pd.DataFrame,
@@ -268,10 +288,9 @@ class MaterialTools:
 
     async def fetch_realtime_price_material(
             self,
-            symbol: str | None = None,
-            ref_id: str | None = None
+            symbol: str | None = None
     ) -> ToolResponse:
-        """获取沪深京 A 股实时行情数据，并将结果保存为表格。
+        """获取沪深京 A 股实时行情数据，并保存表格结果到Material当中，返回Material标识ref_id。
         适用场景：需要查询某只 A 股当前价格、涨跌幅、成交量等实时指标；需要一次性拉取全市场实时行情，作为选股或打分模型的输入。
 
         Args:
@@ -279,10 +298,6 @@ class MaterialTools:
                 沪深京 A 股股票代码（不带市场标识），例如 "000001"。
                 - 为 None 时：保留全部 A 股的实时行情数据；
                 - 不为 None 时：仅保留 DataFrame 中 "代码" 列等于该值的记录。
-            ref_id (Optional[str]):
-                用于在 short_term 中保存本次结果的 Material 标识。
-                - 为 None 时：默认使用 f"{symbol or 'all'}_realtime_spot"。
-
         """
 
         df = ak.stock_zh_a_spot_em()
@@ -290,8 +305,7 @@ class MaterialTools:
             # 文档中 "代码" 列为股票代码
             df = df[df["代码"] == symbol]
 
-        if ref_id is None:
-            ref_id = f"{symbol or 'all'}_realtime_spot"
+            ref_id = f"{symbol or 'all'}_realtime_price_{int(time.time())}"
 
         self._save_df_to_material(df, ref_id)
         header = f"[fetch_realtime_price_material] 股价实时行情（symbol={symbol or 'ALL'}）"
@@ -308,10 +322,9 @@ class MaterialTools:
             period: str = "daily",
             start_date: str = "20100101",
             end_date: str = "20991231",
-            adjust: str = "",
-            ref_id: str | None = None,
+            adjust: str = "",       
     ) -> ToolResponse:
-        """获取指定 A 股股票的历史行情（日/周/月），并写入表格。
+        """获取指定 A 股股票的历史行情（日/周/月），并保存表格结果到Material当中，返回Material标识ref_id。
         拉取指定股票在给定时间区间和周期上的历史行情数据（开盘价、收盘价、成交量、涨跌幅等），
         支持不复权、前复权和后复权数据，并将结果保存。
         适用场景：生成个股 K 线、收益率曲线、回测信号等历史行情分析；作为生成研报中“股价表现”“历史走势”等章节的基础数据。
@@ -333,10 +346,6 @@ class MaterialTools:
                 - "": 不复权（默认）；
                 - "qfq": 前复权；
                 - "hfq": 后复权。
-            ref_id (Optional[str]):
-                Material 标识，用于在 short_term 中区分不同请求。
-                - 为 None 时：默认生成 f"{symbol}_history_{period}_{start_date}_{end_date}_{adj}"，
-                其中 adj 为 adjust 或 "none"。
 
         """
         df = ak.stock_zh_a_hist(
@@ -347,9 +356,8 @@ class MaterialTools:
             adjust=adjust,
         )
 
-        if ref_id is None:
-            adj = adjust or "none"
-            ref_id = f"{symbol}_history_{period}_{start_date}_{end_date}_{adj}"
+
+        ref_id = f"{symbol}_history_price_{start_date}_{end_date}_{int(time.time())}"
 
         self._save_df_to_material(df, ref_id)
 
@@ -373,24 +381,20 @@ class MaterialTools:
     # ===================== 金融新闻 =====================
     async def fetch_stock_news_material(
             self,
-            symbol: str,
-            ref_id: str | None = None,
+            symbol: str,    
     ) -> ToolResponse:
-        """获取指定个股的新闻资讯数据，并写入表格.
+        """获取指定个股的新闻资讯数据，并保存表格结果到Material当中，返回Material标识ref_id。
         相关的最新新闻资讯（默认为当日最近约 100 条），包括新闻标题、内容摘要、发布时间、来源和链接等，
         适用场景：为个股研报生成“新闻动态”“舆情分析”等部分提供原始素材；需要快速获取近期与某股票相关的新闻列表。
 
         Args:
             symbol (str):
                 个股新闻检索关键词，通常为股票代码，例如 "603777"；
-            ref_id (Optional[str]):
-                Material 标识，默认值为 f"{symbol}_news_em"。
 
         """
         df = ak.stock_news_em(symbol=symbol)
 
-        if ref_id is None:
-            ref_id = f"{symbol}_news_em"
+        ref_id = f"{symbol}_news_{int(time.time())}"
 
         self._save_df_to_material(df, ref_id)
         header = f"[fetch_stock_news_material] 个股新闻（symbol={symbol}）"
@@ -409,9 +413,8 @@ class MaterialTools:
             category: str = "",
             start_date: str = "20000101",
             end_date: str = "20991231",
-            ref_id: str | None = None,
     ) -> ToolResponse:
-        """获取指定股票的信息披露公告，并写入表格。
+        """获取指定股票的信息披露公告，并保存表格结果到Material当中，返回Material标识ref_id。
         抓取指定 symbol 在给定时间区间内的各类信息披露公告，
         可按市场、公告类别和关键词进行过滤，并将结果保存为表格。
         适用场景：生成研报中的“公司公告梳理”“信息披露情况”章节；快速定位某段时间内的年报、季报、重大事项、股权变动等公告列表。
@@ -436,9 +439,6 @@ class MaterialTools:
                 公告起始日期，格式为 "YYYYMMDD"，例如 "20230618"。
             end_date (str):
                 公告结束日期，格式为 "YYYYMMDD"，例如 "20231219"。
-            ref_id (Optional[str]):
-                Material 标识，默认值为
-                f"{symbol}_disclosure_{category or 'all'}_{start_date}_{end_date}"。
 
         """
 
@@ -512,8 +512,7 @@ class MaterialTools:
             end_date=end_date,
         )
         if df is None or df.empty:
-            if ref_id is None:
-                ref_id = f"{symbol}_disclosure_{category or 'all'}_{start_date}_{end_date}"
+            ref_id = f"{symbol}_disclosure_{category or 'all'}_{int(time.time())}"
             # self._save_df_to_material(df, ref_id)
             header = (
                 f"[fetch_disclosure_material] 信息披露公告搜索结果为空，可以修改或者放宽搜索条件（symbol={symbol}, market={market}, "
@@ -538,10 +537,7 @@ class MaterialTools:
         df["公告"] = texts
         if "公告链接" in df.columns:
             df = df.drop(columns=["公告链接"])
-
-
-        if ref_id is None:
-            ref_id = f"{symbol}_disclosure_{category or 'all'}_{start_date}_{end_date}"
+        ref_id = f"{symbol}_disclosure_{category or 'all'}_{int(time.time())}"
 
 
 
@@ -569,9 +565,8 @@ class MaterialTools:
             self,
             symbol: str,
             indicator: str = "按报告期",
-            ref_id: str | None = None,
     ) -> ToolResponse:
-        """获取指定股票的资产负债表数据，并写入表格。
+        """获取指定股票的资产负债表数据，并保存表格结果到Material当中，返回Material标识ref_id。
         抓取企业历年或各报告期的资产负债表数据，并将结果保存。
         适用场景：研报中的“资产结构分析”“杠杆水平”“偿债能力”相关章节；对比不同报告期的资产、负债、所有者权益变化情况。
 
@@ -583,15 +578,13 @@ class MaterialTools:
                 - "按报告期"（默认）：按季度 / 半年 / 年度等报告期展示；
                 - "按年度"：按年度汇总展示；
                 - "按单季度"：按单个季度拆分展示。
-            ref_id (Optional[str]):
-                Material 标识，默认值为 f"{symbol}_balance_{indicator}"。
         """
 
         df = ak.stock_financial_debt_ths(symbol=symbol, indicator=indicator)
 
-        if ref_id is None:
-            safe_indicator = indicator.replace(" ", "")
-            ref_id = f"{symbol}_balance_{safe_indicator}"
+
+        safe_indicator = indicator.replace(" ", "")
+        ref_id = f"{symbol}_balance_{safe_indicator}_{int(time.time())}"
 
         self._save_df_to_material(df, ref_id)
         header = f"[fetch_balance_sheet_material] 资产负债表（symbol={symbol}, indicator={indicator}）"
@@ -606,9 +599,8 @@ class MaterialTools:
             self,
             symbol: str,
             indicator: str = "按报告期",
-            ref_id: str | None = None,
     ) -> ToolResponse:
-        """获取指定股票的利润表数据，并写入表格。
+        """获取指定股票的利润表数据，并保存表格结果到Material当中，返回Material标识ref_id。
         抓取企业历年或各报告期的利润表数据，并保存。
         适用场景：盈利能力分析、收入与成本结构分析；生成研报中的“利润表分析”“盈利预测校验”等部分。
 
@@ -620,15 +612,13 @@ class MaterialTools:
                 - "按报告期"（默认）；
                 - "按年度"；
                 - "按单季度"。
-            ref_id (Optional[str]):
-                Material 标识，默认值为 f"{symbol}_profit_{indicator}"。
         """
 
         df = ak.stock_financial_benefit_ths(symbol=symbol, indicator=indicator)
 
-        if ref_id is None:
-            safe_indicator = indicator.replace(" ", "")
-            ref_id = f"{symbol}_profit_{safe_indicator}"
+
+        safe_indicator = indicator.replace(" ", "")
+        ref_id = f"{symbol}_profit_{safe_indicator}_{int(time.time())}"
 
         self._save_df_to_material(df, ref_id)
         header = f"[fetch_profit_table_material] 利润表（symbol={symbol}, indicator={indicator}）"
@@ -642,10 +632,9 @@ class MaterialTools:
     async def fetch_cashflow_table_material(
             self,
             symbol: str,
-            indicator: str = "按报告期",
-            ref_id: str | None = None,
+            indicator: str = "按报告期",  
     ) -> ToolResponse:
-        """获取指定股票的现金流量表数据，并写入表格。
+        """获取指定股票的现金流量表数据，并保存表格结果到Material当中，返回Material标识ref_id。
         抓取企业历年或各报告期的现金流量表数据（约 75 个字段），并将结果保存。
         适用场景：研报中对经营活动、投资活动、筹资活动现金流的分析；评估企业现金创造能力、分红支付能力和资本开支压力。
 
@@ -657,14 +646,12 @@ class MaterialTools:
                 - "按报告期"（默认）；
                 - "按年度"；
                 - "按单季度"。
-            ref_id (Optional[str]):
-                Material 标识，默认值为 f"{symbol}_cashflow_{indicator}"。
         """
         df = ak.stock_financial_cash_ths(symbol=symbol, indicator=indicator)
 
-        if ref_id is None:
-            safe_indicator = indicator.replace(" ", "")
-            ref_id = f"{symbol}_cashflow_{safe_indicator}"
+
+        safe_indicator = indicator.replace(" ", "")
+        ref_id = f"{symbol}_cashflow_{safe_indicator}_{int(time.time())}"
 
         self._save_df_to_material(df, ref_id)
         header = f"[fetch_cashflow_table_material] 现金流量表（symbol={symbol}, indicator={indicator}）"
@@ -681,9 +668,8 @@ class MaterialTools:
             self,
             symbol: str,
             date: str,
-            ref_id: str | None = None,
     ) -> ToolResponse:
-        """获取指定股票在某一报告期的十大流通股东，并写入表格。
+        """获取指定股票在某一报告期的十大流通股东，并保存表格结果到Material当中，返回Material标识ref_id。
 
         抓取指定 symbol 和 date 对应的所有流通股东信息，
         包括股东名称、股东性质、持股数量、持股比例、增减变动等。
@@ -696,14 +682,11 @@ class MaterialTools:
                 财报发布季度最后一日，格式为 "YYYYMMDD"。
                 2024 年的季度最后日分别为：20240331、20240630、20240930、20241231。
                 2025 年的季度最后日分别为：20250331、20250630、20250930、20251231。
-            ref_id (Optional[str]):
-                Material 标识，默认值为 f"{symbol}_top10_free_{date}"。
         """
 
         df = ak.stock_gdfx_free_top_10_em(symbol=add_exchange_prefix(symbol, "lower"), date=date)
 
-        if ref_id is None:
-            ref_id = f"{symbol}_top10_free_{date}"
+        ref_id = f"{symbol}_top10_free_{date}_{int(time.time())}"
 
         self._save_df_to_material(df, ref_id)
         header = f"[fetch_top10_float_shareholders_material] 十大流通股东（symbol={symbol}, date={date}）"
@@ -718,9 +701,8 @@ class MaterialTools:
             self,
             symbol: str,
             date: str,
-            ref_id: str | None = None,
     ) -> ToolResponse:
-        """获取指定股票在某一报告期的十大股东（总股本口径），并写入表格。
+        """获取指定股票在某一报告期的十大股东（总股本口径），并保存表格结果到Material当中，返回Material标识ref_id。
         抓取指定 symbol 和 date 对应的股东名称、股份类型、
         持股数、持股比例及增减变动等信息，并保存。
         适用场景：分析公司控制权和股权结构；对比不同报告期十大股东持股变动情况。
@@ -732,13 +714,9 @@ class MaterialTools:
                 财报发布季度最后一日，格式为 "YYYYMMDD"。
                 2024 年的季度最后日分别为：20240331、20240630、20240930、20241231。
                 2025 年的季度最后日分别为：20250331、20250630、20250930、20251231。
-            ref_id (Optional[str]):
-                Material 标识，默认值为 f"{symbol}_top10_{date}"。
         """
         df = ak.stock_gdfx_top_10_em(symbol=add_exchange_prefix(symbol, "lower"), date=date)
-
-        if ref_id is None:
-            ref_id = f"{symbol}_top10_{date}"
+        ref_id = f"{symbol}_top10_{date}_{int(time.time())}"
 
         self._save_df_to_material(df, ref_id)
         header = f"[fetch_top10_shareholders_material] 十大股东（symbol={symbol}, date={date}）"
@@ -752,9 +730,8 @@ class MaterialTools:
     async def fetch_main_shareholders_material(
             self,
             stock: str,
-            ref_id: str | None = None,
     ) -> ToolResponse:
-        """获取指定股票的主要股东信息，并写入表格。
+        """获取指定股票的主要股东信息，并保存表格结果到Material当中，返回Material标识ref_id。
         抓取所有历史披露的主要股东信息，
         包括股东名称、持股数量、持股比例、股本性质、截至日期、公告日期等。
         适用场景：分析公司历史上的主要股东变化；辅助研报中“股权结构与股东情况”章节的撰写。
@@ -762,13 +739,9 @@ class MaterialTools:
         Args:
             stock (str):
                 股票代码，例如 "600004"。
-            ref_id (Optional[str]):
-                Material 标识，默认值为 f"{stock}_main_holders"。
         """
         df = ak.stock_main_stock_holder(stock=stock)
-
-        if ref_id is None:
-            ref_id = f"{stock}_main_holders"
+        ref_id = f"{stock}_main_holders_{int(time.time())}"
 
         self._save_df_to_material(df, ref_id)
         header = f"[fetch_main_shareholders_material] 主要股东（stock={stock}）"
@@ -782,9 +755,8 @@ class MaterialTools:
     async def fetch_shareholder_count_detail_material(
             self,
             symbol: str,
-            ref_id: str | None = None,
     ) -> ToolResponse:
-        """获取指定股票的股东户数详情，并写入表格。
+        """获取指定股票的股东户数详情，并保存表格结果到Material当中，返回Material标识ref_id。
         获取指定 symbol 的全部历史数据，包括股东户数统计截止日、区间涨跌幅、股东户数本次/上次/增减及其比例、户均持股市值与数量、
         总市值、总股本及股本变动原因等。
         适用场景：分析股东户数与股价表现的关系；评估筹码集中度变化和市场参与者结构。
@@ -792,13 +764,10 @@ class MaterialTools:
         Args:
             symbol (str):
                 股票代码，例如 "000001"。
-            ref_id (Optional[str]):
-                Material 标识，默认值为 f"{symbol}_shareholder_count_detail"。
         """
         df = ak.stock_zh_a_gdhs_detail_em(symbol=symbol)
 
-        if ref_id is None:
-            ref_id = f"{symbol}_shareholder_count_detail"
+        ref_id = f"{symbol}_shareholder_count_detail_{int(time.time())}"
 
         self._save_df_to_material(df, ref_id)
         header = f"[fetch_shareholder_count_detail_material] 股东户数详情（symbol={symbol}）"
@@ -811,24 +780,21 @@ class MaterialTools:
 
     async def fetch_shareholder_change_material(
             self,
-            symbol: str,
-            ref_id: str | None = None,
+            symbol: str, 
     ) -> ToolResponse:
-        """获取指定股票的股东持股变动统计信息，并写入表格。
+        """获取指定股票的股东持股变动统计信息，并保存表格结果到Material当中，返回Material标识ref_id。
         抓取所有披露的股东持股变动记录，包括公告日期、变动股东、变动数量、交易均价、剩余股份总数、变动期间和变动途径等。
         适用场景： 跟踪重要股东和机构的减持 / 增持行为；分析股价波动背后的股东行为因素。
 
         Args:
             symbol (str):
                 股票代码，例如 "688981"。
-            ref_id (Optional[str]):
-                Material 标识，默认值为 f"{symbol}_shareholder_change"。
         """
 
         df = ak.stock_shareholder_change_ths(symbol=symbol)
 
-        if ref_id is None:
-            ref_id = f"{symbol}_shareholder_change"
+
+        ref_id = f"{symbol}_shareholder_change_{int(time.time())}"
 
         self._save_df_to_material(df, ref_id)
         header = f"[fetch_shareholder_change_material] 股东持股变动（symbol={symbol}）"
@@ -843,23 +809,18 @@ class MaterialTools:
     async def fetch_business_description_material(
             self,
             symbol: str,
-            ref_id: str | None = None,
     ) -> ToolResponse:
-        """获取指定股票的主营业务介绍，并写入表格。
+        """获取指定股票的主营业务介绍，并保存表格结果到Material当中，返回Material标识ref_id。
         抓取公司主营业务、产品类型、产品名称及经营范围等字段，
         适用场景：生成研报中“公司简介”“主营业务与商业模式”章节的基础描述；快速了解公司业务结构和核心产品。
 
         Args:
             symbol (str):
                 股票代码，例如 "000066"。
-            ref_id (Optional[str]):
-                Material 标识，默认值为 f"{symbol}_business_description_ths"。
-
         """
         df = ak.stock_zyjs_ths(symbol=symbol)
 
-        if ref_id is None:
-            ref_id = f"{symbol}_business_description_ths"
+        ref_id = f"{symbol}_business_description_{int(time.time())}"
 
         self._save_df_to_material(df, ref_id)
         header = f"[fetch_business_description_material] 主营介绍（symbol={symbol}）"
@@ -872,24 +833,20 @@ class MaterialTools:
 
     async def fetch_business_composition_material(
             self,
-            symbol: str,
-            ref_id: str | None = None,
+            symbol: str,      
     ) -> ToolResponse:
-        """获取指定股票的主营构成数据，并写入表格。
+        """获取指定股票的主营构成数据，并保存表格结果到Material当中，返回Material标识ref_id。
         抓取按产品、地区等维度划分的主营收入、成本、利润、及对应比例和毛利率等历史数据。
         适用场景：分析公司按产品/地区划分的收入与利润结构；研报中“业务结构分析”“毛利率拆解”等章节的数据来源。
 
         Args:
             symbol (str):
                 股票代码，例如 "000063"。
-            ref_id (Optional[str]):
-                Material 标识，默认值为 f"{symbol}_business_composition_em"。
         """
 
         df = ak.stock_zygc_em(symbol=add_exchange_prefix(symbol, "upper"))
 
-        if ref_id is None:
-            ref_id = f"{symbol}_business_composition_em"
+        ref_id = f"{symbol}_business_composition_{int(time.time())}"
 
         self._save_df_to_material(df, ref_id)
         header = f"[fetch_business_composition_material] 主营构成（symbol={symbol}）"

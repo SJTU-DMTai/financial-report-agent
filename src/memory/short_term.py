@@ -8,7 +8,7 @@ import shutil
 from typing import List, Tuple, Dict, Any, Union, Optional
 from enum import Enum
 import re
-
+from datetime import datetime
 class MaterialType(str, Enum):
     TABLE = "table"  # 对应 csv, excel
     TEXT = "text"    # 对应 md, txt
@@ -58,8 +58,11 @@ class ShortTermMemoryStore:
         self._registry: Dict[str, MaterialMeta] = {}
 
         # 转移之前的short_term memory，避免对当前任务造成干扰
-        history_dir = self.base_dir / "history_short_term"
-        history_dir.mkdir(parents=True, exist_ok=True)
+        history_root = self.base_dir / "history_short_term"
+        history_root.mkdir(parents=True, exist_ok=True)
+
+        batch_dir = history_root / datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        batch_dir.mkdir(parents=True, exist_ok=True)
 
         targets = [
             self.outline_path,
@@ -69,16 +72,11 @@ class ShortTermMemoryStore:
 
         for target in targets:
             if target.exists():
-                dest = history_dir / target.name
-
-                # 目录移动
+                dest = batch_dir / target.name
                 if target.is_dir():
-                    if dest.exists():
-                        shutil.rmtree(dest)
+                    # 不要再删 dest 了，因为 batch_dir 是新建的，本来就不会存在
                     shutil.copytree(target, dest)
                     shutil.rmtree(target)
-
-                # 文件移动
                 else:
                     shutil.copy2(target, dest)
                     target.unlink()
@@ -274,7 +272,7 @@ class ShortTermMemoryStore:
         if not path.exists(): return None
 
         if meta.m_type == MaterialType.TABLE:
-            return pd.read_csv(path)
+            return pd.read_csv(path, dtype=str)
         elif meta.m_type == MaterialType.JSON:
             return json.loads(path.read_text(encoding="utf-8"))
         else:

@@ -48,8 +48,8 @@ def build_writer_toolkit(
 
     toolkit.register_tool_function(manuscript_tools.replace_manuscript_section)
 
-
-    toolkit.register_tool_function(searcher_tool(searcher))
+    search_tools = SearchTools(short_term=short_term)
+    toolkit.register_tool_function(search_tools.searcher_tool(searcher))
 
     chart_tools = GraphicTools(short_term=short_term)
     toolkit.register_tool_function(chart_tools.generate_chart_by_template)

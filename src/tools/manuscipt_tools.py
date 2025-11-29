@@ -7,7 +7,7 @@ from typing import List, Tuple
 from agentscope.agent import ReActAgent
 from agentscope.message import Msg, TextBlock
 from agentscope.tool import Toolkit, ToolResponse
-
+import unicodedata
 from ..memory.short_term import ShortTermMemoryStore
 from .material_tools import *
 
@@ -66,4 +66,46 @@ class ManuscriptTools:
         )
     
 
-    
+    def count_manuscript_words(
+        self,
+        section_id: str,
+    ) -> ToolResponse:
+        """统计指定章节的 Markdown 草稿字数。
+
+        Args:
+            section_id (str):
+                要统计的章节唯一标识符。
+        """
+
+        markdown = self.short_term.load_manuscript_section(section_id)
+
+        if not markdown:
+            result_text = f"[count_manuscript_words] section {section_id} 不存在或为空。"
+            return ToolResponse(
+                content=[TextBlock(type="text", text=result_text)],
+                metadata={"section_id": section_id, "char_count": 0},
+            )
+
+        # 判断是否为标点的函数（兼容中英文标点）
+        def is_punct(ch: str) -> bool:
+            # Unicode 类别开头为 'P' 的都是各类标点符号
+            if unicodedata.category(ch).startswith("P"):
+                return True
+            # 补充某些 Markdown 常见符号，可按需扩充
+            markdown_punct = set("#*`>-+|[](){}")
+            return ch in markdown_punct
+
+        char_count = sum(
+            1 for ch in markdown
+            if not ch.isspace() and not is_punct(ch)
+        )
+
+        result_text = (
+            f"[count_manuscript_words] {section_id} 字数统计完成。\n"
+            f"总字数：{char_count}"
+        )
+
+        return ToolResponse(
+            content=[TextBlock(type="text", text=result_text)],
+            metadata={"section_id": section_id, "char_count": char_count},
+        )

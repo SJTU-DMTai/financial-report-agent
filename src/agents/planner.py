@@ -41,5 +41,7 @@ def build_planner_toolkit(
     # toolkit.register_tool_function(outline_tools.read_outline)
     toolkit.register_tool_function(outline_tools.read_demonstration)
     toolkit.register_tool_function(outline_tools.replace_outline)
-    toolkit.register_tool_function(searcher_tool(searcher))
+
+    search_tools = SearchTools(short_term=short_term)
+    toolkit.register_tool_function(search_tools.searcher_tool(searcher))
     return toolkit

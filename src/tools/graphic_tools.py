@@ -359,7 +359,7 @@ class GraphicTools:
         style: str | None = None,
         figsize: list[float] | None = None,
     ) -> ToolResponse:
-        """使用预定义模版自动生成金融研报中常见图表，并以 base64 图片形式返回。
+        """使用预定义模版自动生成金融研报中常见图表，并返回图表chart_id用于引用。
 
         Args:
             chart_type:
@@ -512,7 +512,7 @@ class GraphicTools:
         code: str,
         caption: str | None = None,
     ) -> ToolResponse:
-        """执行自行编写的绘图代码，获得生成的图片。
+        """执行自行编写的绘图代码，并返回图表chart_id用于引用。
             1. 你需要编写绘图逻辑的 Python 代码片段，例如:
                 plt.figure()
                 plt.plot(dates, prices, marker="o")
