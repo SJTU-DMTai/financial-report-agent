@@ -10,20 +10,20 @@ from src.pipelines.workflow import run_workflow
 #     print("===== 最终输出=====")
 #     print(result)
 
-# async def main() -> None:
-#     task_desc = "生成2025Q3（即2025年7月到2025年9月） 宁德时代（股票代码为300750）的深度研究报告，重点分析商业模式、现金流质量与创新驱动因素。"
-#     output_filename = "宁德时代2025Q3深度研报"
-#     result = await run_workflow(task_desc=task_desc, output_filename=output_filename)
-#     print("===== 最终输出=====")
-#     print(result)
-
-
 async def main() -> None:
-    task_desc = "生成2025Q3（即2025年7月到2025年9月） 迈瑞医疗（股票代码为300760）的深度研究报告，重点分析商业模式、现金流质量与创新驱动因素。"
-    output_filename = "迈瑞医疗2025Q3深度研报"
+    task_desc = "生成2025Q3（即2025年7月到2025年9月） 宁德时代（股票代码为300750）的深度研究报告，重点分析商业模式、现金流质量与创新驱动因素。"
+    output_filename = "宁德时代_2025Q3深度研报"
     result = await run_workflow(task_desc=task_desc, output_filename=output_filename)
     print("===== 最终输出=====")
     print(result)
+
+
+# async def main() -> None:
+#     task_desc = "生成2025Q3（即2025年7月到2025年9月） 迈瑞医疗（股票代码为300760）的深度研究报告，重点分析商业模式、现金流质量与创新驱动因素。"
+#     output_filename = "迈瑞医疗2025Q3深度研报"
+#     result = await run_workflow(task_desc=task_desc, output_filename=output_filename)
+#     print("===== 最终输出=====")
+#     print(result)
 
 if __name__ == "__main__":
     asyncio.run(main())

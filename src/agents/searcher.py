@@ -38,8 +38,8 @@ def build_searcher_toolkit(
     toolkit = Toolkit()
     material_tools = MaterialTools(short_term=short_term)
 
-    toolkit.register_tool_function(search_engine)
-
+    search_tools = SearchTools(short_term=short_term)
+    toolkit.register_tool_function(search_tools.search_engine)
     # -------- Material Tools --------
 
     # ========================================

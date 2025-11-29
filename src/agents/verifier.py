@@ -32,6 +32,7 @@ def create_verifier_agent(
         formatter=formatter,
         toolkit=toolkit,
         parallel_tool_calls=True,
+        max_iters=15,
     )
 
 # ---- Toolkit Builder ----
@@ -43,7 +44,7 @@ def build_verifier_toolkit(
     manuscript_tools = ManuscriptTools(short_term=short_term)
 
     toolkit.register_tool_function(manuscript_tools.read_manuscript_section)
-
+    toolkit.register_tool_function(manuscript_tools.count_manuscript_words)
     material_tools = MaterialTools(short_term=short_term)
     toolkit.register_tool_function(
         material_tools.read_material
