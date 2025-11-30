@@ -281,7 +281,9 @@ class MaterialTools:
     ) -> int:
         """DataFrame 存入 short-term material（CSV），返回行数。"""
         if self.short_term is not None:
-            self.short_term.save_material(ref_id=ref_id, content=df)
+            self.short_term.save_material(ref_id=ref_id, 
+                                          content=df, 
+                                          source="AKshare API")
         return len(df)
 
     # ===================== 股价数据 =====================
@@ -502,27 +504,34 @@ class MaterialTools:
                 # 出错就返回空字符串，避免整个流程中断；具体错误可按需改成日志记录
                 return ""
 
-
-        df = ak.stock_zh_a_disclosure_report_cninfo(
-            symbol=symbol,
-            market=market,
-            keyword=keyword,
-            category=category,
-            start_date=start_date,
-            end_date=end_date,
-        )
-        if df is None or df.empty:
-            ref_id = f"{symbol}_disclosure_{category or 'all'}_{int(time.time())}"
-            # self._save_df_to_material(df, ref_id)
-            header = (
-                f"[fetch_disclosure_material] 信息披露公告搜索结果为空，可以修改或者放宽搜索条件（symbol={symbol}, market={market}, "
+        try:
+            df = ak.stock_zh_a_disclosure_report_cninfo(
+                symbol=symbol,
+                market=market,
+                keyword=keyword,
+                category=category,
+                start_date=start_date,
+                end_date=end_date,
+            )
+        except Exception as e:
+        # 捕获 akshare 在内部筛选、字段缺失等造成的异常
+            df = None
+            text = (
+                f"[fetch_disclosure_material] 信息披露公告搜索结果为空，"
+                f"建议修改或放宽搜索条件（symbol={symbol}, market={market}, keyword={keyword}, "
                 f"category={category or '全部'}, {start_date}~{end_date}）"
             )
-            return _build_tool_response_from_df(
-                df,
-                ref_id=ref_id,
-                header=header,
+            return ToolResponse(
+                content=[
+                    TextBlock(
+                        type="text",
+                        text=text,
+                    ),
+                ],
             )
+
+        
+        df = df.head(10) # 避免获取的公告数量过多取前10条，后续可以改成按照某些条件排序取前10条
 
         # 2. 遍历 df 行，构造 PDF URL 并抽文本
         texts: list[str] = []

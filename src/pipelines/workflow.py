@@ -16,8 +16,6 @@ from src.utils.parse_verdict import parse_verifier_verdict
 import config
 async def run_workflow(task_desc: str, output_filename: str) -> str:
     """围绕一个 task description 执行完整的研报生成流程。
-
-    返回值：Writer 最终输出消息中的文本内容（其中包含 PDF 路径）。
     """
 
     cfg = config.Config()
@@ -47,8 +45,8 @@ async def run_workflow(task_desc: str, output_filename: str) -> str:
         # tool_use_store=tool_use_store,
     )
 
-    searcher = create_searcher_agent(model=model, formatter=create_searcher_formatter(), toolkit=searcher_toolkit)
-
+    # searcher = create_searcher_agent(model=model, formatter=create_searcher_formatter(), toolkit=searcher_toolkit)
+    searcher = create_searcher_agent(model=model, formatter=create_agent_formatter(), toolkit=searcher_toolkit)
     # print("\n=== 打印 JSON Schema (get_json_schemas) ===")
     # schemas = searcher_toolkit.get_json_schemas()
     # print(schemas)
@@ -100,6 +98,7 @@ async def run_workflow(task_desc: str, output_filename: str) -> str:
     # final_msg = await writer(writer_input)
 
     sections = short_term.draft_manuscript_from_outline()
+    failed_sections = [] 
 
     for section_id, title, section_outline in sections:
         print(f"\n====== 开始写作章节 {section_id} ======\n")
@@ -125,13 +124,20 @@ async def run_workflow(task_desc: str, output_filename: str) -> str:
         for round_idx in range(1, max_verify_rounds + 1):
             print(f"\n--- Verifier 审核轮次 {round_idx}：章节 {section_id} ---\n")
 
+            # 增补：只有第二轮及之后，提示已修改
+            revision_notice = ""
+            if round_idx > 1:
+                revision_notice = "注意：此章节的文本已经根据你的审核意见完成了修改，请重新审核。\n\n"
+
             verifier_input = Msg(
                 name="User",
                 content=(
                     f"下面是任务描述：{task_desc}\n"
                     f"当前章节: section_id={section_id}。\n\n"
                     f"下面是本章节 outline: {section_outline}\n\n"
+                    f"{revision_notice}"
                     "请开始调用章节文本读取工具、材料读取工具、字数统计工具进行严格地审核，并给出结构化输出的结论。"
+                    "**禁止在未调用工具读取章节文本、或者遗漏其中引用的任何材料的情况下就直接给出结论。**"
                 ),
                 role="user",
             )
@@ -149,6 +155,18 @@ async def run_workflow(task_desc: str, output_filename: str) -> str:
 
             if round_idx == max_verify_rounds:
                 print(f"[多次审核未通过] 章节 {section_id} 多次审核未通过，达到最大重写次数，标记为需要人工复核。")
+
+                problems_text = problems if problems else verdict_text
+
+                failed_sections.append(
+                    {
+                        "section_id": section_id,
+                        "title": title,
+                        "outline": section_outline,
+                        "reason": reason,
+                        "problems": problems_text,
+                    }
+                )
                 break
 
             # 如果没通过，把 Verifier 的结构化结论反馈给 Writer，让其在同一个 section 上重写
@@ -170,5 +188,13 @@ async def run_workflow(task_desc: str, output_filename: str) -> str:
             print(draft_msg.get_text_content())
             
 
-    md_to_pdf(short_term=short_term,output_filename=output_filename+".pdf")
+    text = md_to_pdf(short_term=short_term,output_filename=output_filename+".pdf")
+    print("\n====== 多次审核未通过章节列表 ======")
+
+    if failed_sections:
+        for item in failed_sections:
+            print(f"section_id={item['section_id']} title={item['title']}\n原因={item['reason']}\n问题={item['problems']}")
+
+    # 返回字符串内容
+    return f"{text}\n未通过章节：{failed_sections}"
 

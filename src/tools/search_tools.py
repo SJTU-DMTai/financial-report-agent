@@ -28,7 +28,7 @@ class SearchTools:
 
     # ================= 辅助函数 =================
 
-    def _fetch_page_html(self, url: str, timeout: int = 8) -> bytes:
+    def _fetch_page_html(self, url: str, timeout: int = 10) -> bytes:
         """用 requests 获取网页 HTML 内容"""
         headers = {
             "User-Agent": (
@@ -77,32 +77,52 @@ class SearchTools:
         return text, img_urls
 
 
-    def _score_relevance(self, query: str, title: str, text: str) -> float:
+    def _calculate_batch_relevance(self, query: str, candidates: List[Dict[str, Any]]) -> List[float]:
         """
-        使用 TF-IDF + 余弦相似度 计算 query 与网页内容的相关性
-        返回值 0.0~1.0 越高越相关
+        批量计算相关性得分 (Batch Processing TF-IDF)。
+        原理：将 Query 和所有文档放在同一个语料库中计算，这样能利用 IDF 正确降低通用词权重。
         """
-        # 为了提高效率，只取前 N 字
-        text = text[:5000]
+        if not candidates:
+            return []
 
-        # 把 query 与 文本 组合成语料
-        corpus = [query, title + " " + text]
+        stop_words = [
+            # 虚词
+            "的", "了", "在", "是", "我", "有", "和", "就", "不", "人", "都", "一", "一个", "上", "也", "很", "到", "说", "要", "去", "你", "会", "着", "没有", "看", "好", "自己", "这", "那", "个", "为", "之", "与", "及", "等", "或", "但是", "对于", "我们", "他们", "相关", "进行", "可以",
+            # 防止年份匹配导致的误判
+            "2020", "2021", "2022", "2023", "2024", "2025", "2026", "2027", "2030"
+        ]
+        # 1. 准备语料库：索引0为查询，后续为各个文档
+        # 组合 Title + Description + Text(前5000字) 以获得最佳匹配效果
+        corpus = [query]
+        for item in candidates:
+            # 权重优化：标题重复3次以增加标题匹配的权重
+            doc_content = (item['title'] + " ") * 3 + item['description'] + " " + item['page_text'][:5000]
+            corpus.append(doc_content)
 
-        # 使用 tf-idf 向量化
+        # 2. 向量化 (Fit Transform once)
         vectorizer = TfidfVectorizer(
             tokenizer=jieba.cut,
-            max_features=20000,     # 控制维度
-            stop_words=None,
+            max_features=50000,
+            stop_words=stop_words, 
+            token_pattern=r"(?u)\b\w+\b" # 覆盖默认正则以支持中文
         )
+
         try:
-            tfidf = vectorizer.fit_transform(corpus)
+            tfidf_matrix = vectorizer.fit_transform(corpus)
         except ValueError:
-            return 0.0
+            # 极端情况：语料库为空或分词后无有效词
+            return [0.0] * len(candidates)
 
-        # 计算余弦相似度
-        sim = cosine_similarity(tfidf[0:1], tfidf[1:2])
+        # 3. 计算相似度
+        # query_vec 是矩阵第0行, doc_vecs 是第1行到最后
+        query_vec = tfidf_matrix[0:1]
+        doc_vecs = tfidf_matrix[1:]
 
-        return float(sim[0][0])
+        # 计算余弦相似度，结果是一个 shape 为 (1, n_docs) 的矩阵
+        similarities = cosine_similarity(query_vec, doc_vecs).flatten()
+
+        return [float(score) for score in similarities]
+    
 
     #searcher agent使用
     async def search_engine(self, query: str, max_results: int = 10) -> ToolResponse:
@@ -110,7 +130,6 @@ class SearchTools:
 
         - 调用 DuckDuckGo 的搜索引擎接口，根据给定关键词返回若干条过滤后的搜索结果，适合获取大致信息或者是新闻等。
         - 如果需要完整、可核查的原文内容，或者是结构化数据请调用其他工具。
-        - 查询语句中的空格被视为逻辑“或”（OR）操作，因此每个关键词会分别参与匹配，请避免加入过于宽泛或无关的词语，导致无法搜索到需要的结果。
         Args:
             query (str):
                 搜索内容。
@@ -124,10 +143,10 @@ class SearchTools:
                 query=query,
                 backend="auto",
                 region="cn-zh",
-                max_results=max_results,
+                max_results=max_results*2,
             )
             ref_id = None
-            filtered: List[Dict[str, Any]] = []
+            candidates: List[Dict[str, Any]] = []
 
             for r in raw_results:
                 title = r.get("title", "") or "无标题"
@@ -160,49 +179,57 @@ class SearchTools:
                 snippet = re.sub(r"\s{2,}", " ", snippet)
                 snippet = snippet[:300] + ("..." if len(snippet) > 300 else "")
 
-                # 3) 计算相关性得分
-                relevance = self._score_relevance(query, title, desc or snippet)
+                # 暂存候选项，暂不计算分数
+                candidates.append({
+                    "title": title,
+                    "link": link,
+                    "description": desc or snippet, # 优先用搜索结果摘要，没有则用正文摘要
+                    "page_text": page_text,
+                    # "images": img_urls
+                })
 
-                # 得分 >= 0.2
-                if relevance < 0.2:
-                    continue
 
-                filtered.append(
-                    {
-                        "title": title or "无标题",
-                        "link": link,
-                        "description": desc or snippet,  # 优先用搜索摘要，备用真实摘要
-                        "page_text": page_text,
-                        # "images": img_urls,
-                        "relevance": relevance,
-                    }
-                )
 
             # 如果一个都没通过过滤，就退回到“未找到”
-            if not filtered:
+            if not candidates:
                 text = f"[search_engine] 对查询「{query}」未找到足够相关的结果。"
             else:
+                scores = self._calculate_batch_relevance(query, candidates)
+                # 将分数回填给 candidates
+                for i, score in enumerate(scores):
+                    candidates[i]['relevance'] = score
+
                 # 按相关性排序（高到低）
-                filtered.sort(key=lambda x: x.get("relevance", 0), reverse=True)
+                candidates.sort(key=lambda x: x.get("relevance", 0), reverse=True)
+
+                if len(candidates) > max_results:
+                    candidates = candidates[:max_results]
+
+                new_candidates = []
+                for i, item in enumerate(candidates):
+                    new_item = {"index": i}  # 放最前
+                    new_item.update(item)    # 其余字段按原顺序追加
+                    new_candidates.append(new_item)
+
+                candidates = new_candidates
 
                 ref_id = f"search_engine_{int(time.time())}"
                 self.short_term.save_material(
                     ref_id=ref_id,
-                    content=filtered,
+                    content=candidates,
                     description=f"Search Engine 搜索「{query}」的结果",
+                    source="Search Engine"
                 )
 
                 lines: List[str] = [f"[search_engine] 搜索：{query}", 
                                     f"Material 已写入 ref_id='{ref_id}'（JSON 格式）",
                                     "以下为搜索结果预览",
                                     ""]
-                for i, item in enumerate(filtered, start=0):
+                for i, item in enumerate(candidates, start=0):
                     title = item["title"]
                     desc = item.get("description", "无摘要")
                     link = item["link"]
-                    snippet = item.get("page_snippet", "")
                     # images = item.get("images") or []
-
                     # relevance = item.get("relevance", 0.0)
 
                     lines.append(f"第{i}条. {title}")
@@ -217,6 +244,7 @@ class SearchTools:
                     #         lines.append(f"      - {img_url}")
                     # lines.append(f"   相关性得分: {relevance:.2f}")
                     lines.append("")  # 空行分隔
+                    lines.append("")
 
                 text = "\n".join(lines)
 
@@ -230,7 +258,7 @@ class SearchTools:
                     text=text,
                 ),
             ],
-            metadata={"ref_id": ref_id, "result_count": len(filtered)}
+            metadata={"ref_id": ref_id, "result_count": len(candidates)}
         )
 
     # planner和writer调用

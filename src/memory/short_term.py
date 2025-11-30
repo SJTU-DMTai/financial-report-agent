@@ -20,7 +20,7 @@ class MaterialMeta:
     m_type: MaterialType
     filename: str
     description: str = ""
-    source: str = ""  # 来源标记，如 "user_upload", "search_result"
+    source: str = ""  # 来源标记
 
 @dataclass
 class ShortTermMemoryStore:
@@ -246,13 +246,15 @@ class ShortTermMemoryStore:
     #     return text
 
 
-    def save_material(self, ref_id: str, content: Union[str, pd.DataFrame, dict, list], description: str = "", forced_ext: str = None) -> None:
+    def save_material(self, ref_id: str, content: Union[str, pd.DataFrame, dict, list], description: str = "", source: str = "", forced_ext: str = None) -> None:
         self.ensure_dirs()
         
         # 简化判断逻辑
         if isinstance(content, pd.DataFrame):
             ext, m_type = "csv", MaterialType.TABLE
-            content.to_csv(self.material_dir / f"{ref_id}.csv", index=False)
+            if content.index.name is None:
+                content.index.name = "index"
+            content.to_csv(self.material_dir / f"{ref_id}.csv", index=True)
         elif isinstance(content, (dict, list)):
             ext, m_type = "json", MaterialType.JSON
             (self.material_dir / f"{ref_id}.json").write_text(json.dumps(content, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -261,7 +263,7 @@ class ShortTermMemoryStore:
             m_type = MaterialType.TEXT
             (self.material_dir / f"{ref_id}.{ext}").write_text(str(content), encoding="utf-8")
 
-        self._registry[ref_id] = MaterialMeta(ref_id, m_type, f"{ref_id}.{ext}", description)
+        self._registry[ref_id] = MaterialMeta(ref_id, m_type, f"{ref_id}.{ext}", description, source)
         self._save_registry()
 
     def load_material(self, ref_id: str) -> Union[pd.DataFrame, dict, str, None]:
