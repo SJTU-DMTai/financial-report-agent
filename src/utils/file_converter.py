@@ -14,6 +14,55 @@ from docling.datamodel.document import (
 )
 import markdown
 import re
+import html
+
+def _inject_refs(
+    md_text: str,
+    short_term: ShortTermMemoryStore,
+    citation_index_map: dict,
+    citations: list,
+) -> str:
+    """
+    扫描 md_text 中的ref_id标记，
+    支持以下形式，具有一定容错能力：
+      - [ref_id:xxx|yyy]
+      - ref_id:xxx|yyy
+      - ref_id:xxx
+      - [ref_id:xxx|yyy；ref_id:zzz]
+
+    按照出现顺序分配引用编号，并替换为超链接形式 (1)、(2)……
+    同时把引用信息写入 citations。
+    """
+    pattern = re.compile(
+        r"ref_id:([0-9A-Za-z_\u4e00-\u9fff\-]+)(?:\|([^；\]\s]+))?"
+    )
+
+    def _repl(m: re.Match) -> str:
+        ref_id = m.group(1).strip()
+        detail = (m.group(2) or "").strip()  # detail 允许缺省
+
+        key = (ref_id, detail)
+
+        if key not in citation_index_map:
+            idx = len(citations) + 1
+            citation_index_map[key] = idx
+            meta = short_term.get_material_meta(ref_id) if hasattr(short_term, "get_material_meta") else None
+            citations.append(
+                {
+                    "index": idx,
+                    "ref_id": ref_id,
+                    "detail": detail,
+                    "meta": meta,
+                }
+            )
+        else:
+            idx = citation_index_map[key]
+
+        # 在正文中显示为 (1)(2)… 并指向附录中对应条目
+        return f'(<a href="#ref-{idx}" class="ref">{idx}</a>)'
+
+    return pattern.sub(_repl, md_text)
+
 
 def _replace_chart_placeholders(md_text: str, manuscript_dir: Path) -> str:
     """
@@ -88,11 +137,16 @@ def md_to_pdf(
     body_parts: list[str] = []
     section_ids: list[str] = []
 
+    # 全局引用信息：key=(ref_id, detail) -> index
+    citation_index_map: dict[tuple[str, str], int] = {}
+    citations: list[dict] = []
+
     for path in sec_files:
         md_text = path.read_text(encoding="utf-8").strip()
         if not md_text:
             continue
-
+        
+        md_text = _inject_refs(md_text, short_term, citation_index_map, citations)
         md_text = _replace_chart_placeholders(md_text, short_term.manuscript_dir)
         md_text = _normalize_tables(md_text)
         # print(md_text+"\n\n")
@@ -115,7 +169,73 @@ def md_to_pdf(
 
     # 章节之间用分隔线（也可以加上分页样式）
     body_html = '\n<hr style="page-break-after: always; border: none;" />\n'.join(body_parts)
+    
+    
+    # 3. 生成附录区域（改为附录 -> 数据来源附录 + 预留部分）
+    appendix_html = ""
+    if citations:
+        appendix_lines: list[str] = []
+        appendix_lines.append('<hr style="page-break-before: always; border: none;" />')
 
+        # 附录大标题
+        appendix_lines.append('<h1>附录</h1>')
+
+        # ========== 第一部分：数据来源附录 ==========
+        appendix_lines.append('<h2>第一部分：数据来源附录</h2>')
+        appendix_lines.append('<ol>')
+
+        # 按 index 排序，保证顺序一致
+        for c in sorted(citations, key=lambda x: x["index"]):
+            idx = c["index"]
+            ref_id = c["ref_id"]
+            detail = c["detail"]
+            meta = c["meta"]
+
+            esc_ref_id = html.escape(ref_id)
+            esc_detail = html.escape(detail) if detail else ""
+            if meta is not None:
+                esc_filename = html.escape(meta.filename)
+                esc_m_type = html.escape(meta.m_type.value)
+                esc_desc = html.escape(meta.description) if meta.description else ""
+                esc_source = html.escape(meta.source) if meta.source else ""
+            else:
+                esc_filename = ""
+                esc_m_type = ""
+                esc_desc = ""
+                esc_source = ""
+
+            li_parts: list[str] = []
+            li_parts.append(f'<p><strong>{esc_ref_id}</strong>')
+            if esc_detail:
+                li_parts.append(f'（引用字段/行：{esc_detail}）')
+            li_parts.append('</p>')
+
+            if meta is not None:
+                li_parts.append("<ul>")
+                li_parts.append(f"<li>文件名：{esc_filename}</li>")
+                li_parts.append(f"<li>类型：{esc_m_type}</li>")
+                if esc_desc:
+                    li_parts.append(f"<li>描述：{esc_desc}</li>")
+                if esc_source:
+                    li_parts.append(f"<li>来源：{esc_source}</li>")
+                li_parts.append("</ul>")
+            else:
+                li_parts.append("<p><em>警告：未在 registry 中找到该 ref_id 对应的元数据。</em></p>")
+
+            li_html = f'<li id="ref-{idx}">' + "".join(li_parts) + "</li>"
+            appendix_lines.append(li_html)
+
+        appendix_lines.append("</ol>")
+
+        # ========== 第二部分：预留（暂时为空） ==========
+
+        # appendix_lines.append('<h2>第二部分：附加资料（预留）</h2>')
+        # appendix_lines.append('<p>（本部分暂未添加内容。）</p>')
+
+        appendix_html = "\n".join(appendix_lines)
+
+    if appendix_html:
+        body_html = body_html + "\n\n" + appendix_html
     full_html = f"""<!DOCTYPE html>
 <html>
 <head>

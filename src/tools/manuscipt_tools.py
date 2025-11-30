@@ -86,6 +86,22 @@ class ManuscriptTools:
                 metadata={"section_id": section_id, "char_count": 0},
             )
 
+        markdown = re.sub(
+            r"\[ref_id:[^\]]*\]",  # 从 [ref_id: 开始到下一个 ] 结束
+            "",
+            markdown,
+        )
+        markdown = re.sub(
+            r"!\[[^\]]*]\(chart:[^)]*\)",
+            "",
+            markdown,
+        )
+        markdown = re.sub(
+            r"chart:[0-9A-Za-z_]+",
+            "",
+            markdown,
+        )
+
         # 判断是否为标点的函数（兼容中英文标点）
         def is_punct(ch: str) -> bool:
             # Unicode 类别开头为 'P' 的都是各类标点符号
@@ -97,7 +113,7 @@ class ManuscriptTools:
 
         char_count = sum(
             1 for ch in markdown
-            if not ch.isspace() and not is_punct(ch)
+            if not ch.isspace() and not is_punct(ch) and not ch.isascii() 
         )
 
         result_text = (
