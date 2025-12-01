@@ -15,6 +15,7 @@ from ..tools.graphic_tools import *
 from ..tools.manuscipt_tools import *
 from ..tools.outline_tools import *
 from ..tools.search_tools import *
+from ..tools.calculate_tools import *
 from ..memory.short_term import ShortTermMemoryStore
 from ..prompt import prompt_dict
 
@@ -59,6 +60,14 @@ def build_writer_toolkit(
     toolkit.register_tool_function(
         material_tools.read_material
     )
+    calculate_tools = CalculateTools(short_term=short_term)
+    toolkit.register_tool_function(calculate_tools.calculate_cashflow_metric)
+    toolkit.register_tool_function(calculate_tools.calculate_financial_ratio)
+    toolkit.register_tool_function(calculate_tools.calculate_forecast_metric)
+    toolkit.register_tool_function(calculate_tools.calculate_math_metric)
+    toolkit.register_tool_function(calculate_tools.calculate_timeseries_transform)
+    toolkit.register_tool_function(calculate_tools.calculate_valuation_metric)
+    toolkit.register_tool_function(calculate_tools.calculate_or_analysis_by_python_code)
 
     return toolkit
 
