@@ -15,6 +15,46 @@ from docling.datamodel.document import (
 import markdown
 import re
 import html
+from typing import Optional, Union
+import time
+
+
+def add_citation(
+    ref_id: str,
+    detail: str,
+    short_term: ShortTermMemoryStore,
+    citation_index_map: dict,
+    citations: list,
+) -> Optional[int]:
+    """
+    根据 (ref_id, detail) 获取或创建引用编号。
+    如果在 registry 里找不到 ref_id，则返回 None（表示不做替换）。
+    """
+    # 没有 get_material_meta 就直接放弃
+    if not hasattr(short_term, "get_material_meta"):
+        return None
+
+    meta = short_term.get_material_meta(ref_id)
+    # ref_id 在 registry 中不存在：不生成引用，调用方应保持原文不变
+    if meta is None:
+        return None
+
+    key = (ref_id, detail)
+    if key in citation_index_map:
+        return citation_index_map[key]
+
+    idx = len(citations) + 1
+    citation_index_map[key] = idx
+    citations.append(
+        {
+            "index": idx,
+            "ref_id": ref_id,
+            "detail": detail,
+            "meta": meta,
+        }
+    )
+    return idx
+
 
 def _inject_refs(
     md_text: str,
@@ -29,40 +69,76 @@ def _inject_refs(
       - ref_id:xxx|yyy
       - ref_id:xxx
       - [ref_id:xxx|yyy；ref_id:zzz]
+      - [ref_id:xxx|yyy；zzz]
 
-    按照出现顺序分配引用编号，并替换为超链接形式 (1)、(2)……
-    同时把引用信息写入 citations。
+    其中 yyy 为可选位置描述可缺省。
+
     """
-    pattern = re.compile(
+# ---------- 第一轮：处理显式写出的 ref_id:xxx 或 ref_id:xxx|yyy ----------
+    # 不要求方括号存在，detail(yyy) 可缺省
+    pattern_main = re.compile(
         r"ref_id:([0-9A-Za-z_\u4e00-\u9fff\-]+)(?:\|([^；\]\s]+))?"
     )
 
-    def _repl(m: re.Match) -> str:
+    text = md_text
+    result_parts = []
+    last_end = 0
+
+    for m in pattern_main.finditer(text):
+        # 先把上一个匹配之后的原文拼上
+        result_parts.append(text[last_end:m.start()])
+
         ref_id = m.group(1).strip()
-        detail = (m.group(2) or "").strip()  # detail 允许缺省
+        detail = (m.group(2) or "").strip()
 
-        key = (ref_id, detail)
+        idx = add_citation(ref_id, detail, short_term, citation_index_map, citations)
 
-        if key not in citation_index_map:
-            idx = len(citations) + 1
-            citation_index_map[key] = idx
-            meta = short_term.get_material_meta(ref_id) if hasattr(short_term, "get_material_meta") else None
-            citations.append(
-                {
-                    "index": idx,
-                    "ref_id": ref_id,
-                    "detail": detail,
-                    "meta": meta,
-                }
-            )
+        if idx is None:
+            # 没找到 meta：不要替换，原样保留
+            result_parts.append(text[m.start():m.end()])
         else:
-            idx = citation_index_map[key]
+            # 用 (1)、(2)… 的形式替换
+            result_parts.append(f'(<a href="#ref-{idx}" class="ref">{idx}</a>)')
 
-        # 在正文中显示为 (1)(2)… 并指向附录中对应条目
-        return f'(<a href="#ref-{idx}" class="ref">{idx}</a>)'
+        last_end = m.end()
 
-    return pattern.sub(_repl, md_text)
+    # 拼接剩余部分
+    result_parts.append(text[last_end:])
+    text_after_main = "".join(result_parts)
 
+    # ---------- 第二轮：处理 “(1)；zzz” 这种漏写 ref_id 的情况 ----------
+    # 典型来源：
+    #   原文：[ref_id:xxx|yyy；zzz]
+    #   第一轮后：[(1)；zzz]
+    # 这里尝试把 zzz 当作 ref_id 去解析，如果 registry 里没有，就保持原样。
+    pattern_follow = re.compile(
+        r'(\(<a href="#ref-(\d+)" class="ref">\2</a>\))\s*([；;])\s*([0-9A-Za-z_\u4e00-\u9fff\-]+)'
+    )
+
+    text = text_after_main
+    result_parts = []
+    last_end = 0
+
+    for m in pattern_follow.finditer(text):
+        result_parts.append(text[last_end:m.start()])
+
+        anchor = m.group(1)          # 已有的 (1)
+        sep = m.group(3)             # 分号：；或 ;
+        ref_id2 = m.group(4).strip() # 疑似漏写 ref_id: 的部分
+
+        idx2 = add_citation(ref_id2, "", short_term, citation_index_map, citations)
+
+        if idx2 is None:
+            # 第二个“疑似 ref_id”在 registry 中找不到：保持原样，不改
+            result_parts.append(text[m.start():m.end()])
+        else:
+            anchor2 = f'(<a href="#ref-{idx2}" class="ref">{idx2}</a>)'
+            result_parts.append(f"{anchor}{sep}{anchor2}")
+
+        last_end = m.end()
+
+    result_parts.append(text[last_end:])
+    return "".join(result_parts)
 
 def _replace_chart_placeholders(md_text: str, manuscript_dir: Path) -> str:
     """
@@ -121,6 +197,18 @@ def _normalize_tables(md_text: str) -> str:
 
     return "\n".join(new_lines)
 
+
+def _remove_word_count_tags(md_text: str) -> str:
+    """
+    删除形如（字数：712）的字数标记。
+    兼容全角/半角括号：
+        （字数：712）
+        (字数：712)
+    """
+    pattern = re.compile(r"[（(]字数：\s*\d+[)）]")
+    return pattern.sub("", md_text)
+
+
 def md_to_pdf(
         short_term : ShortTermMemoryStore,
         output_filename: str = "report.pdf",
@@ -146,6 +234,7 @@ def md_to_pdf(
         if not md_text:
             continue
         
+        md_text = _remove_word_count_tags(md_text)
         md_text = _inject_refs(md_text, short_term, citation_index_map, citations)
         md_text = _replace_chart_placeholders(md_text, short_term.manuscript_dir)
         md_text = _normalize_tables(md_text)
@@ -275,13 +364,21 @@ def md_to_pdf(
 </body>
 </html>"""
 
+    if not output_filename.lower().endswith(".pdf"):
+        output_filename = output_filename + ".pdf"
+
     # 3. 调用 pdfkit 生成 PDF
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     pdf_path = out_dir / output_filename
 
+    html_path = out_dir / f"source_{time.time()}.html"
+    with open(html_path, "w", encoding="utf-8") as f:
+        f.write(full_html)
+
     options = {
         "encoding": "UTF-8",
+        "enable-internal-links": None,
         "enable-local-file-access": None,
     }
     pdfkit.from_string(full_html, str(pdf_path), options=options)
