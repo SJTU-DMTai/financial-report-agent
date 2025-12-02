@@ -1,0 +1,17 @@
+agentscope==1.0.7
+akshare==1.17.85
+beautifulsoup4==4.14.3
+ddgs==9.9.1
+docling==2.62.0
+PyMuPDF==1.26.6
+jieba==0.42.1
+Markdown==3.10
+matplotlib==3.10.7
+numpy==2.3.5
+pandas==2.3.3
+pdfkit==1.0.0
+pytest==9.0.1
+PyYAML==6.0.3
+requests==2.32.5
+scikit-learn==1.7.2
+trafilatura==2.0.0
