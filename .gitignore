@@ -7,7 +7,7 @@ data/memory/short_term/history_short_term/*
 data/memory/short_term/manuscript/*
 data/memory/short_term/material/*
 data/memory/short_term/outline.md
-data/memory/output/*
+data/output/*
 .idea/
 
 # Byte-compiled / optimized / DLL files
