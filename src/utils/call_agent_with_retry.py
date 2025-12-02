@@ -1,23 +1,45 @@
 import asyncio
+from typing import Iterable, Type
 
-async def call_agent_with_retry(agent, msg, max_retries=3, delay=5):
+async def call_agent_with_retry(
+    agent,
+    msg,
+    max_retries: int = 5,
+    base_delay: float = 2.0,
+    backoff_factor: float = 2.0,
+    non_retry_exceptions: Iterable[Type[BaseException]] = (KeyboardInterrupt, SystemExit),
+):
     """
-    ³¢ÊÔµ÷ÓÃ agent£¬Èç¹û·¢ÉúÒì³££¨ÈçÍøÂçÖĞ¶Ï£©£¬Ôò½øĞĞÖØÊÔ¡£
+    å¯¹ agentscope çš„ agent è°ƒç”¨åšç»Ÿä¸€é‡è¯•ã€‚
+    - agent: planner / writer / verifier ç­‰ agent å®ä¾‹
+    - msg:   agentscope.message.Msg å®ä¾‹
+    - max_retries: æœ€å¤§é‡è¯•æ¬¡æ•°
+    - base_delay: åˆå§‹ç­‰å¾…æ—¶é—´ï¼ˆç§’ï¼‰
+    - backoff_factor: æŒ‡æ•°é€€é¿å€æ•°
+    - non_retry_exceptions: ä¸å‚ä¸é‡è¯•ã€ç›´æ¥æŠ›å‡ºçš„å¼‚å¸¸ç±»å‹é›†åˆ
     """
-    last_exception = None
-    for attempt in range(max_retries):
+    last_exc: BaseException | None = None
+
+    for attempt in range(1, max_retries + 1):
         try:
-            # ³¢ÊÔµ÷ÓÃ Agent
             return await agent(msg)
+        except non_retry_exceptions:
+            # è¿™äº›å¼‚å¸¸ç›´æ¥æŠ›å‡ºå»ï¼Œä¸åšé‡è¯•
+            raise
         except Exception as e:
-            last_exception = e
-            print(f"\n[ÍøÂç²¨¶¯¾¯¸æ] µ÷ÓÃ {agent.name} Ê§°Ü (µÚ {attempt + 1}/{max_retries} ´Î³¢ÊÔ)¡£")
-            print(f"´íÎóĞÅÏ¢: {e}")
-            if attempt < max_retries - 1:
-                print(f"½«ÔÚ {delay} ÃëºóÖØÊÔ...")
-                await asyncio.sleep(delay)
-            else:
-                print("[´íÎó] ÖØÊÔ´ÎÊıÒÑÓÃ¾¡£¬·ÅÆú±¾´Î²Ù×÷¡£")
-    
-    # Èç¹ûÖØÊÔ¶¼Ê§°ÜÁË£¬Å×³ö×îºóÒ»´ÎµÄÒì³£
-    raise last_exception
+            last_exc = e
+
+            if attempt == max_retries:
+                print(f"[é‡è¯•å¤±è´¥] ç¬¬ {attempt} æ¬¡ä»ç„¶æŠ¥é”™ï¼Œæ”¾å¼ƒé‡è¯•ã€‚å¼‚å¸¸ï¼š{type(e).__name__}: {e}")
+                raise
+
+            sleep_time = base_delay * (backoff_factor ** (attempt - 1))
+            print(
+                f"[è°ƒç”¨ agent å¤±è´¥] ç¬¬ {attempt} æ¬¡å°è¯•å¼‚å¸¸ï¼š{type(e).__name__}: {e}ï¼Œ"
+                f"{sleep_time:.1f} ç§’åé‡è¯•..."
+            )
+            await asyncio.sleep(sleep_time)
+
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("æœªçŸ¥é”™è¯¯")

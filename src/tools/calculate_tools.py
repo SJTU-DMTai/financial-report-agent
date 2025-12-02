@@ -1175,7 +1175,7 @@ class CalculateTools:
                import numpy as np
                import pandas as pd
            你可以直接使用这些库，无需再次导入；重复导入也不会报错。
-           你也可以自行导入其他需要的库，例如sklearn、spicy等。
+           你也可以自行导入其他需要的库，例如sklearn、scipy等。
 
         3. 结果约定（关键）：
            - 你必须在代码中，将最终要返回的结果赋值给变量 `result`。

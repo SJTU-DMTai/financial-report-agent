@@ -13,7 +13,9 @@ from src.agents.verifier import create_verifier_agent, build_verifier_toolkit
 
 from src.utils.file_converter import md_to_pdf,pdf_to_markdown
 from src.utils.parse_verdict import parse_verifier_verdict
+from src.utils.call_agent_with_retry import call_agent_with_retry
 import config
+import asyncio
 async def run_workflow(task_desc: str, output_filename: str) -> str:
     """围绕一个 task description 执行完整的研报生成流程。
     """
@@ -81,7 +83,8 @@ async def run_workflow(task_desc: str, output_filename: str) -> str:
         role="user",
     )
     
-    outline_msg = await planner(planner_input)
+    # outline_msg = await planner(planner_input)
+    outline_msg = await call_agent_with_retry(planner, planner_input)
     print(outline_msg.get_text_content())
 
 
@@ -115,15 +118,18 @@ async def run_workflow(task_desc: str, output_filename: str) -> str:
         )
 
 
-        draft_msg = await writer(writer_input)
+        # draft_msg = await writer(writer_input)
+        draft_msg = await call_agent_with_retry(writer, writer_input)
+
         print("[Writer 初稿输出]")
         print(draft_msg.get_text_content())
 
         max_verify_rounds = cfg.get_max_verify_rounds()
         # 进入 Verifier 审核 loop
         for round_idx in range(1, max_verify_rounds + 1):
-            print(f"\n--- Verifier 审核轮次 {round_idx}：章节 {section_id} ---\n")
 
+            print(f"\n--- Verifier 审核轮次 {round_idx}：章节 {section_id} ---\n")
+            await asyncio.sleep(5)
             # 增补：只有第二轮及之后，提示已修改
             revision_notice = ""
             if round_idx > 1:
@@ -142,7 +148,8 @@ async def run_workflow(task_desc: str, output_filename: str) -> str:
                 role="user",
             )
 
-            verify_msg = await verifier(verifier_input)
+            # verify_msg = await verifier(verifier_input)
+            verify_msg = await call_agent_with_retry(verifier, verifier_input)
             verdict_text = verify_msg.get_text_content()
             print("[Verifier 审核结果]")
             print(verdict_text)
@@ -183,7 +190,9 @@ async def run_workflow(task_desc: str, output_filename: str) -> str:
                 ),
                 role="user",
             )
-            draft_msg = await writer(writer_fix_input)
+            # draft_msg = await writer(writer_fix_input)
+            draft_msg = await call_agent_with_retry(writer, writer_fix_input)
+
             print("[Writer 根据审核意见修改后的输出]")
             print(draft_msg.get_text_content())
             

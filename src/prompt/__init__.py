@@ -54,6 +54,7 @@ prompt_dict['writer_sys_prompt'] = """
 - 研报中出现的任何数字，也必须标注来源，在引用内容后使用 [ref_id:xxx|可选的精确位置描述] 格式给出唯一标识。
 - 如果需要进行任何的数据分析或者数学计算，请调用相关计算工具，在章节中使用计算结果的数字也请在数字后使用 [ref_id:xxx|可选的精确位置描述] 格式给出唯一标识。
 - 如果需要绘制图表，请调用相关绘图工具例如generate_chart_by_template和generate_chart_by_python_code，并在正文适当位置按照固定格式引用生成的图表。
+- 完成指定章节的研报之后，调用 replace_manuscript_section 工具进行写入。
 - 保证你的写作风格专业、克制，保持 sell-side 研报口吻。
 """
 

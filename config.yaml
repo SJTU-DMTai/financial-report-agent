@@ -2,18 +2,18 @@
 models:
   default: grok   # 默认使用的模型 id
 
-  deepseek:
-    provider: openrouter
-    model_name: deepseek/deepseek-chat-v3.1:free
-    base_url_env: https://openrouter.ai/api/v1
-    stream: false
-
   grok:
     provider: openrouter
     model_name: x-ai/grok-4.1-fast:free
     base_url_env: https://openrouter.ai/api/v1
     stream: false
 
+  kimi:
+    provider: openrouter
+    model_name: moonshotai/kimi-k2:free
+    base_url_env: https://openrouter.ai/api/v1
+    stream: false
+  
   qwen3max_dashscope:
     provider: dashscope
     model_name: qwen3-max
