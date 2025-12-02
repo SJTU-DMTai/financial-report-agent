@@ -74,7 +74,6 @@ class ShortTermMemoryStore:
             if target.exists():
                 dest = batch_dir / target.name
                 if target.is_dir():
-                    # 不要再删 dest 了，因为 batch_dir 是新建的，本来就不会存在
                     shutil.copytree(target, dest)
                     shutil.rmtree(target)
                 else:

@@ -20,6 +20,9 @@ from sklearn.metrics.pairwise import cosine_similarity
 import jieba
 import time
 from trafilatura import extract
+from ..utils.call_agent_with_retry import call_agent_with_retry
+
+
 class SearchTools:
 
     def __init__(self, short_term: ShortTermMemoryStore) -> None:
@@ -267,7 +270,6 @@ class SearchTools:
         async def search_with_searcher(query: str) -> ToolResponse:
             """使用指定的 Searcher 工具 基于 query 执行一次检索并返回总结结果。同时将获取的结果保存为Material。
 
-
             Args:
                 query (str): 检索需求的自然语言描述。
 
@@ -277,7 +279,8 @@ class SearchTools:
                 content=query,
                 role="user",
             )
-            res = await searcher(msg)
+            # res = await searcher(msg)
+            res = await call_agent_with_retry(searcher,msg)
             return ToolResponse(
                 content=res.content,
                 metadata={"from_agent": searcher.name},

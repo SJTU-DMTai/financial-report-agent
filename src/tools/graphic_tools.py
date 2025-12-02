@@ -539,6 +539,9 @@ class GraphicTools:
                 - TextBlock: 简要描述生成的图表
 
         """
+
+        font_path_literal = FONT_PATH or "" 
+
         # 在子进程中使用非交互式后端
         python_wrapper = f"""
 import io
@@ -548,6 +551,19 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+# ===== 中文字体设置 =====
+FONT_PATH = r\"\"\"{font_path_literal}\"\"\"
+if FONT_PATH:
+    try:
+        fm.fontManager.addfont(FONT_PATH)
+        font_prop = fm.FontProperties(fname=FONT_PATH)
+        matplotlib.rcParams["font.family"] = font_prop.get_name()
+        matplotlib.rcParams["font.sans-serif"] = [font_prop.get_name()]
+        matplotlib.rcParams["axes.unicode_minus"] = False
+    except Exception as e:
+        matplotlib.rcParams["axes.unicode_minus"] = False
+else:
+    matplotlib.rcParams["axes.unicode_minus"] = False
 # ==== 绘图代码开始 ====
 {code}
 # ==== 绘图代码结束 ====
