@@ -278,3 +278,99 @@ class ShortTermMemoryStore:
             return json.loads(path.read_text(encoding="utf-8"))
         else:
             return path.read_text(encoding="utf-8")
+        
+
+    def load_material_numerical(self, ref_id: str):
+        """
+        从 Material 中提取适合数值计算的“数值部分”。
+        返回：
+            - pandas.DataFrame 或任意 Python 对象（通常是数值 / list / dict），可直接用于进一步计算。
+
+        异常：
+            ValueError: 无法从该 Material 中找到可用的数值数据。
+        """
+        meta = self.get_material_meta(ref_id)
+        if meta is None:
+            raise ValueError(f"Material ref_id='{ref_id}' 不存在。")
+
+        obj = self.load_material(ref_id)
+        if obj is None:
+            raise ValueError(f"Material ref_id='{ref_id}' 对应内容不存在或已被删除。")
+
+        # 表格类：直接返回 DataFrame，并尝试将能转成数值的列转成数值
+        if meta.m_type == MaterialType.TABLE:
+            if not isinstance(obj, pd.DataFrame):
+                raise ValueError(
+                    f"Material ref_id='{ref_id}' 类型为 TABLE，但 load_material 返回的不是 DataFrame。"
+                )
+            df = obj.copy()
+            # 尝试将各列转为数值，无法转换的保持原样
+            for col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="ignore")
+            return df
+        if meta.m_type == MaterialType.JSON:
+            data = obj
+
+            def decode(record: dict):
+                if "result" not in record:
+                    raise ValueError(
+                        f"Material ref_id='{ref_id}' 的记录中缺少 'result' 字段。"
+                    )
+                val = record["result"]
+                r_type = record.get("result_type")
+
+                if r_type is None:
+                    return val
+
+                if r_type == "DataFrame":
+                    if isinstance(val, pd.DataFrame):
+                        df = val
+                    elif isinstance(val, (list, dict)):
+                        df = pd.DataFrame(val)
+                    else:
+                        raise ValueError(
+                            f"Material ref_id='{ref_id}' 标记为 DataFrame，但 result 类型为 {type(val).__name__}。"
+                        )
+                    df = df.copy()
+                    for col in df.columns:
+                        df[col] = pd.to_numeric(df[col], errors="ignore")
+                    return df
+
+                if r_type == "Series":
+                    if isinstance(val, pd.Series):
+                        ser = val
+                    elif isinstance(val, (list, dict)):
+                        ser = pd.Series(val)
+                    else:
+                        raise ValueError(
+                            f"Material ref_id='{ref_id}' 标记为 Series，但 result 类型为 {type(val).__name__}。"
+                        )
+                    return ser
+
+                return val
+
+            if isinstance(data, dict):
+                if "result" not in data:
+                    raise ValueError(
+                        f"Material ref_id='{ref_id}' 为 JSON dict，但不含 'result' 字段。"
+                    )
+                return decode(data)
+
+            if isinstance(data, list):
+                results = []
+                for item in data:
+                    if isinstance(item, dict) and "result" in item:
+                        results.append(decode(item))
+                if not results:
+                    raise ValueError(
+                        f"Material ref_id='{ref_id}' 为 JSON list，但没有任何元素包含 'result' 字段。"
+                    )
+                return results[0] if len(results) == 1 else results
+
+            raise ValueError(
+                f"Material ref_id='{ref_id}' 为 JSON，但顶层类型为 {type(data).__name__}。"
+            )
+
+        raise ValueError(
+            f"Material ref_id='{ref_id}' 类型为 {meta.m_type.value}，不支持提取 numerical 数据。"
+        )

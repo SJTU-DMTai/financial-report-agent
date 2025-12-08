@@ -8,7 +8,7 @@ from agentscope.model import DashScopeChatModel
 from ..tools.outline_tools import *
 from ..tools.search_tools import *
 from ..memory.short_term import ShortTermMemoryStore
-
+from ..memory.working_memory import SlidingWindowMemory
 from ..prompt import prompt_dict
 
 
@@ -21,7 +21,7 @@ def create_planner_agent(
         name="Planner",
         sys_prompt=prompt_dict['planner_sys_prompt'],
         model=model,
-        memory=InMemoryMemory(),
+        memory=SlidingWindowMemory(),
         formatter=formatter,
         toolkit=toolkit,
         parallel_tool_calls=True,

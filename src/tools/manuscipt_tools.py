@@ -16,8 +16,6 @@ class ManuscriptTools:
 
     def __init__(self, short_term: ShortTermMemoryStore):
         self.short_term = short_term
-
-  
     
     # ---- Manuscript Tool ----
 

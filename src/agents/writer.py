@@ -17,6 +17,7 @@ from ..tools.outline_tools import *
 from ..tools.search_tools import *
 from ..tools.calculate_tools import *
 from ..memory.short_term import ShortTermMemoryStore
+from ..memory.working_memory import SlidingWindowMemory
 from ..prompt import prompt_dict
 
 
@@ -29,7 +30,7 @@ def create_writer_agent(
         name="Writer",
         sys_prompt=prompt_dict['writer_sys_prompt'],
         model=model,
-        memory=InMemoryMemory(),
+        memory=SlidingWindowMemory(),
         formatter=formatter,
         toolkit=toolkit,
         parallel_tool_calls=True,

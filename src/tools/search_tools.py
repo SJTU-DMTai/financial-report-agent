@@ -281,6 +281,9 @@ class SearchTools:
             )
             # res = await searcher(msg)
             res = await call_agent_with_retry(searcher,msg)
+
+            await searcher.memory.clear()
+            
             return ToolResponse(
                 content=res.content,
                 metadata={"from_agent": searcher.name},
