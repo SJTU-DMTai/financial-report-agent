@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Literal, Optional, Union
 import numpy as np
 import json
 import math
-
+import pandas as pd
 from agentscope.message import TextBlock, ImageBlock, Base64Source
 from agentscope.tool import ToolResponse
 from agentscope.tool._coding._python import execute_python_code
@@ -45,6 +45,7 @@ class CalculateTools:
         tool_name: str,          # 如 "calculate_valuation_metric"
         sub_type: str | None,           # 如 metric_type / ratio_type / forecast_type 等
         result: Any,
+        result_type: str | None,
         params: Dict[str, Any] | None = None,
         code: str | None = None,
     ) -> str:
@@ -59,6 +60,7 @@ class CalculateTools:
             description = f"系统预定义工具 {tool_name}:{sub_type} 计算结果"
         source = "calculate_tools_result"
 
+
         content = [
             {
                 "description":description,
@@ -66,11 +68,10 @@ class CalculateTools:
                 "sub_type": sub_type,
                 "parameters": params or "",
                 "code": code or "",
+                "result_type": result_type,   # 新增字段
                 "result": result,
             }
         ]
-
-
         try:
             self.short_term.save_material(
                 ref_id=ref_id,
@@ -309,6 +310,7 @@ class CalculateTools:
                 sub_type=metric_type,
                 params=params,
                 result=result,
+                result_type="float",
             )
 
             text_block: TextBlock = {
@@ -519,6 +521,7 @@ class CalculateTools:
                 sub_type=ratio_type,
                 params=params,
                 result=result,
+                result_type="float",
             )
             
             text_block: TextBlock = {
@@ -641,6 +644,7 @@ class CalculateTools:
                 sub_type=metric_type,
                 params=params,
                 result=result,
+                result_type="float",
             )
 
             text_block: TextBlock = {
@@ -771,6 +775,7 @@ class CalculateTools:
                 sub_type=transform_type,
                 params=params,
                 result=result,
+                result_type="float",
             )
 
             text_block: TextBlock = {
@@ -903,6 +908,7 @@ class CalculateTools:
                 sub_type=forecast_type,
                 params=params,
                 result=result,
+                result_type="float",
             )
 
             text_block: TextBlock = {
@@ -1116,6 +1122,7 @@ class CalculateTools:
                 sub_type=metric_type,
                 params=params,
                 result=result,
+                result_type="float",
             )
 
             text_block: TextBlock = {
@@ -1146,6 +1153,7 @@ class CalculateTools:
     async def calculate_or_analysis_by_python_code(
         self,
         code: str,
+        material_map: dict[str, str] | None = None,
         description: str | None = None,
     ) -> ToolResponse:
         """
@@ -1187,6 +1195,13 @@ class CalculateTools:
         Args:
             code (str):
                 Python 代码片段，仅包含分析/计算逻辑。
+            material_map (dict[str, str] | None):
+                可选，本次计算中需要访问的material映射，可以通过设置此参数将material中的数值数据注入到code中的变量进行访问。
+                material_map的构成如下：
+                    - key: 你在代码中使用的变量名
+                    - value: 已有 Material 的 ref_id
+                若为 None，则不注入任何material变量。
+                注意，可以被注入到变量的material必须包含数值数据，比如TABLE会完整加载为dataframe，calculate_*_result会提取其中result字段的数据。
             description (str | None):
                 可选对本次计算的说明文字，若为空则使用默认描述。
 
@@ -1204,6 +1219,65 @@ class CalculateTools:
                 - "raw_stdout": 执行子进程的标准输出（包含 result 打印）
                 - "raw_stderr": 执行子进程的标准错误
         """
+
+
+        material_map = material_map or {}
+        material_injection_lines: list[str] = []
+        for var_name, ref_id in material_map.items():
+            if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", var_name):
+                text = (
+                    "[calculate_or_analysis_by_python_code] Material 注入失败。\n"
+                    f"变量名 '{var_name}' 不是合法的 Python 标识符，请仅使用字母、数字和下划线，"
+                    "且不能以数字开头。\n"
+                    f"触发位置: material_map['{var_name}'] = '{ref_id}'\n"
+                )
+                error_block: TextBlock = {
+                    "type": "text",
+                    "text": text,
+                }
+                return ToolResponse(
+                    content=[error_block],
+                    metadata={
+                        "material_map": material_map,
+                    },
+                )
+
+            try:
+                mat_obj = self.short_term.load_material_numerical(ref_id)
+            except Exception as e:
+                text = (
+                    "[calculate_or_analysis_by_python_code] Material 数值加载失败。\n"
+                    f"变量名: {var_name}\n"
+                    f"ref_id: {ref_id}\n"
+                    f"异常信息: {e}\n\n"
+                    "请检查该 Material 是否存在、类型是否为 TABLE 或 JSON，"
+                    "以及 JSON 中是否包含可供提取的 result 字段。"
+                )
+                error_block: TextBlock = {
+                    "type": "text",
+                    "text": text,
+                }
+                return ToolResponse(
+                    content=[error_block],
+                    metadata={
+                        "material_map": material_map,
+                    },
+                )
+
+            # DataFrame：以 CSV 形式注入，在子进程中用 StringIO + read_csv 重建
+            if isinstance(mat_obj, pd.DataFrame):
+                csv_str = mat_obj.to_csv(index=False)
+                csv_literal = repr(csv_str)  # 安全的 Python 字面量
+                material_injection_lines.append(
+                    f"{var_name} = pd.read_csv(StringIO({csv_literal}))"
+                )
+            else:
+                # 其他对象：直接用 repr 注入
+                material_injection_lines.append(
+                    f"{var_name} = {repr(mat_obj)}"
+                )
+
+        material_injection_code = "\n".join(material_injection_lines)
         # 子进程执行包装代码：只做基础导入 + 执行用户代码 + 打印 result
         python_wrapper = f"""
 import math
@@ -1211,6 +1285,11 @@ import statistics
 import datetime
 import numpy as np
 import pandas as pd
+from io import StringIO
+import json
+# ==== Material 数值注入开始 ====
+{material_injection_code}
+# ==== Material 数值注入结束 ====
 
 # ==== 用户代码开始 ====
 {code}
@@ -1224,13 +1303,46 @@ except NameError:
           "变量 'result' 未定义，请在代码中将最终计算结果赋值给 result。" +
           "</result_error>")
 else:
+
     print("<result_repr>")
     try:
-        # 这里直接 print(result)，对于 DataFrame/Series 会是表格形式
         print(_r)
     except Exception as _e:
         print("打印 result 时发生错误:", _e)
     print("</result_repr>")
+
+    try:
+        if isinstance(_r, pd.DataFrame):
+            # DataFrame 转为 records，方便后面还原
+            payload = _r.to_dict(orient="records")
+            r_type = "DataFrame"
+        elif isinstance(_r, pd.Series):
+            payload = _r.to_dict()
+            r_type = "Series"
+        else:
+            # 其他类型要求是 JSON 可序列化的（标量 / list / dict 等）
+            payload = _r
+            r_type = type(_r).__name__
+
+        result_json = json.dumps(
+            {{"result_type": r_type, "result": payload}},
+            ensure_ascii=False
+        )
+    except Exception as _e:
+        # 实在编码失败，退化成纯文本
+        result_json = json.dumps(
+            {{
+                "result_type": "text_repr",
+                "result": repr(_r),
+                "error": f"encode_error: {{_e}}"
+            }},
+            ensure_ascii=False
+        )
+
+    print("<result_json>")
+    print(result_json)
+    print("</result_json>")
+
 """
 
         # 调用已有的执行工具，在子进程中运行代码
@@ -1266,6 +1378,7 @@ else:
         # 优先看包装代码是否输出 <result_error>
         m_err_tag = re.search(r"<result_error>(.*?)</result_error>", stdout, re.S)
         m_repr = re.search(r"<result_repr>(.*?)</result_repr>", stdout, re.S)
+        m_json = re.search(r"<result_json>(.*?)</result_json>", stdout, re.S)
 
         if returncode != 0:
             # 子进程本身执行失败
@@ -1342,13 +1455,26 @@ else:
         # 提取 result 的打印文本（中间部分可能是多行）
         result_text = m_repr.group(1).strip("\n")
 
+
+        structured_result = result_text
+        result_type = "text_repr"
+        if m_json:
+            try:
+                payload = json.loads(m_json.group(1).strip())
+                result_type = payload.get("result_type", "text_repr")
+                structured_result = payload.get("result", result_text)
+            except Exception:
+                structured_result = result_text
+                result_type = "text_repr"
+
         if description is None:
             description = "自定义 Python 数据分析/计算结果"
 
         ref_id = self._save_calc_result(
                 tool_name="calculate_or_analysis_by_python_code",
                 sub_type="python code",
-                result=result_text,
+                result=structured_result,
+                result_type=result_type,
                 code=code,
             )
 

@@ -23,8 +23,13 @@ async def run_workflow(task_desc: str, output_filename: str) -> str:
     cfg = config.Config()
 
     # ----- 1. 准备 memory store -----
+
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
+    short_term_dir = PROJECT_ROOT / "data" / "memory" / "short_term"
+    
     short_term = ShortTermMemoryStore(
-        base_dir=Path("/financial-report-agent/data/memory/short_term"),
+        base_dir=short_term_dir,
     )
 
     # 解析demonstration report，第二遍解析同一个report可以注释掉
@@ -104,8 +109,10 @@ async def run_workflow(task_desc: str, output_filename: str) -> str:
     failed_sections = [] 
 
     for section_id, title, section_outline in sections:
-        print(f"\n====== 开始写作章节 {section_id} ======\n")
+        print(f"\n====== 开始写作章节 {section_id} ======\n") 
 
+        await verifier.memory.clear()
+        
         # 先让 Writer 写这一章的初稿
         writer_input = Msg(
             name="User",
