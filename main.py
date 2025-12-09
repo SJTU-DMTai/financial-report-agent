@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import asyncio
 
 from src.pipelines.workflow import run_workflow

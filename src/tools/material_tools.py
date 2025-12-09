@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from typing import Optional, Callable, Any, Dict, Union
@@ -135,7 +136,11 @@ class MaterialTools:
                 - 对于 JSON list：可选，用于对每个条目提取该字段。
                 - 对于表格：可选，用于筛选特定列（如 "Date,Close"）。
         """
-        
+        if start_index is not None:
+            start_index = int(start_index)
+        if end_index is not None:
+            end_index = int(end_index)
+
         meta = self.short_term.get_material_meta(ref_id) 
 
         if not meta:
@@ -192,7 +197,7 @@ class MaterialTools:
         preview_str = sliced_df.to_markdown(index=False, disable_numparse=True)
         
         text = (f"[read_material] ID: {ref_id}\n"
-                f"范围: 行 {start} 到 {end} (共 {total_rows} 行)\n"
+                f"完整 material 共 {total_rows} 行。已读取范围: 行 [{start}, {end})。\n"
                 f"内容:\n{preview_str}")
                 
         return ToolResponse(
@@ -214,7 +219,7 @@ class MaterialTools:
         preview_str = "\n".join(sliced_lines)
 
         text = (f"[read_material] ID: {ref_id}\n"
-                f"范围: 行 {start} 到 {end} (共 {total_lines} 行)\n"
+                f"完整 material 共 {total_lines} 行。已读取范围: 行 [{start}, {end})。\n"
                 f"内容:\n{preview_str}")
         
         return ToolResponse(
@@ -266,7 +271,7 @@ class MaterialTools:
 
         text = (
             f"[read_material] ID: {ref_id}\n"
-            f"JSON 列表范围 [{start}, {end})，共 {n} 行\n"
+            f"完整 material 共 {n} 条。已读取 JSON 列表范围 [{start}, {end})\n"
             f"内容:\n{json_str}"
         )
 
@@ -540,6 +545,11 @@ class MaterialTools:
             announce_date = row.get("公告时间")
             pdf_url = _build_pdf_url(link, announce_date)
             text = _fetch_pdf_text(pdf_url, referer=link)
+            
+            if len(text) > 50000:
+                text = text[:50000]
+                text += "\n...[内容过长，已截断]"
+
             texts.append(text)
 
         # 3. 新增「公告」列，删除「公告链接」列

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 
 from src.memory.short_term import ShortTermMemoryStore
 import pdfkit

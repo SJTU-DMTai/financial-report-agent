@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from agentscope.memory import InMemoryMemory
 from agentscope.message import Msg
 from typing import Union, Iterable
