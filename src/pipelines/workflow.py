@@ -1,10 +1,11 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from pathlib import Path
 
 from agentscope.message import Msg
 
-from src.utils.instance import create_chat_model, create_agent_formatter, create_searcher_formatter
+from src.utils.instance import create_chat_model, create_agent_formatter
 from src.memory.short_term import ShortTermMemoryStore
 from src.agents.searcher import create_searcher_agent, build_searcher_toolkit
 from src.agents.writer import create_writer_agent, build_writer_toolkit

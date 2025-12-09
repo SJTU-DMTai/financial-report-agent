@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import re
 
 def parse_verifier_verdict(verdict_text: str):

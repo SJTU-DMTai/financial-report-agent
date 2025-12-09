@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from agentscope.agent import ReActAgent
@@ -34,7 +35,7 @@ def create_writer_agent(
         formatter=formatter,
         toolkit=toolkit,
         parallel_tool_calls=True,
-        max_iters=50
+        max_iters=15,
     )
 
 # ---- Toolkit Builder ----

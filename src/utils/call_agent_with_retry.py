@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import asyncio
 from typing import Iterable, Type
 
@@ -5,7 +6,7 @@ async def call_agent_with_retry(
     agent,
     msg,
     max_retries: int = 5,
-    base_delay: float = 2.0,
+    base_delay: float = 120.0,
     backoff_factor: float = 2.0,
     non_retry_exceptions: Iterable[Type[BaseException]] = (KeyboardInterrupt, SystemExit),
 ):

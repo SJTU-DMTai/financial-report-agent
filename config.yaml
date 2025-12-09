@@ -14,12 +14,18 @@ models:
     base_url_env: https://openrouter.ai/api/v1
     stream: false
 
-  # gemini-2.0-flash-exp:
-  #   provider: openrouter
-  #   model_name: google/gemini-2.0-flash-exp:free
-  #   base_url_env: https://openrouter.ai/api/v1
-  #   stream: false
-  
+  deepseekv3.2:
+    provider: modelscope
+    model_name: deepseek-ai/DeepSeek-V3.2
+    base_url_env: https://api-inference.modelscope.cn/v1
+    stream: false
+
+  deepseekv3.1:
+    provider: modelscope
+    model_name: deepseek-ai/DeepSeek-V3.1
+    base_url_env: https://api-inference.modelscope.cn/v1
+    stream: false
+
   # qwen3max_dashscope:
   #   provider: dashscope
   #   model_name: qwen3-max

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from pathlib import Path
@@ -140,6 +141,13 @@ class SearchTools:
                 返回的最大结果数量。
         """
         try:
+            max_results = int(max_results) # 防止传入字符串如"10"导致搜索失败
+        except (TypeError, ValueError):
+            max_results = 10
+
+        ref_id = None
+        candidates: List[Dict[str, Any]] = []
+        try:
             ddgs = DDGS()
             # 1) 调用 DuckDuckGo 搜索接口
             raw_results = ddgs.text(
@@ -148,8 +156,6 @@ class SearchTools:
                 region="cn-zh",
                 max_results=max_results*2,
             )
-            ref_id = None
-            candidates: List[Dict[str, Any]] = []
 
             for r in raw_results:
                 title = r.get("title", "") or "无标题"
