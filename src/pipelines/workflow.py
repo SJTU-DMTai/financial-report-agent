@@ -18,11 +18,11 @@ async def run_workflow(task_desc: str, output_filename: str) -> str:
 
     # ----- 1. 准备 memory store -----
     short_term = ShortTermMemoryStore(
-        base_dir=Path("/financial-report-agent/data/memory/short_term"),
+        base_dir=Path("./data/memory/short_term"),
     )
 
-    # 解析demonstration report，第二遍解析同一个report可以注释掉
-    pdf_to_markdown(short_term=short_term)
+    # # 解析demonstration report，第二遍解析同一个report可以注释掉
+    # pdf_to_markdown(short_term=short_term)
 
 
     # outline_store = OutlineExperienceStore(

@@ -27,6 +27,8 @@ def create_searcher_agent(
         formatter=formatter,
         toolkit=toolkit,
         parallel_tool_calls=True,
+        print_hint_msg=True,
+        max_iters=100,
     )
 
 def build_searcher_toolkit(

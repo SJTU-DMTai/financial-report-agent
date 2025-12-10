@@ -1,3 +1,5 @@
+import os
+
 import yaml
 
 class Config:
@@ -7,7 +9,7 @@ class Config:
 
     def get_model_cfg(self):
         models = self.data["models"]
-        model_id = models["default"]
+        model_id = os.getenv('LLM_NAME', models["default"])
         return models[model_id]
     
     def get_font_path(self, key: str = "chinese") -> str | None:

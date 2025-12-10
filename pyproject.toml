@@ -23,5 +23,11 @@ requires-python = ">=3.10"
 dependencies = [
     "agentscope[full]",
     "akshare",
-    "pdfkit"
+    "pdfkit",
+    "fitz",
+    "frontend",
+    "ddgs",
+    "matplotlib",
+    "docling",
+    "markdown"
 ]

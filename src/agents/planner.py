@@ -24,7 +24,9 @@ def create_planner_agent(
         memory=InMemoryMemory(),
         formatter=formatter,
         toolkit=toolkit,
-        parallel_tool_calls=True,
+        parallel_tool_calls=False,
+        print_hint_msg=True,
+        max_iters=100,
     )
 
 
