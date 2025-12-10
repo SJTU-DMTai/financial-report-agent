@@ -14,6 +14,12 @@ models:
     base_url_env: https://openrouter.ai/api/v1
     stream: true
 
+  tongyi_deepresearch:
+    provider: openrouter
+    model_name: alibaba/tongyi-deepresearch-30b-a3b:free
+    base_url_env: https://openrouter.ai/api/v1
+    stream: true
+
   qwen3max_dashscope:
     provider: dashscope
     model_name: qwen3-max

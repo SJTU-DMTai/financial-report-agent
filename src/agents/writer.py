@@ -31,8 +31,9 @@ def create_writer_agent(
         memory=InMemoryMemory(),
         formatter=formatter,
         toolkit=toolkit,
-        parallel_tool_calls=True,
-        max_iters=50
+        parallel_tool_calls=False,
+        print_hint_msg=True,
+        max_iters=100,
     )
 
 # ---- Toolkit Builder ----

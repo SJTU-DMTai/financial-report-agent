@@ -36,7 +36,8 @@ def create_chat_model():
             api_key=os.environ["API_KEY"],
             # base_url=base_url,
             stream=stream,
-            client_args={"base_url": base_url}
+            client_args={"base_url": base_url},
+            generate_kwargs={"extra_body": {"reasoning": {"enabled": True}}}
         )
 
     elif provider == "dashscope":
