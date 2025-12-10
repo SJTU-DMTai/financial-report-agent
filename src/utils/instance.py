@@ -1,7 +1,9 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import os
 from agentscope.model import DashScopeChatModel
+from agentscope.token import HuggingFaceTokenCounter
 from agentscope.formatter import (
     DashScopeChatFormatter,
     DashScopeMultiAgentFormatter,
@@ -12,8 +14,8 @@ from agentscope.model import (
     DashScopeChatModel,
     OpenAIChatModel
 )
-from src.utils.token_counter import RoughTokenCounter
 
+from src.utils.patched_openaIchatformatter import PatchedOpenAIChatFormatter
 import config
 
 cfg = config.Config()
@@ -34,7 +36,6 @@ def create_chat_model():
         return OpenAIChatModel(
             model_name=model_name,
             api_key=os.environ["API_KEY"],
-            # base_url=base_url,
             stream=stream,
             client_args={"base_url": base_url},
             generate_kwargs={"extra_body": {"reasoning": {"enabled": True}}}
@@ -46,41 +47,37 @@ def create_chat_model():
             api_key=os.environ["API_KEY"],
             stream=stream,
         )
+    elif provider == "modelscope":
+        return OpenAIChatModel(
+            model_name=model_name,
+            api_key=os.environ["API_KEY"],
+            stream=stream,
+            client_args={"base_url": base_url},
+            # generate_kwargs={"extra_body":{"enable_thinking": False}}
+        )
 
     else:
         raise ValueError(f"未知 provider: {provider}")
-
-    # return DashScopeChatModel(
-    #     # model_name=os.environ.get("DASHSCOPE_MODEL", "qwen3-max"),
-    #     model_name=model_name,
-    #     api_key=os.environ["DASHSCOPE_API_KEY"],
-    #     stream=stream,
-    # )
 
 def create_agent_formatter():
     m = cfg.get_model_cfg()
     provider = m["provider"]
+    token_counter = HuggingFaceTokenCounter(
+        "Qwen/Qwen2.5-VL-3B-Instruct",
+        use_mirror=False,
+        use_fast=True,
+        trust_remote_code=True,
+    )
 
     if provider == "openrouter":
-        return OpenAIChatFormatter()
-
+        return OpenAIChatFormatter(token_counter=token_counter, max_tokens=250_000)
+    elif provider == "modelscope":
+        return PatchedOpenAIChatFormatter(token_counter=token_counter, max_tokens=120_000)
     elif provider == "dashscope":
-        return DashScopeChatFormatter()
+        return DashScopeChatFormatter(token_counter=token_counter, max_tokens=250_000)
     else:
         raise ValueError(f"未知 provider: {provider}")
     
-def create_searcher_formatter():
-    m = cfg.get_model_cfg()
-    token_counter = RoughTokenCounter(chars_per_token=4)
-    provider = m["provider"]
-
-    if provider == "openrouter":
-        return OpenAIChatFormatter(token_counter=token_counter,max_tokens=400_000)
-
-    elif provider == "dashscope":
-        return DashScopeChatFormatter(token_counter=token_counter,max_tokens=400_000)
-    else:
-        raise ValueError(f"未知 provider: {provider}")
 
 # def single_agent_formatter() -> DashScopeChatFormatter:
 #     """单 Agent 对话用 formatter。"""

@@ -4,10 +4,12 @@
 log*.txt
 *.out
 data/memory/short_term/history_short_term/*
-# data/memory/short_term/manuscript/*
-# data/memory/short_term/material/*
-# data/memory/output/*
+data/memory/short_term/manuscript/*
+data/memory/short_term/material/*
+data/memory/short_term/outline.md
+# data/output/reports/*
 .idea/
+cache.db
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

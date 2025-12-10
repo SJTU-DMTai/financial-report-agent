@@ -2,38 +2,49 @@
 models:
   default: grok   # 默认使用的模型 id
 
-  deepseek:
-    provider: openrouter
-    model_name: deepseek/deepseek-chat-v3.1:free
-    base_url_env: https://openrouter.ai/api/v1
-    stream: true
+  # grok:
+  #   provider: openrouter
+  #   model_name: x-ai/grok-4.1-fast:free
+  #   base_url_env: https://openrouter.ai/api/v1
+  #   stream: false
 
   grok:
     provider: openrouter
-    model_name: x-ai/grok-4.1-fast:free
+    model_name: x-ai/grok-4.1-fast
     base_url_env: https://openrouter.ai/api/v1
-    stream: true
+    stream: false
 
-  tongyi_deepresearch:
-    provider: openrouter
-    model_name: alibaba/tongyi-deepresearch-30b-a3b:free
-    base_url_env: https://openrouter.ai/api/v1
-    stream: true
+  deepseekv3.2:
+    provider: modelscope
+    model_name: deepseek-ai/DeepSeek-V3.2
+    base_url_env: https://api-inference.modelscope.cn/v1
+    stream: false
 
-  qwen3max_dashscope:
-    provider: dashscope
-    model_name: qwen3-max
-    stream: true
+  deepseekv3.1:
+    provider: modelscope
+    model_name: deepseek-ai/DeepSeek-V3.1
+    base_url_env: https://api-inference.modelscope.cn/v1
+    stream: false
 
-  qwenplus_dashscope:
-    provider: dashscope
-    model_name: qwen-plus
-    stream: true
+  # qwen3max_dashscope:
+  #   provider: dashscope
+  #   model_name: qwen3-max
+  #   stream: false
 
-  qwenflash_dashscope:
-    provider: dashscope
-    model_name: qwen-flash
-    stream: true
+  # qwenplus_dashscope:
+  #   provider: dashscope
+  #   model_name: qwen-plus
+  #   stream: false
 
+  # qwenflash_dashscope:
+  #   provider: dashscope
+  #   model_name: qwen-flash
+  #   stream: false
+
+# font:
+#   chinese: /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc
 font:
-  chinese: /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc
+  chinese: C:/Windows/Fonts/msyh.ttc
+
+verify_config:
+  max_verify_rounds: 2
