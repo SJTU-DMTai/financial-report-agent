@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from agentscope.agent import ReActAgent
@@ -27,8 +28,7 @@ def create_searcher_agent(
         formatter=formatter,
         toolkit=toolkit,
         parallel_tool_calls=True,
-        print_hint_msg=True,
-        max_iters=100,
+        max_iters=5,
     )
 
 def build_searcher_toolkit(
@@ -40,8 +40,8 @@ def build_searcher_toolkit(
     toolkit = Toolkit()
     material_tools = MaterialTools(short_term=short_term)
 
-    toolkit.register_tool_function(search_engine)
-
+    search_tools = SearchTools(short_term=short_term)
+    toolkit.register_tool_function(search_tools.search_engine)
     # -------- Material Tools --------
 
     # ========================================
@@ -119,7 +119,7 @@ def build_searcher_toolkit(
     )
 
     toolkit.register_tool_function(
-        material_tools.read_table_material
+        material_tools.read_material
     )
 
     return toolkit

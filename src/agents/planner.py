@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from agentscope.agent import ReActAgent
@@ -8,7 +9,7 @@ from agentscope.model import DashScopeChatModel
 from ..tools.outline_tools import *
 from ..tools.search_tools import *
 from ..memory.short_term import ShortTermMemoryStore
-
+from ..memory.working_memory import SlidingWindowMemory
 from ..prompt import prompt_dict
 
 
@@ -21,16 +22,13 @@ def create_planner_agent(
         name="Planner",
         sys_prompt=prompt_dict['planner_sys_prompt'],
         model=model,
-        memory=InMemoryMemory(),
+        memory=SlidingWindowMemory(),
         formatter=formatter,
         toolkit=toolkit,
         parallel_tool_calls=False,
         print_hint_msg=True,
         max_iters=100,
     )
-
-
-
 
     
 
@@ -46,5 +44,7 @@ def build_planner_toolkit(
     # toolkit.register_tool_function(outline_tools.read_outline)
     toolkit.register_tool_function(outline_tools.read_demonstration)
     toolkit.register_tool_function(outline_tools.replace_outline)
-    toolkit.register_tool_function(searcher_tool(searcher))
+
+    search_tools = SearchTools(short_term=short_term)
+    toolkit.register_tool_function(search_tools.searcher_tool(searcher))
     return toolkit

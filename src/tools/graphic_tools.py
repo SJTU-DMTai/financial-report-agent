@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # from __future__ import annotations
 import time
 from pathlib import Path
@@ -218,23 +219,29 @@ class GraphicTools:
         # 柱状图
         n_bar = len(bar_series)
         width = 0.8 / max(n_bar, 1)
+        bar_cmap = plt.get_cmap("Set2")
+        line_cmap = plt.get_cmap("Set1")
 
-        for i, s in enumerate(bar_series):
+        bar_colors = bar_cmap(np.linspace(0, 1, len(bar_series)))
+        line_colors = line_cmap(np.linspace(0, 1, len(line_series)))
+
+        for i, (s, c) in enumerate(zip(bar_series, bar_colors)):
             values = s["values"]
             label = s.get("name")
             offset = (i - (n_bar - 1) / 2) * width
-            ax.bar(index + offset, values, width=width, label=label)
+            ax.bar(index + offset, values, width=width, label=label, color=c)
 
         ax.set_xticks(index)
         ax.set_xticklabels(x)
 
         # 线图放在第二个 y 轴上（金融研报中常见：左轴是量，右轴是价）
         ax2 = ax.twinx()
-        for s in line_series:
+        for s, c in zip(line_series, line_colors):
             values = s["values"]
             label = s.get("name")
-            ax2.plot(index, values, marker="o", linestyle="-", label=label)
+            ax2.plot(index, values, marker="o", linestyle="-", label=label, color=c)
 
+    
         # 合并图例
         handles, labels = [], []
         for axis in (ax, ax2):
@@ -359,7 +366,7 @@ class GraphicTools:
         style: str | None = None,
         figsize: list[float] | None = None,
     ) -> ToolResponse:
-        """使用预定义模版自动生成金融研报中常见图表，并以 base64 图片形式返回。
+        """使用预定义模版自动生成金融研报中常见图表，并返回图表chart_id用于引用。
 
         Args:
             chart_type:
@@ -512,7 +519,7 @@ class GraphicTools:
         code: str,
         caption: str | None = None,
     ) -> ToolResponse:
-        """执行自行编写的绘图代码，获得生成的图片。
+        """执行自行编写的绘图代码，并返回图表chart_id用于引用。
             1. 你需要编写绘图逻辑的 Python 代码片段，例如:
                 plt.figure()
                 plt.plot(dates, prices, marker="o")
@@ -533,26 +540,42 @@ class GraphicTools:
                 - TextBlock: 简要描述生成的图表
 
         """
+
+        font_path_literal = FONT_PATH or "" 
+
         # 在子进程中使用非交互式后端
         python_wrapper = f"""
-    import io
-    import base64
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    import seaborn as sns
+import io
+import base64
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import seaborn as sns
 
-    # ==== 绘图代码开始 ====
-    {code}
-    # ==== 绘图代码结束 ====
+# ===== 中文字体设置 =====
+FONT_PATH = r\"\"\"{font_path_literal}\"\"\"
+if FONT_PATH:
+    try:
+        fm.fontManager.addfont(FONT_PATH)
+        font_prop = fm.FontProperties(fname=FONT_PATH)
+        matplotlib.rcParams["font.family"] = font_prop.get_name()
+        matplotlib.rcParams["font.sans-serif"] = [font_prop.get_name()]
+        matplotlib.rcParams["axes.unicode_minus"] = False
+    except Exception as e:
+        matplotlib.rcParams["axes.unicode_minus"] = False
+else:
+    matplotlib.rcParams["axes.unicode_minus"] = False
+# ==== 绘图代码开始 ====
+{code}
+# ==== 绘图代码结束 ====
 
-    # 若用户没有主动创建图，则使用当前图
-    buf = io.BytesIO()
-    plt.savefig(buf, format="png", bbox_inches="tight", dpi=150)
-    buf.seek(0)
-    img_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-    print("<img_b64>" + img_b64 + "</img_b64>")
-    """
+# 若用户没有主动创建图，则使用当前图
+buf = io.BytesIO()
+plt.savefig(buf, format="png", bbox_inches="tight", dpi=150)
+buf.seek(0)
+img_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+print("<img_b64>" + img_b64 + "</img_b64>")
+"""
 
         # 调用内置执行 Python 代码工具（在临时文件 + 子进程中执行）
         exec_resp = await execute_python_code(python_wrapper, timeout=60)
@@ -621,15 +644,6 @@ class GraphicTools:
                 f"![请在这里填写图的说明文字，如果没有则为空](chart:{chart_id})\n\n"
             ),
         }
-
-        # image_block: ImageBlock = {
-        #     "type": "image",
-        #     "source": Base64Source(
-        #         type="base64",
-        #         media_type="image/png",
-        #         data=img_b64,
-        #     ),
-        # }
 
         return ToolResponse(
             content=[text_block],

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from typing import Callable
@@ -24,7 +25,7 @@ class OutlineTools:
             content=[TextBlock(type="text", text=content or "[empty outline]")],
         )
 
-
+    
     def replace_outline(self, new_outline: str) -> ToolResponse:
         """
         调用此工具可写入新的研报大纲。
