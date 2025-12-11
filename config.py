@@ -18,3 +18,10 @@ class Config:
     def get_max_verify_rounds(self) -> int:
         verify_config = self.data["verify_config"]
         return verify_config["max_verify_rounds"]
+    
+    def get_wkhtmltopdf_path(self) -> str | None:
+        wkhtmltopdf_cfg = self.data.get("wkhtmltopdf_path", {})
+        return wkhtmltopdf_cfg.get("path")
+    
+    def get_planner_cfg(self) -> dict:
+        return self.data.get("planner", {})

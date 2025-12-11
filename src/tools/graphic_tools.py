@@ -551,6 +551,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import seaborn as sns
+import matplotlib.font_manager as fm
 
 # ===== 中文字体设置 =====
 FONT_PATH = r\"\"\"{font_path_literal}\"\"\"

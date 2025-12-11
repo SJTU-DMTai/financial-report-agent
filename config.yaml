@@ -14,6 +14,12 @@ models:
     base_url_env: https://openrouter.ai/api/v1
     stream: false
 
+  grok4:
+    provider: openrouter
+    model_name: x-ai/grok-4-fast
+    base_url_env: https://openrouter.ai/api/v1
+    stream: false
+
   deepseekv3.2:
     provider: modelscope
     model_name: deepseek-ai/DeepSeek-V3.2
@@ -26,20 +32,20 @@ models:
     base_url_env: https://api-inference.modelscope.cn/v1
     stream: false
 
-  # qwen3max_dashscope:
-  #   provider: dashscope
-  #   model_name: qwen3-max
-  #   stream: false
+  qwen3max_dashscope:
+    provider: dashscope
+    model_name: qwen3-max
+    stream: false
 
-  # qwenplus_dashscope:
-  #   provider: dashscope
-  #   model_name: qwen-plus
-  #   stream: false
+  qwenplus_dashscope:
+    provider: dashscope
+    model_name: qwen-plus
+    stream: false
 
-  # qwenflash_dashscope:
-  #   provider: dashscope
-  #   model_name: qwen-flash
-  #   stream: false
+  qwenflash_dashscope:
+    provider: dashscope
+    model_name: qwen-flash
+    stream: false
 
 # font:
 #   chinese: /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc
@@ -48,3 +54,9 @@ font:
 
 verify_config:
   max_verify_rounds: 2
+
+wkhtmltopdf_path:
+  path: E:/wkhtmltopdf/bin/wkhtmltopdf.exe
+
+planner:
+  use_demonstration: False

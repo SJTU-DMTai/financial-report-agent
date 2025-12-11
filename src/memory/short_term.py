@@ -29,6 +29,7 @@ class ShortTermMemoryStore:
     """
 
     base_dir: Path
+    do_post_init: bool = True
 
     @property
     def outline_path(self) -> Path:
@@ -55,9 +56,11 @@ class ShortTermMemoryStore:
         return self.material_dir / "registry.json"
 
     def __post_init__(self):
-
+        
         self._registry: Dict[str, MaterialMeta] = {}
-
+        if not self.do_post_init:
+            self._load_registry()
+            return
         # 转移之前的short_term memory，避免对当前任务造成干扰
         history_root = self.base_dir / "history_short_term"
         history_root.mkdir(parents=True, exist_ok=True)
@@ -123,19 +126,28 @@ class ShortTermMemoryStore:
 
 
 
-    def _parse_outline_sections(self, outline: str) -> List[Tuple[str, str, str]]:
+    def _parse_outline_sections(self, outline: str) -> Tuple[Optional[str], List[Tuple[str, str, str]]]:
         """把 outline.md 划分为若干 section。
-        返回: List[(section_id, title, body_markdown)]
-        简化策略：
-        - 以一级标题 `#` 作为章节分割点
+        返回: (report_title, sections)
+
+        report_title: 文档级研报标题
+        sections: List[(section_id, title, body_markdown)]
+        规则：
+        - 第 1 行是文档级研报标题
+        - 之后以一级标题 `#` 作为章节分割点
         - section_id 形如 `sec_01_行业分析`，保证字典序 == 章节顺序
         """
         lines = outline.splitlines()
         sections: List[Tuple[str, str, str]] = []
 
+        if not lines:
+            return None, sections
+    
+        report_title = lines[0]
+        content_lines = lines[1:]
         current_title = None
         current_body_lines: List[str] = []
-        index = 0  # 用于编号
+        index = 0
 
         def flush():
             nonlocal current_title, current_body_lines, index
@@ -153,18 +165,17 @@ class ShortTermMemoryStore:
             current_title = None
             current_body_lines = []
 
-        for line in lines:
+        for line in content_lines:
             if line.startswith("# "):  # 一级标题
                 flush()
                 current_title = line
             else:
                 if current_title is None:
-                    # 出现在第一个 # 之前的内容可以直接忽略或归入引言
                     continue
                 current_body_lines.append(line)
 
         flush()
-        return sections
+        return report_title, sections
 
 
     # ---- Manuscript ----
@@ -174,10 +185,18 @@ class ShortTermMemoryStore:
         根据大纲内容创建对应章节的初始 markdown 草稿，并返回生成的章节列表。
         """
         outline = self.load_outline()
-        sections = self._parse_outline_sections(outline)
+        report_title, sections = self._parse_outline_sections(outline)
 
-        for section_id, title, body_md in sections:
-            body_markdown = (
+        for idx, (section_id, title, body_md) in enumerate(sections):
+            if idx == 0 and report_title:
+                body_markdown = (
+                f"# {report_title}\n\n"
+                f"# {title}\n\n"
+                "（请根据大纲要点在此撰写正文，可调用 Searcher 工具补充材料，调用generate chart工具绘图。）\n\n"
+                f"{body_md}\n\n"
+                )
+            else :
+                body_markdown = (
                 f"# {title}\n\n"
                 "（请根据大纲要点在此撰写正文，可调用 Searcher 工具补充材料，调用generate chart工具绘图。）\n\n"
                 f"{body_md}\n\n"

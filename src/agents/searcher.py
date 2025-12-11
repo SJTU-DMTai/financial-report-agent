@@ -12,6 +12,7 @@ from ..tools.material_tools import *
 
 from ..tools.search_tools import *
 from ..memory.short_term import ShortTermMemoryStore
+from ..memory.working_memory import SlidingWindowMemory
 
 def create_searcher_agent(
     model,
@@ -24,7 +25,7 @@ def create_searcher_agent(
         name="Searcher",
         sys_prompt=prompt_dict['searcher_sys_prompt'],
         model=model,
-        memory=InMemoryMemory(),
+        memory=SlidingWindowMemory(),
         formatter=formatter,
         toolkit=toolkit,
         parallel_tool_calls=True,
