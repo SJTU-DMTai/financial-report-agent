@@ -12,15 +12,20 @@ from ..memory.short_term import ShortTermMemoryStore
 from ..memory.working_memory import SlidingWindowMemory
 from ..prompt import prompt_dict
 
+import config
+cfg = config.Config()
+planner_cfg = cfg.get_planner_cfg()
+use_demo = planner_cfg.get("use_demonstration", False)
 
 def create_planner_agent(
     model,
     formatter,
     toolkit: Toolkit,
 ) -> ReActAgent:
+    sys_prompt_key = 'planner_with_demo_sys_prompt' if use_demo else 'planner_sys_prompt'
     return ReActAgent(
         name="Planner",
-        sys_prompt=prompt_dict['planner_sys_prompt'],
+        sys_prompt=prompt_dict[sys_prompt_key],
         model=model,
         memory=SlidingWindowMemory(),
         formatter=formatter,
@@ -40,7 +45,8 @@ def build_planner_toolkit(
 
     outline_tools = OutlineTools(short_term=short_term)
     # toolkit.register_tool_function(outline_tools.read_outline)
-    toolkit.register_tool_function(outline_tools.read_demonstration)
+    if(use_demo):
+        toolkit.register_tool_function(outline_tools.read_demonstration)
     toolkit.register_tool_function(outline_tools.replace_outline)
 
     search_tools = SearchTools(short_term=short_term)

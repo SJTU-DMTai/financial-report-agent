@@ -539,26 +539,38 @@ class MaterialTools:
         df = df.head(10) # 避免获取的公告数量过多取前10条，后续可以改成按照某些条件排序取前10条
 
         # 2. 遍历 df 行，构造 PDF URL 并抽文本
-        texts: list[str] = []
+        raw_texts: list[str] = []
         for _, row in df.iterrows():
             link = row.get("公告链接")
             announce_date = row.get("公告时间")
             pdf_url = _build_pdf_url(link, announce_date)
             text = _fetch_pdf_text(pdf_url, referer=link)
-            
-            if len(text) > 50000:
-                text = text[:50000]
-                text += "\n...[内容过长，已截断]"
+            raw_texts.append(text or "")
 
-            texts.append(text)
+        MAX_TOTAL_CHARS = 50000
+        total_len = sum(len(t) for t in raw_texts)
+
+        texts: list[str] = []
+        if total_len <= MAX_TOTAL_CHARS:
+            # 总长度没超限，不截断
+            texts = raw_texts
+        else:
+            # 总长度超限：给每条公告分配一个等额的最大长度
+            n = len(raw_texts) or 1
+            per_doc_limit = max(MAX_TOTAL_CHARS // n, 1)
+
+            for t in raw_texts:
+                if len(t) > per_doc_limit:
+                    truncated = t[:per_doc_limit] + "\n...[内容过长，已截断]"
+                    texts.append(truncated)
+                else:
+                    texts.append(t)
 
         # 3. 新增「公告」列，删除「公告链接」列
         df["公告"] = texts
         if "公告链接" in df.columns:
             df = df.drop(columns=["公告链接"])
         ref_id = f"{symbol}_disclosure_{category or 'all'}_{int(time.time())}"
-
-
 
         self._save_df_to_material(df, ref_id)
         header = (
@@ -876,47 +888,4 @@ class MaterialTools:
             extra_meta={"symbol": symbol},
         )
 
-    # ===================== 通用读取函数 =====================
-
-    # def read_table_material(
-    #         self,
-    #         ref_id: str,
-    #         max_rows: int | None = None,  # 默认显示全部
-    # ) -> ToolResponse:
-    #     """读取任意表格 Material，并返回预览信息。
-
-    #     Args:
-    #         ref_id (str):
-    #             Material 标识，用于定位需要读取的表格。
-    #         max_rows (int | None):
-    #             用于控制预览行数：
-    #             - 为 None（默认）：预览全部数据；
-    #             - 为正整数：仅预览前 max_rows 行。
-
-
-    #     """
-    #     df = self.short_term.load_material(ref_id=ref_id)
-
-    #     if df is None:
-    #         text = f"[read_table_material] 未找到 ref_id='{ref_id}' 对应的 Material。"
-    #         return ToolResponse(
-    #             content=[TextBlock(type="text", text=text)],
-    #             metadata={"ref_id": ref_id, "found": False},
-    #         )
-
-    #     preview_str, total_rows, used_rows, _ = _preview_df(df, max_rows)
-    #     text = (
-    #         f"[read_table_material] 成功读取 ref_id='{ref_id}' 对应的表格，"
-    #         f"共 {total_rows} 条记录。以下为前 {used_rows} 行预览：\n"
-    #         f"{preview_str}"
-    #     )
-    #     return ToolResponse(
-    #         content=[TextBlock(type="text", text=text)],
-    #         metadata={
-    #             "ref_id": ref_id,
-    #             "row_count": total_rows,
-    #             "preview_rows": used_rows,
-    #             "found": True,
-    #         },
-    #     )
 

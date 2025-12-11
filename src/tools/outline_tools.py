@@ -26,14 +26,18 @@ class OutlineTools:
         )
 
     
-    def replace_outline(self, new_outline: str) -> ToolResponse:
+    def replace_outline(self, outline_title: str, outline_markdown: str) -> ToolResponse:
         """
         调用此工具可写入新的研报大纲。
 
-            Args:
-                new_outline (str):
-                    写入研报大纲的完整 markdown 内容。
+        Args:
+            outline_title (str):
+                研报的自然语言标题。
+            outline_markdown (str):
+                研报大纲正文的完整 markdown 内容（不包含标题）。
         """
+        outline_title = outline_title.replace("#", "").replace("\n", " ").strip()
+        new_outline = f"{outline_title}\n{outline_markdown}"
         self.short_term.save_outline(new_outline)
         return ToolResponse(
             content=[TextBlock(type="text", text="[replace_outline] 已更新 outline.md")],
