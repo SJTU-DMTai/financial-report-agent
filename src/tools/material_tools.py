@@ -15,6 +15,7 @@ from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse, Toolkit
 from ..memory.short_term import ShortTermMemoryStore, MaterialType
 import json
+import copy
 
 def _preview_df(df: pd.DataFrame, max_rows: int | None = None) -> tuple[str, int, int, list[str]]:
     """生成 DataFrame 文本预览及相关统计。"""
@@ -234,8 +235,7 @@ class MaterialTools:
         end_index: int | None,
         key_path: str | None,
     ) -> ToolResponse:
-        data = self.short_term.load_material(ref_id)  # 返回 dict 或 list，目前只有搜索结果为json list
-
+        data = self.short_term.load_material(ref_id)  
         # if isinstance(data, list):
         n = len(data)
         # 处理切片：start_index/end_index 控制“第几条”
@@ -246,9 +246,39 @@ class MaterialTools:
         start = max(0, min(start, n))
         end = max(start, min(end, n))
 
-        sliced = data[start:end]
+        sliced = copy.deepcopy(data[start:end])
 
-        
+        if (ref_id.startswith("search_engine")):
+            MAX_TOTAL_CHARS = 50000
+            page_items = []  # (item, len(page_text))
+            total_page_len = 0
+
+            if isinstance(sliced, list):
+                for item in sliced:
+                    if isinstance(item, dict):
+                        # 删除 relevance 字段
+                        item.pop("relevance", None)
+
+                        page_text = item.get("page_text")
+                        if isinstance(page_text, str) and page_text:
+                            l = len(page_text)
+                            page_items.append((item, l))
+                            total_page_len += l
+
+            # 根据总长度控制截断
+            if total_page_len > MAX_TOTAL_CHARS and page_items:
+                # 等额分配，每条最多多少字符
+                n_items = len(page_items)
+                per_limit = max(MAX_TOTAL_CHARS // n_items, 1)
+
+                for item, l in page_items:
+                    page_text = item["page_text"]
+                    if len(page_text) > per_limit:
+                        item["page_text"] = (
+                            page_text[:per_limit]
+                            + "\n...... [内容过长，已截断，如需要完整阅读请对此条搜索结果单独使用read_material工具]"
+                        )
+
         # 如果有 key_path，则提取每条对应字段，否则展示整个条目
         if key_path:
             def extract(obj, path):
@@ -264,10 +294,6 @@ class MaterialTools:
 
         # 序列化成 JSON 字符串
         json_str = json.dumps(sliced, ensure_ascii=False, indent=2)
-
-        # 防止过长
-        # if len(json_str) > 4000:
-        #     json_str = json_str[:4000] + "\n... (content truncated)"
 
         text = (
             f"[read_material] ID: {ref_id}\n"
