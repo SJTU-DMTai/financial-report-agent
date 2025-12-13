@@ -17,7 +17,7 @@ from src.utils.parse_verdict import parse_verifier_verdict
 from src.utils.call_agent_with_retry import call_agent_with_retry
 import config
 import asyncio
-async def run_workflow(task_desc: str, output_filename: str) -> str:
+async def run_workflow(task_desc: str) -> str:
     """围绕一个 task description 执行完整的研报生成流程。
     """
 
@@ -33,8 +33,12 @@ async def run_workflow(task_desc: str, output_filename: str) -> str:
         base_dir=short_term_dir,
     )
 
+    planner_cfg = cfg.get_planner_cfg()
+    use_demo = planner_cfg.get("use_demonstration", False)
+
     # 解析demonstration report，第二遍解析同一个report可以注释掉
-    # pdf_to_markdown(short_term=short_term)
+    # if use_demo:
+    #     pdf_to_markdown(short_term=short_term)
 
 
     # outline_store = OutlineExperienceStore(
@@ -53,7 +57,6 @@ async def run_workflow(task_desc: str, output_filename: str) -> str:
         # tool_use_store=tool_use_store,
     )
 
-    # searcher = create_searcher_agent(model=model, formatter=create_searcher_formatter(), toolkit=searcher_toolkit)
     searcher = create_searcher_agent(model=model, formatter=create_agent_formatter(), toolkit=searcher_toolkit)
     # print("\n=== 打印 JSON Schema (get_json_schemas) ===")
     # schemas = searcher_toolkit.get_json_schemas()
@@ -205,7 +208,7 @@ async def run_workflow(task_desc: str, output_filename: str) -> str:
             print(draft_msg.get_text_content())
             
 
-    text = md_to_pdf(short_term=short_term,output_filename=output_filename+".pdf")
+    text = md_to_pdf(short_term=short_term)
     print("\n====== 多次审核未通过章节列表 ======")
 
     if failed_sections:

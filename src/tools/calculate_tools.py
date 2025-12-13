@@ -16,8 +16,6 @@ from agentscope.tool import ToolResponse
 from agentscope.tool._coding._python import execute_python_code
 from ..memory.short_term import ShortTermMemoryStore
 
-
-
 class CalculateTools:
     """金融研报场景的计算工具集合。"""
 
@@ -1159,6 +1157,7 @@ class CalculateTools:
     ) -> ToolResponse:
         """
         执行自行编写的 Python 数据分析 / 计算代码，并返回“打印出来的结果”，保存计算结果到Material当中，返回Material标识ref_id。
+        你可以使用自己传入的数据，也可以通过 ref_id 引用之前保存的 Material 中的数值数据，并将其作为变量在代码中使用。
 
         1. 你需要编写一段 Python 代码片段，实现数据分析或数值计算逻辑。
            示例（计算某组收益率的均值和标准差）：
@@ -1491,4 +1490,3 @@ else:
         }
         
         return ToolResponse(content=[text_block], metadata={"ref_id": ref_id})            
-        

@@ -2,6 +2,7 @@
 
 from src.memory.short_term import ShortTermMemoryStore
 import pdfkit
+from pdfkit.configuration import Configuration
 from pathlib import Path
 from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling.datamodel.pipeline_options import PdfPipelineOptions
@@ -16,9 +17,14 @@ from docling.datamodel.document import (
 import markdown
 import re
 import html
-from typing import Optional, Union
+from typing import Optional, Union, List, Dict
 import time
+from datetime import datetime
 
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+import config
 
 def add_citation(
     ref_id: str,
@@ -210,122 +216,236 @@ def _remove_word_count_tags(md_text: str) -> str:
     return pattern.sub("", md_text)
 
 
+
+def _build_appendix_md(citations: List[Dict]) -> str:
+    """
+    根据 citations 构造“附录”的 Markdown 文本。
+
+    要求与 add_citation / _inject_refs 完全对齐：
+    - _inject_refs 在正文中插入 (<a href="#ref-{idx}" class="ref">{idx}</a>)
+    - 这里必须生成带 id="ref-{idx}" 的锚点，供 href 跳转
+
+    结构示例（Markdown）：
+    # 附录
+    ## 第一部分：数据来源附录
+
+    1. <a id="ref-1"></a>**REF_ID**（引用字段/行：detail）
+
+        - 文件名：`xxx`
+        - 类型：`yyy`
+        - 描述：`zzz`
+        - 来源：`...`
+    """
+    if not citations:
+        return ""
+
+    lines: List[str] = []
+
+    # 附录大标题
+    lines.append("# 附录")
+    lines.append("")
+
+    # 第一部分标题
+    lines.append("## 第一部分：数据来源附录")
+    lines.append("")
+    lines.append("以下为文中引用到的数据及材料来源：")
+    lines.append("")
+
+    # 按 index 排序，保证顺序稳定
+    for c in sorted(citations, key=lambda x: x["index"]):
+        idx = c["index"]
+        ref_id = c["ref_id"]
+        detail = c["detail"]
+        meta = c["meta"]
+
+        # 做一下 HTML 转义，避免特殊字符干扰
+        esc_ref_id = html.escape(str(ref_id)) if ref_id is not None else ""
+        esc_detail = html.escape(str(detail)) if detail else ""
+
+        # 有序列表项首行：
+        # 1. <a id="ref-1"></a>**REF_ID**（引用字段/行：detail）
+        # 注意：<a id="ref-1"></a> 是真正的锚点，和正文里的 href="#ref-1" 完全对应
+        first_line = f'1. <a id="ref-{idx}"></a>**{esc_ref_id}**'
+        if esc_detail:
+            first_line += f'（引用字段/行：{esc_detail}）'
+        lines.append(first_line)
+        lines.append("")
+        # 元信息：使用缩进的无序列表
+        if meta is not None:
+            esc_filename = html.escape(str(meta.filename)) if getattr(meta, "filename", None) else ""
+            esc_m_type = html.escape(str(meta.m_type.value)) if getattr(meta, "m_type", None) else ""
+
+            if esc_filename:
+                lines.append(f"    - 文件名：`{esc_filename}`")
+            if esc_m_type:
+                lines.append(f"    - 类型：`{esc_m_type}`")
+
+            if getattr(meta, "description", None):
+                esc_desc = html.escape(str(meta.description))
+                lines.append(f"    - 描述：`{esc_desc}`")
+
+            if getattr(meta, "source", None):
+                esc_source = html.escape(str(meta.source))
+                lines.append(f"    - 来源：`{esc_source}`")
+        else:
+            lines.append("    - *警告：未在 registry 中找到该 ref_id 对应的元数据*")
+
+        # 每条引用之间空一行，增强可读性
+        lines.append("")
+
+    return "\n".join(lines)
+
 def md_to_pdf(
         short_term : ShortTermMemoryStore,
-        output_filename: str = "report.pdf",
         output_dir: str = "data/output/reports",
     ):
     """将所有 Manuscript 章节按顺序合并并导出为 PDF 文件。
     """
-    # 1. 收集所有 section 文件并按文件名排序
     sec_files = sorted(short_term.manuscript_dir.glob("sec_*.md"))
     if not sec_files:
         return "[md_to_pdf] 未找到任何章节文件 (sec_*.md)，无法生成 PDF。"
 
-    # 2. 按顺序把每个 Markdown 章节渲染为 HTML，并拼接 body 片段
-    body_parts: list[str] = []
-    section_ids: list[str] = []
-
     # 全局引用信息：key=(ref_id, detail) -> index
     citation_index_map: dict[tuple[str, str], int] = {}
     citations: list[dict] = []
+    cleaned_sections_md: list[str] = []
 
-    for path in sec_files:
+    main_title = None
+    for idx, path in enumerate(sec_files):
         md_text = path.read_text(encoding="utf-8").strip()
         if not md_text:
             continue
+
+        if idx == 0 and main_title is None:
+            for line in md_text.splitlines():
+                s = line.strip()
+                if not s:
+                    continue
+                if s.startswith("#"):
+                    title = s.lstrip("#").strip()
+                    if title not in ("摘要", "研报摘要"):
+                        main_title = title
+                    break
+                else:
+                    # 第一行不是标题，直接放弃自动抽取
+                    break
         
         md_text = _remove_word_count_tags(md_text)
         md_text = _inject_refs(md_text, short_term, citation_index_map, citations)
         md_text = _replace_chart_placeholders(md_text, short_term.manuscript_dir)
         md_text = _normalize_tables(md_text)
-        # print(md_text+"\n\n")
-        # 将 Markdown 转为 HTML 片段
-        html_fragment = markdown.markdown(
-            md_text,
-            extensions=[
-                "extra",        # 支持表格、脚注等常用扩展
-                "tables",
-                "fenced_code",
-            ],
-            output_format="html",
-        )
-        # print(html_fragment+"\n\n")
-        body_parts.append(html_fragment)
-        section_ids.append(path.stem)  # 比如 sec_01_行业分析
+        cleaned_sections_md.append(md_text)
 
-    if not body_parts:
+    if not cleaned_sections_md:
         return "[md_to_pdf] 所有章节为空，无法生成 PDF。"
 
-    # 章节之间用分隔线（也可以加上分页样式）
-    body_html = '\n<hr style="page-break-after: always; border: none;" />\n'.join(body_parts)
+    appendix_md = _build_appendix_md(citations)
+    if appendix_md:
+        cleaned_sections_md.append(appendix_md)
+
+    # ==== 1) 把所有章节的 Markdown 合成一个字符串，用特殊标记做分隔 ====
+    PAGE_BREAK_MARK = "[[PAGE_BREAK_TOKEN_123]]"
+    combined_md = f"\n\n{PAGE_BREAK_MARK}\n\n".join(cleaned_sections_md)
+
+    # ==== 2) 用带 toc 扩展的 Markdown 一次性转换 ====
+    md = markdown.Markdown(
+        extensions=[
+            "extra",
+            "tables",
+            "fenced_code",
+            "toc",
+        ],
+        output_format="html",
+    )
+    body_html_full = md.convert(combined_md)
+    toc_inner_html = md.toc
+
+    # ==== 3) 按标记把 body_html_full 切回每一章 ====
+    split_token = f"<p>{PAGE_BREAK_MARK}</p>"
+    html_sections = body_html_full.split(split_token)
+
+    # ==== 4) 构造“目录页”的 HTML，把 markdown 生成的目录包一层，方便样式 & 分页 ====
+    toc_page_html = f"""
+<div class="toc-page">
+  <h1 class="toc-title">目录</h1>
+  {toc_inner_html}
+</div>
+""".strip()
+
+    # 假定第一个章节就是摘要（sec_01），把目录页插在它后面
+    if html_sections:
+        html_sections.insert(1, toc_page_html)
+    else:
+        html_sections = [toc_page_html]
+
+    # ==== 5) 把章节+目录按页分隔线连接回去 ====
+    body_html = '\n<hr style="page-break-after: always; border: none;" />\n'.join(html_sections)
     
-    
-    # 3. 生成附录区域（改为附录 -> 数据来源附录 + 预留部分）
-    appendix_html = ""
-    if citations:
-        appendix_lines: list[str] = []
-        appendix_lines.append('<hr style="page-break-before: always; border: none;" />')
+    # # 3. 生成附录区域（改为附录 -> 数据来源附录 + 预留部分）
+    # appendix_html = ""
+    # if citations:
+    #     appendix_lines: list[str] = []
+    #     appendix_lines.append('<hr style="page-break-before: always; border: none;" />')
 
-        # 附录大标题
-        appendix_lines.append('<h1>附录</h1>')
+    #     # 附录大标题
+    #     appendix_lines.append('<h1>附录</h1>')
 
-        # ========== 第一部分：数据来源附录 ==========
-        appendix_lines.append('<h2>第一部分：数据来源附录</h2>')
-        appendix_lines.append('<ol>')
+    #     # ========== 第一部分：数据来源附录 ==========
+    #     appendix_lines.append('<h2>第一部分：数据来源附录</h2>')
+    #     appendix_lines.append('<ol>')
 
-        # 按 index 排序，保证顺序一致
-        for c in sorted(citations, key=lambda x: x["index"]):
-            idx = c["index"]
-            ref_id = c["ref_id"]
-            detail = c["detail"]
-            meta = c["meta"]
+    #     # 按 index 排序，保证顺序一致
+    #     for c in sorted(citations, key=lambda x: x["index"]):
+    #         idx = c["index"]
+    #         ref_id = c["ref_id"]
+    #         detail = c["detail"]
+    #         meta = c["meta"]
 
-            esc_ref_id = html.escape(ref_id)
-            esc_detail = html.escape(detail) if detail else ""
-            if meta is not None:
-                esc_filename = html.escape(meta.filename)
-                esc_m_type = html.escape(meta.m_type.value)
-                esc_desc = html.escape(meta.description) if meta.description else ""
-                esc_source = html.escape(meta.source) if meta.source else ""
-            else:
-                esc_filename = ""
-                esc_m_type = ""
-                esc_desc = ""
-                esc_source = ""
+    #         esc_ref_id = html.escape(ref_id)
+    #         esc_detail = html.escape(detail) if detail else ""
+    #         if meta is not None:
+    #             esc_filename = html.escape(meta.filename)
+    #             esc_m_type = html.escape(meta.m_type.value)
+    #             esc_desc = html.escape(meta.description) if meta.description else ""
+    #             esc_source = html.escape(meta.source) if meta.source else ""
+    #         else:
+    #             esc_filename = ""
+    #             esc_m_type = ""
+    #             esc_desc = ""
+    #             esc_source = ""
 
-            li_parts: list[str] = []
-            li_parts.append(f'<p><strong>{esc_ref_id}</strong>')
-            if esc_detail:
-                li_parts.append(f'（引用字段/行：{esc_detail}）')
-            li_parts.append('</p>')
+    #         li_parts: list[str] = []
+    #         li_parts.append(f'<p><strong>{esc_ref_id}</strong>')
+    #         if esc_detail:
+    #             li_parts.append(f'（引用字段/行：{esc_detail}）')
+    #         li_parts.append('</p>')
 
-            if meta is not None:
-                li_parts.append("<ul>")
-                li_parts.append(f"<li>文件名：{esc_filename}</li>")
-                li_parts.append(f"<li>类型：{esc_m_type}</li>")
-                if esc_desc:
-                    li_parts.append(f"<li>描述：{esc_desc}</li>")
-                if esc_source:
-                    li_parts.append(f"<li>来源：{esc_source}</li>")
-                li_parts.append("</ul>")
-            else:
-                li_parts.append("<p><em>警告：未在 registry 中找到该 ref_id 对应的元数据。</em></p>")
+    #         if meta is not None:
+    #             li_parts.append("<ul>")
+    #             li_parts.append(f"<li>文件名：{esc_filename}</li>")
+    #             li_parts.append(f"<li>类型：{esc_m_type}</li>")
+    #             if esc_desc:
+    #                 li_parts.append(f"<li>描述：{esc_desc}</li>")
+    #             if esc_source:
+    #                 li_parts.append(f"<li>来源：{esc_source}</li>")
+    #             li_parts.append("</ul>")
+    #         else:
+    #             li_parts.append("<p><em>警告：未在 registry 中找到该 ref_id 对应的元数据。</em></p>")
 
-            li_html = f'<li id="ref-{idx}">' + "".join(li_parts) + "</li>"
-            appendix_lines.append(li_html)
+    #         li_html = f'<li id="ref-{idx}">' + "".join(li_parts) + "</li>"
+    #         appendix_lines.append(li_html)
 
-        appendix_lines.append("</ol>")
+    #     appendix_lines.append("</ol>")
 
-        # ========== 第二部分：预留（暂时为空） ==========
+    #     # ========== 第二部分：预留（暂时为空） ==========
 
-        # appendix_lines.append('<h2>第二部分：附加资料（预留）</h2>')
-        # appendix_lines.append('<p>（本部分暂未添加内容。）</p>')
+    #     # appendix_lines.append('<h2>第二部分：附加资料（预留）</h2>')
+    #     # appendix_lines.append('<p>（本部分暂未添加内容。）</p>')
 
-        appendix_html = "\n".join(appendix_lines)
+    #     appendix_html = "\n".join(appendix_lines)
 
-    if appendix_html:
-        body_html = body_html + "\n\n" + appendix_html
+    # if appendix_html:
+    #     body_html = body_html + "\n\n" + appendix_html
     full_html = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -338,6 +458,15 @@ def md_to_pdf(
         }}
         h1, h2, h3, h4, h5, h6 {{
             font-weight: bold;
+        }}
+        /* ==== 总标题：文档中第一个 h1 的特殊样式 ==== */
+        body > h1:first-of-type {{
+            font-size: 38px;
+            font-weight: 1000;
+            text-align: center;
+            margin-top: 40px;
+            margin-bottom: 30px;
+            letter-spacing: 0.05em;
         }}
         code, pre {{
             font-family: "JetBrains Mono", "Consolas", "Courier New", monospace;
@@ -358,6 +487,43 @@ def md_to_pdf(
         th, td {{
             padding: 4px 8px;
         }}
+
+        .toc {{
+            margin-top: 12px;
+        }}
+        .toc-title {{
+            text-align: center;
+        }}
+        .toc ul {{
+            list-style-type: none;
+            padding-left: 0;
+        }}
+        .toc li {{
+            margin: 4px 0;
+        }}
+        .toc a {{
+            text-decoration: none;
+        }}
+
+        .toc > ul > li > a {{
+            font-weight: 700;
+            color: #000;
+        }}
+
+        /* 二级目录 */
+        .toc > ul > li > ul > li > a {{
+            padding-left: 1.5em;
+            font-weight: 500;
+            color: #555;
+        }}
+
+        /* 三级目录 */
+        .toc > ul > li > ul > li > ul > li > a {{
+            padding-left: 3em;
+            font-size: 0.9em;
+            color: #777;
+        }}
+
     </style>
 </head>
 <body>
@@ -365,13 +531,19 @@ def md_to_pdf(
 </body>
 </html>"""
 
-    if not output_filename.lower().endswith(".pdf"):
-        output_filename = output_filename + ".pdf"
+    if not main_title:
+        now = datetime.now()
+        main_title = f"金融研报_{now.strftime('%Y%m%d_%H%M%S')}"
+
+    # 生成文件名，替换掉不安全字符
+    safe_name = re.sub(r'[\\/:*?"<>|]', "_", main_title)
+    safe_name = safe_name.strip()
+    safe_name = safe_name + ".pdf"
 
     # 3. 调用 pdfkit 生成 PDF
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    pdf_path = out_dir / output_filename
+    pdf_path = out_dir / safe_name
 
     html_path = out_dir / f"source_{time.time()}.html"
     with open(html_path, "w", encoding="utf-8") as f:
@@ -381,8 +553,15 @@ def md_to_pdf(
         "encoding": "UTF-8",
         "enable-internal-links": None,
         "enable-local-file-access": None,
+        "footer-center": "[page] / [topage]",
+        "footer-font-size": "10",
+        "footer-spacing": "5",
     }
-    pdfkit.from_string(full_html, str(pdf_path), options=options)
+    
+    cfg = config.Config()
+    WKHTMLTOPDF_PATH = cfg.get_wkhtmltopdf_path()
+    pdfkit_config = Configuration(wkhtmltopdf=WKHTMLTOPDF_PATH)
+    pdfkit.from_string(full_html, str(pdf_path), options=options, configuration=pdfkit_config)
 
     text = f"[md_to_pdf] 已输出 PDF: {pdf_path}"
     return text
