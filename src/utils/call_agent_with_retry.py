@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 import asyncio
 from typing import Iterable, Type
-
+import traceback
 async def call_agent_with_retry(
     agent,
     msg,
     max_retries: int = 5,
-    base_delay: float = 120.0,
+    base_delay: float = 60.0,
     backoff_factor: float = 2.0,
     non_retry_exceptions: Iterable[Type[BaseException]] = (KeyboardInterrupt, SystemExit),
 ):
@@ -29,7 +29,6 @@ async def call_agent_with_retry(
             raise
         except Exception as e:
             last_exc = e
-
             if attempt == max_retries:
                 print(f"[重试失败] 第 {attempt} 次仍然报错，放弃重试。异常：{type(e).__name__}: {e}")
                 raise
