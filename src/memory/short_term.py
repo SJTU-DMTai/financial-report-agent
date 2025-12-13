@@ -192,13 +192,13 @@ class ShortTermMemoryStore:
                 body_markdown = (
                 f"# {report_title}\n\n"
                 f"# {title}\n\n"
-                "（请根据大纲要点在此撰写正文，可调用 Searcher 工具补充材料，调用generate chart工具绘图。）\n\n"
+                "（请根据大纲要点在此撰写正文，可调用 Searcher 工具补充材料，调用calculate工具进行计算，调用generate chart工具绘图。）\n\n"
                 f"{body_md}\n\n"
                 )
             else :
                 body_markdown = (
                 f"# {title}\n\n"
-                "（请根据大纲要点在此撰写正文，可调用 Searcher 工具补充材料，调用generate chart工具绘图。）\n\n"
+                "（请根据大纲要点在此撰写正文，可调用 Searcher 工具补充材料，调用calculate工具进行计算，调用generate chart工具绘图。）\n\n"
                 f"{body_md}\n\n"
                 )
 
