@@ -249,7 +249,7 @@ class MaterialTools:
         sliced = copy.deepcopy(data[start:end])
 
         if (ref_id.startswith("search_engine")):
-            MAX_TOTAL_CHARS = 50000
+            MAX_TOTAL_CHARS = 20000
             page_items = []  # (item, len(page_text))
             total_page_len = 0
 

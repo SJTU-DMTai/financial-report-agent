@@ -244,8 +244,13 @@ class SearchTools:
                     lines.append(f"第{i}条. {title}")
                     lines.append(f"   链接: {link}")
                     lines.append(f"   搜索摘要: {desc}")
-                    if snippet:
-                        lines.append(f"   页面正文摘录: {snippet}")
+
+                    page_text_i = item.get("page_text", "")
+                    snippet = page_text_i.replace("\n", " ")
+                    snippet = re.sub(r"\s{2,}", " ", snippet)
+                    snippet = snippet[:300] + ("..." if len(snippet) > 300 else "")
+                    lines.append(f"   页面正文摘录: {snippet}")
+
                     # if images:
                     #     # 只显示前 2 个图片链接，避免过长
                     #     lines.append("   图片链接示例:")

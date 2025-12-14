@@ -1,6 +1,6 @@
 # config.yaml
 models:
-  default: grok   # 默认使用的模型 id
+  default: deepseek-v3.1-nex-n1   # 默认使用的模型 id
 
   # grok:
   #   provider: openrouter
@@ -8,6 +8,23 @@ models:
   #   base_url_env: https://openrouter.ai/api/v1
   #   stream: false
 
+  devstral:
+    provider: openrouter
+    model_name: mistralai/devstral-2512:free
+    base_url_env: https://openrouter.ai/api/v1
+    stream: false
+
+  deepseek-v3.1-nex-n1:
+    provider: openrouter
+    model_name: nex-agi/deepseek-v3.1-nex-n1:free
+    base_url_env: https://openrouter.ai/api/v1
+    stream: false
+
+  qwen-turbo:
+    provider: openrouter
+    model_name: qwen/qwen-turbo
+    base_url_env: https://openrouter.ai/api/v1
+    stream: false
   grok:
     provider: openrouter
     model_name: x-ai/grok-4.1-fast
@@ -59,4 +76,4 @@ wkhtmltopdf_path:
   path: E:/wkhtmltopdf/bin/wkhtmltopdf.exe
 
 planner:
-  use_demonstration: False
+  use_demonstration: True
