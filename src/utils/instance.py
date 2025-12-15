@@ -15,7 +15,7 @@ from agentscope.model import (
     OpenAIChatModel
 )
 
-from src.utils.patched_openaIchatformatter import PatchedOpenAIChatFormatter
+from src.utils.patched_openaichatformatter import PatchedOpenAIChatFormatter
 import config
 
 cfg = config.Config()

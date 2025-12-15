@@ -1,23 +1,16 @@
 # -*- coding: utf-8 -*-
-
+from memory.working import Section, Element
 from src.memory.short_term import ShortTermMemoryStore
 import pdfkit
 from pdfkit.configuration import Configuration
 from pathlib import Path
-from docling.document_converter import DocumentConverter, PdfFormatOption
-from docling.datamodel.pipeline_options import PdfPipelineOptions
-from docling.datamodel.document import (
-    TableItem,
-    PictureItem,
-    TextItem,
-    SectionHeaderItem,
-    ListItem,
-    DocItem
-)
+from marker.converters.pdf import PdfConverter
+from marker.models import create_model_dict
+from marker.output import text_from_rendered
 import markdown
 import re
 import html
-from typing import Optional, Union, List, Dict
+from typing import Optional, Union, List, Dict, Tuple
 import time
 from datetime import datetime
 
@@ -296,45 +289,35 @@ def _build_appendix_md(citations: List[Dict]) -> str:
     return "\n".join(lines)
 
 def md_to_pdf(
+        md_text: str,
         short_term : ShortTermMemoryStore,
         output_dir: str = "data/output/reports",
     ):
     """将所有 Manuscript 章节按顺序合并并导出为 PDF 文件。
     """
-    sec_files = sorted(short_term.manuscript_dir.glob("sec_*.md"))
-    if not sec_files:
-        return "[md_to_pdf] 未找到任何章节文件 (sec_*.md)，无法生成 PDF。"
-
     # 全局引用信息：key=(ref_id, detail) -> index
     citation_index_map: dict[tuple[str, str], int] = {}
     citations: list[dict] = []
     cleaned_sections_md: list[str] = []
 
-    main_title = None
-    for idx, path in enumerate(sec_files):
-        md_text = path.read_text(encoding="utf-8").strip()
-        if not md_text:
+    for line in md_text.splitlines():
+        s = line.strip()
+        if not s:
             continue
+        if s.startswith("#"):
+            title = s.lstrip("#").strip()
+            if title not in ("摘要", "研报摘要"):
+                main_title = title
+            break
+        else:
+            # 第一行不是标题，直接放弃自动抽取
+            break
 
-        if idx == 0 and main_title is None:
-            for line in md_text.splitlines():
-                s = line.strip()
-                if not s:
-                    continue
-                if s.startswith("#"):
-                    title = s.lstrip("#").strip()
-                    if title not in ("摘要", "研报摘要"):
-                        main_title = title
-                    break
-                else:
-                    # 第一行不是标题，直接放弃自动抽取
-                    break
-        
-        md_text = _remove_word_count_tags(md_text)
-        md_text = _inject_refs(md_text, short_term, citation_index_map, citations)
-        md_text = _replace_chart_placeholders(md_text, short_term.manuscript_dir)
-        md_text = _normalize_tables(md_text)
-        cleaned_sections_md.append(md_text)
+    md_text = _remove_word_count_tags(md_text)
+    md_text = _inject_refs(md_text, short_term, citation_index_map, citations)
+    md_text = _replace_chart_placeholders(md_text, short_term.manuscript_dir)
+    md_text = _normalize_tables(md_text)
+    cleaned_sections_md.append(md_text)
 
     if not cleaned_sections_md:
         return "[md_to_pdf] 所有章节为空，无法生成 PDF。"
@@ -567,131 +550,210 @@ def md_to_pdf(
     return text
 
 
+def detect_section(line: str) -> Tuple[int, str]:
+    """
+    Detect sections using multiple patterns.
+    """
+    line2 = re.sub(r"<span.+</span>", "", line).strip()
+    # Pattern 1: Standard (1., 1.1, 1.1.1)
+    pattern1 = r'#+\s+([0-9一二三四五六七八九十IVX]+(?:\.\d+)*)[、.\s章节]?\s*(.+)'
+    match = re.match(pattern1, line2)
+    if match:
+        section_num = match.group(1)
+        title = match.group(2).strip()
+        level = min(section_num.count('.') + 2, 6)
+        title = f"{section_num} {title}"
+        if section_num.count('.') == 0:
+            title += "."
+        return level, title
+
+    pattern2 = r'#+\s+<span id=.+></span>\s*(.+)$'
+    match = re.match(pattern2, line)
+    if match and re.search(r"[图表]\s?\d", line) is None:
+        title = match.group(1).strip()
+        level = line.split(" ")[0].count("#")
+        return level, title
+    return 0, ""
+
+
 def pdf_to_markdown(
-    short_term : ShortTermMemoryStore,
+    pdf_path: Union[str, Path], output_path: Union[str, Path]
 ):
     """
     将 demonstration report PDF 转换为结构化 Markdown，提取图片和表格并以特定格式嵌入。
     """
-    # 1. 路径与目录准备
-    output_dir = short_term.demonstration_dir
+    converter = PdfConverter(artifact_dict=create_model_dict())
+    rendered = converter(str(pdf_path))
+    text, metadata, images = text_from_rendered(rendered)
 
-    pdf_files = list(short_term.demonstration_dir.glob("*.pdf")) + list(short_term.demonstration_dir.glob("*.PDF"))
+    processed_lines = []
 
-    if not pdf_files:
-        raise FileNotFoundError("demonstration_dir 中没有任何 PDF 文件")
-    latest_pdf = max(pdf_files, key=lambda f: f.stat().st_mtime)
-    
-    images_out_path = output_dir / "images"
-    
-    # 创建目录
-    images_out_path.mkdir(parents=True, exist_ok=True)
+    found_h1 = False
+    found_section_1 = False
+    summary_content = []
+    skip_toc = False
+    title = None
 
-    # 2. 配置 Docling (开启图片生成)
+    for line in text.split('\n\n'):
+        line = line.strip()
+        if len(line) == 0:
+            continue
+        if title is None:
+            if "[Table\\_Title]" not in text:
+                if match := re.match(r"^#+ (.+)", line):
+                    title = match.group(1) if detect_section(line)[0] == 0 else pdf_path.name
+                    processed_lines.append("# " + title)
+            else:
+                if match := re.match(r"^#{1,3}\s+\[Table\\_Title] (.+)", line):
+                    title = match.group(1)
+                    processed_lines.append("# " + title)
+        else:
+            if match := re.match(r"^#{2,4}\s+\[Table\\_Summary] (.+)", line):
+                processed_lines.append("## " + match.group(1) + " （摘要）")
+            else:
+                # Check if this is a TOC section (目录)
+                if '目录' in line and line.startswith('#'):
+                    skip_toc = True
+                    continue
 
-    pipeline_options = PdfPipelineOptions()
-    pipeline_options.do_ocr = False
-    pipeline_options.do_table_structure = True
-    pipeline_options.generate_page_images = True  # 必须开启才能裁剪图片
+                # Skip TOC content (until we find a numbered section or new header)
+                if skip_toc:
+                    if line.startswith('#'):
+                        level, title = detect_section(line)
+                        if level:
+                            skip_toc = False
+                    else:
+                        continue
 
-    converter = DocumentConverter(
-        format_options={
-            "pdf": PdfFormatOption(pipeline_options=pipeline_options)
-        }
-    )
+                # Detect if line starts with markdown header
+                if re.search(r"^#+ ", line):
+                    level, title = detect_section(line)
+                    if level:
+                        # Use level based on section number
+                        processed_lines.append('#' * min(level, 6) + ' ' + title)
+                    else:
+                        processed_lines.append('** ' + line.strip("#").strip() + ' **')
+                else:
+                    processed_lines.append(line)
+    final_text = '\n\n'.join(processed_lines)
+    if isinstance(output_path, Path):
+        output_path = Path(output_path)
+    if not output_path.parent.exists():
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(final_text, encoding="utf-8")
+    return final_text, images
 
-    print(f"开始解析: {latest_pdf} ...")
-    result = converter.convert(latest_pdf)
-    doc = result.document
-
-    # 3. 构建 Markdown 内容
-    md_lines = []
-    image_counter = 0
-    table_counter = 0
-
-    # Docling 的 iterate_items() 会按照阅读顺序遍历所有元素
-    for item, level in doc.iterate_items():
-        
-        # --- 处理 标题 (Headers) ---
-        if isinstance(item, SectionHeaderItem):
-            # level 通常从 0 或 1 开始，加 1 个 # 保证至少是 H1
-            prefix = "#" * (level + 1)
-            md_lines.append(f"\n{prefix} {item.text}\n")
-
-        # --- 处理 普通文本 (Text) ---
-        elif isinstance(item, TextItem) and not isinstance(item, (TableItem, PictureItem, SectionHeaderItem)):
-            # 过滤掉空的或无意义的文本
-            if item.text.strip():
-                md_lines.append(f"{item.text}\n")
-
-        # --- 处理 列表 (List) ---
-        elif isinstance(item, ListItem):
-             md_lines.append(f"* {item.text}\n")
-
-        # --- 处理 表格 (Tables) ---
-        elif isinstance(item, TableItem):
-            table_counter += 1
-            # 获取标题，如果没有则使用默认名称
-            # caption = item.captions if item.captions else f"Unknown Table {table_counter}"
-            
-            # # 导出为 Pandas DataFrame
-            # df = item.export_to_dataframe(doc)
-            
-            # # 转换为 Markdown 格式的表格字符串 (LLM 读这个最容易)
-            # # index=False 去掉 Pandas 的索引列，通常研报表格不需要索引
-            # md_table_str = df.to_markdown(index=False)
-
-            # # 构造特定标记块
-            # block = (
-            #     f"\n::: TABLE [Title: {caption}] :::\n"
-            #     f"{md_table_str}\n"
-            #     f"::: END TABLE :::\n"
-            # )
-            # md_lines.append(block)
-            # print(f"   -> 提取表格: {caption}")
-
-        # --- 处理 图片 (Images) ---
-        elif isinstance(item, PictureItem):
-            image_counter += 1
-            # caption = f"Unknown Figure {image_counter}" # 设置默认值
-            # if hasattr(item, "captions") and item.captions:
-            #     caption_texts = []
-            #     for c in item.captions:
-            #         if hasattr(c, "text"):
-            #             caption_texts.append(c.text)
-            #         else:
-            #             caption_texts.append(str(c))
-                        
-            #     if caption_texts:
-            #         caption = " ".join(caption_texts)
-            
-            # # 获取并保存图片
-            # image_obj = item.get_image(doc)
-            # if image_obj:
-                # if image_obj.width < 50 or image_obj.height < 50:
-                #         continue
-            #     # 图片命名: page_X_fig_Y.png
-            #     page_no = item.prov[0].page_no
-            #     img_filename = f"p{page_no}_fig_{image_counter}.png"
-            #     img_save_path = images_out_path / img_filename
-                
-            #     image_obj.save(img_save_path)
-                
-            #     # 构造特定标记块 (存相对路径，方便 Markdown 预览)
-            #     rel_path = f"images/{img_filename}"
-            #     block = (
-            #         f"\n::: IMAGE [Title: {caption}] :::\n"
-            #         f"![{caption}]({rel_path})\n"
-            #         f"::: END IMAGE :::\n"
-            #     )
-            #     md_lines.append(block)
-            #     print(f"   -> 提取图片: {img_filename}")
-
-    # 4. 写入最终的 Markdown 文件
-    final_md_content = "\n".join(md_lines)
-    short_term.save_demonstration(final_md_content)
+def markdown_to_sections(markdown: Union[str, Path, List[str]]) -> Section:
+    """
+    将 markdown 文件递归解析为嵌套的 Section 结构，支持任意深度
+    非标题内容作为 Element 的 example 存储
+    """
+    if isinstance(markdown, Path):
+        markdown = markdown.read_text(encoding="utf-8").split("\n\n")
+    elif isinstance(markdown, str):
+        markdown = markdown.split("\n\n")
+    title = None
+    for i, line in enumerate(markdown):
+        if line.startswith("# "):
+            title = line[2:]
+            break
+    if title is None: i = -1
+    root = Section(section_id=0, title=title, elements=[],
+                   subsections=[])
+    _parse_lines_as_section(markdown[i+1:], root, min_level=1)
+    if '摘要' in root.subsections[0].title:
+        root.title += "\n".join([e.example for e in root.elements if e.example])
+        root.elements = []
+    return root
 
 
-    print(f"\n转换完成！")
-    print(f"图片目录: {images_out_path}")
-    print(f"提取统计: 表格 {table_counter} 个, 图片 {image_counter} 张")
+def _parse_lines_as_section(lines: List[str], parent: Section, min_level: int) -> int:
+    """
+    递归解析行列表，构建 Section 树
+
+    Args:
+        lines: 剩余要解析的行
+        parent: 当前父 Section
+        min_level: 当前层级（# 的数量）
+
+    Returns:
+        已处理的行数
+    """
+    i = 0
+    section_count = 0
+    current_content = []
+
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+
+        # 检测标题
+        if stripped.startswith('#'):
+            level = len(stripped) - len(stripped.lstrip('#'))
+
+            # 如果级别低于当前级别，保存当前内容并返回
+            if level <= min_level:
+                if current_content:
+                    elem = Element(example='\n\n'.join(current_content).strip())
+                    parent.elements.append(elem)
+                return i
+
+            # 如果级别大于当前级别，创建新 Section
+            else:
+                # 保存当前积累的内容到父级
+                if current_content:
+                    elem = Element(example='\n\n'.join(current_content).strip())
+                    parent.elements.append(elem)
+                    current_content = []
+
+                title = stripped.lstrip('#').strip()
+                new_section = Section(
+                    section_id=section_count + 1,
+                    title=title,
+                    elements=[],
+                    subsections=[]
+                )
+                parent.subsections.append(new_section)
+                section_count += 1
+                i += 1
+
+                # 递归处理子级别
+                consumed = _parse_lines_as_section(lines[i:], new_section, min_level + 1)
+                i += consumed
+        else:
+            # 非标题行，积累到当前内容
+            current_content.append(line)
+            i += 1
+
+    # 处理末尾的内容
+    if current_content:
+        elem = Element(example='\n\n'.join(current_content).strip())
+        parent.elements.append(elem)
+
+    return i
+
+
+def section_to_markdown(section: Section, level: int = 1) -> str:
+    """
+    将 Section 树递归转换为 Markdown 文本
+
+    Args:
+        section: 要转换的 Section 对象
+        level: 当前标题级别（# 的数量）
+
+    Returns:
+        生成的 Markdown 文本
+    """
+    lines = [f"{'#' * level} {section.title}\n"]
+    # 添加当前 Section 的所有 elements 内容
+    for elem in section.elements:
+        if elem.content:
+            lines.append(elem.content + '\n')
+
+    # 递归处理所有子 Section
+    for subsection in section.subsections:
+        sub_md = section_to_markdown(subsection, level + 1)
+        if sub_md:
+            lines.append(sub_md + '\n')
+
+    return "\n".join(lines).strip()
