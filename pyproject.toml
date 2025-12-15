@@ -29,5 +29,9 @@ dependencies = [
     "ddgs",
     "matplotlib",
     "docling",
-    "markdown"
+    "markdown",
+    "scikit-learn",
+    "jieba",
+    "trafilatura",
+    "marker-pdf"
 ]

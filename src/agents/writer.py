@@ -45,11 +45,9 @@ def build_writer_toolkit(
 ) -> Toolkit:
     toolkit = Toolkit()
 
-    manuscript_tools = ManuscriptTools(short_term=short_term)
-
-    toolkit.register_tool_function(manuscript_tools.read_manuscript_section)
-
-    toolkit.register_tool_function(manuscript_tools.replace_manuscript_section)
+    # manuscript_tools = ManuscriptTools(short_term=short_term)
+    # toolkit.register_tool_function(manuscript_tools.read_manuscript_section)
+    # toolkit.register_tool_function(manuscript_tools.replace_manuscript_section)
 
     search_tools = SearchTools(short_term=short_term)
     toolkit.register_tool_function(search_tools.searcher_tool(searcher))

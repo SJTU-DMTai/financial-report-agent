@@ -42,10 +42,9 @@ def build_verifier_toolkit(
 ) -> Toolkit:
     toolkit = Toolkit()
 
-    manuscript_tools = ManuscriptTools(short_term=short_term)
-
-    toolkit.register_tool_function(manuscript_tools.read_manuscript_section)
-    toolkit.register_tool_function(manuscript_tools.count_manuscript_words)
+    # manuscript_tools = ManuscriptTools(short_term=short_term)
+    # toolkit.register_tool_function(manuscript_tools.read_manuscript_section)
+    # toolkit.register_tool_function(manuscript_tools.count_manuscript_words)
     material_tools = MaterialTools(short_term=short_term)
     toolkit.register_tool_function(
         material_tools.read_material

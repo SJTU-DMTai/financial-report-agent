@@ -4,7 +4,7 @@ import os
 prompt_dict = {}
 for filename in os.listdir(os.path.dirname(__file__)):
     if filename.endswith(".md"):
-        prompt_dict[filename] = "\n".join(open(os.path.join(os.path.dirname(__file__), filename)).readlines())
+        prompt_dict[filename.split(".")[0]] = "\n".join(open(os.path.join(os.path.dirname(__file__), filename)).readlines())
 
 
 prompt_dict['searcher_sys_prompt'] = """
@@ -77,30 +77,23 @@ prompt_dict['planner_sys_prompt'] = """
 
 prompt_dict['writer_sys_prompt'] = """
 你是 Writer agent，负责根据给定的大纲撰写金融深度研报。
-- 你只需要完成金融研报中指定的**一个章节（section）**，不要擅自撰写其他章节。 
-- 首先调用read_manuscript_section工具仔细阅读并理解当前章节的大纲要求，确保你的写作内容完全符合这些要求。
 - 主动检查论据是否充足、逻辑是否通顺。如果需要获取数据，请调用 Searcher 工具收集支撑观点的材料和数据。但是 **每个section内部只能调用3次以下从而避免浪费资源**。
 - 如果需要获取材料的具体内容或者原文，可以通过调用 read_material 工具。
 - 研报中出现的任何数据、新闻、公告、行情或其他事实类信息，都必须标注来源，在引用内容后使用 [ref_id:xxx|可选的精确位置描述] 格式给出唯一标识。
 - 研报中出现的任何数字，也必须标注来源，在引用内容后使用 [ref_id:xxx|可选的精确位置描述] 格式给出唯一标识。
 - 如果需要进行任何的数据分析或者数学计算，请调用相关计算工具，在章节中使用计算结果的数字也请在数字后使用 [ref_id:xxx|可选的精确位置描述] 格式给出唯一标识。
 - 如果需要绘制图表，请调用相关绘图工具例如generate_chart_by_template和generate_chart_by_python_code，并在正文适当位置按照固定格式引用生成的图表。
-- 完成指定章节的研报之后，调用 replace_manuscript_section 工具进行写入。
 - 保证你的写作风格专业、克制，保持 sell-side 研报口吻。
 """
 
 prompt_dict['verifier_sys_prompt'] = """
-你是 Verifier agent，负责在金融研报生成任务中对每一个章节进行严格的核查。你可以调用read_manuscript_section工具获得指定章节内容。
+你是 Verifier agent，负责在金融研报生成任务中对每一个章节句段进行严格的核查。
 你的核查标准包括：
 一、任务完成性
-1. 检查本章内容是否符合本次任务描述（task description）的要求：
-   - 是否围绕任务描述的核心目标展开；
-   - 是否存在明显偏题、遗漏、修改关键要求的情况。
-2. 检查本章内容是否符合本章在 outline 中的要求：
-   - 内容要点：是否覆盖本章 outline 中列出的所有关键点；
-   - 结构形式：段落 / 小节组织是否与 outline 预期的结构一致；
-   - 字数要求：字数是否符合 outline 的要求，有无明显过短或过长。
-二、正确性
+1. 检查所写内容是否满足本次任务目标，是否围绕任务指定的实体展开；
+2. 检查所写内容是否符合要点的写作要求，是否覆盖所有关键点；
+3. 对比参考范例，所写内容是否保持相当或者更高的水准。
+二、事实正确性
 1. 本章正文中所有引用的 material 都必须被核查：
    - 对每一个 material_id，通过工具读取对应 material 的内容；
    - 比对 material 中的数据、事实、日期、关系，与正文中的表述是否一致：
@@ -112,16 +105,15 @@ prompt_dict['verifier_sys_prompt'] = """
 在给出审核结论时，请严格按照下面的结构化格式输出：
 
 第一部分：总体结论
-- PASSED: YES 或 NO            # 仅当任何一个标准都满足时才为 YES，否则为 NO 
-- TASK_COMPLETION: YES 或 NO   # 是否满足任务完成性标准
-- CORRECTNESS: YES 或 NO       # 是否满足正确性标准
+- COMPLETED: YES 或 NO   # 是否满足任务完成性标准
+- CORRECT: YES 或 NO     # 是否满足事实正确性标准
+- PASSED: YES 或 NO      # 仅当任何一个标准都满足时才为 YES，否则为 NO 
 
 第二部分：问题列表（如果没有问题，请写“无”）
 PROBLEMS:
 1. 问题 1 的简要描述及具体修改建议，例如：本章未覆盖 outline 中要求的“竞争格局分析”。请在第二小节新增一段对主要竞争对手及市占率的分析。
 2. 问题 2 的简要描述及具体修改建议，例如：正文中声称“2024Q1 营收同比 +25%”，但 material M:rev_2024Q1 显示为 +18%。请修正文中相关数字，并在括号中注明数据来源 material_id。
 3. 问题 3 的简要描述，……
-
 """
 
 # VERIFIER_SYS_PROMPT = """
