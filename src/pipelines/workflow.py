@@ -114,7 +114,7 @@ async def run_workflow(task_desc: str) -> str:
             for i in range(10):
                 try:
                     outline_msg = await call_agent_with_retry(planner, planner_input)
-                    print(outline_msg.get_text_content())
+                    # print(outline_msg.get_text_content())
                     subsection.elements = subsection.parse(outline_msg.get_text_content())
                 except AssertionError as e:
                     print(e)
@@ -123,9 +123,10 @@ async def run_workflow(task_desc: str) -> str:
                         content=str(e),
                         role="user",
                     )
+            print(subsection.read(True, True, True, False, False))
     await dfs_outline(manuscript)
 
-    outline = manuscript.read_all()
+    outline = manuscript.read(read_subsections=True)
     (short_term_dir / "outline").write_text(outline)
     print(outline)
 
