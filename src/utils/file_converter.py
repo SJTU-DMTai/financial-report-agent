@@ -659,15 +659,15 @@ def markdown_to_sections(markdown: Union[str, Path, List[str]]) -> Section:
             break
     if title is None: i = -1
     root = Section(section_id=0, title=title, elements=[],
-                   subsections=[])
-    _parse_lines_as_section(markdown[i+1:], root, min_level=1)
+                   subsections=[], level=1)
+    _parse_lines_as_section(markdown[i+1:], root)
     if '摘要' in root.subsections[0].title:
         root.title += "\n".join([e.example for e in root.elements if e.example])
         root.elements = []
     return root
 
 
-def _parse_lines_as_section(lines: List[str], parent: Section, min_level: int) -> int:
+def _parse_lines_as_section(lines: List[str], parent: Section) -> int:
     """
     递归解析行列表，构建 Section 树
 
@@ -692,7 +692,7 @@ def _parse_lines_as_section(lines: List[str], parent: Section, min_level: int) -
             level = len(stripped) - len(stripped.lstrip('#'))
 
             # 如果级别低于当前级别，保存当前内容并返回
-            if level <= min_level:
+            if level <= parent.level:
                 if current_content:
                     elem = Element(example='\n\n'.join(current_content).strip())
                     parent.elements.append(elem)
@@ -709,6 +709,7 @@ def _parse_lines_as_section(lines: List[str], parent: Section, min_level: int) -
                 title = stripped.lstrip('#').strip()
                 new_section = Section(
                     section_id=section_count + 1,
+                    level=level,
                     title=title,
                     elements=[],
                     subsections=[]
@@ -718,7 +719,7 @@ def _parse_lines_as_section(lines: List[str], parent: Section, min_level: int) -
                 i += 1
 
                 # 递归处理子级别
-                consumed = _parse_lines_as_section(lines[i:], new_section, min_level + 1)
+                consumed = _parse_lines_as_section(lines[i:], new_section)
                 i += consumed
         else:
             # 非标题行，积累到当前内容

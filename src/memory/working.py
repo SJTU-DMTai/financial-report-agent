@@ -6,10 +6,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Tuple
 
-import pandas as pd
-import json
-from io import StringIO
-import shutil
 
 @dataclass
 class Element:
@@ -23,30 +19,34 @@ class Element:
 @dataclass
 class Section:
     section_id: int
+    level: int
     title: str
     elements: List[Element]
     subsections: List[Section]
 
-    def read_all(self, level=1, **kwargs) -> str:
-        return ("\n\n".join(sec.read(level=level + 1, **kwargs) for sec in self.subsections) +
-                '\n\n' + self.read(level=level, **kwargs))
-
-    def read(self, level=1, with_requirements=True, with_example=False, with_content=False,
-             fold_other=True, fold_all=False) -> str:
-        ctx = f"{'#' * level} {self.title}\n"
+    def read(self, with_requirements=True, with_example=False, with_content=False,
+             fold_other=True, fold_all=False, read_subsections=False) -> str:
+        ctx = f"{'#' * self.level} {self.title}\n"
         unfinished = [i for i, e in enumerate(self.elements) if not e.finished]
         if len(unfinished) == 0:
             return "All finished."
         for i, e in enumerate(self.elements):
-            ctx += f"- [{'x' if e.finished else ' '}] {e.summary}\n"
+            ctx += f"* [{'x' if e.finished else ' '}] {e.summary}\n"
             if fold_all or i != unfinished[0] and fold_other:
                 continue
-            if with_requirements and e.requirements is not None:
-                ctx += f"\t- Requirements: {e.requirements}\n"
             if with_example and e.example is not None:
-                ctx += f"\t- Example: {e.example}\n"
+                ctx += f"\t- **Example**\n\t{e.example}\n\n"
             if with_content and e.content is not None:
-                ctx += f"\t- Content: {e.content}\n"
+                ctx += f"\t- **Content**\n{e.content}\n\n"
+            if with_requirements and e.requirements is not None:
+                requirements = "\n".join([("\t\t" if r.strip()[:2] in ["- ", "* "] else "") + r
+                                          for r in e.requirements.split("\n")])
+                ctx += f"\t- **Requirements**\n\t{requirements}\n\n"
+        if read_subsections:
+            for sec in self.subsections:
+                ctx += sec.read(with_requirements=with_requirements,
+                                with_example=with_example, with_content=with_content,
+                                fold_other=fold_other, fold_all=fold_all, read_subsections=True) + "\n\n"
         return ctx
 
     def load_with_prev_sections(self, section_id, with_requirements=True, with_example=False, with_content=False) -> str:
