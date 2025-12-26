@@ -105,24 +105,25 @@ async def run_workflow(task_desc: str) -> str:
             section_id = ((parent_id + ".") if parent_id else "") + str(subsection.section_id)
             print(f"\n====== 开始总结章节 {section_id} ======\n")
             await dfs_outline(subsection)
-            planner_input = Msg(
-                name="User",
-                content=subsection.elements[0].example,
-                role="user",
-            )
-            # outline_msg = await planner(planner_input)
-            for i in range(10):
-                try:
-                    outline_msg = await call_agent_with_retry(planner, planner_input)
-                    # print(outline_msg.get_text_content())
-                    subsection.elements = subsection.parse(outline_msg.get_text_content())
-                except AssertionError as e:
-                    print(e)
-                    planner_input = Msg(
-                        name="User",
-                        content=str(e),
-                        role="user",
-                    )
+            if subsection.elements:
+                planner_input = Msg(
+                    name="User",
+                    content=subsection.elements[0].example,
+                    role="user",
+                )
+                # outline_msg = await planner(planner_input)
+                for i in range(10):
+                    try:
+                        outline_msg = await call_agent_with_retry(planner, planner_input)
+                        # print(outline_msg.get_text_content())
+                        subsection.elements = subsection.parse(outline_msg.get_text_content())
+                    except AssertionError as e:
+                        print(e)
+                        planner_input = Msg(
+                            name="User",
+                            content=str(e),
+                            role="user",
+                        )
             print(subsection.read(True, True, True, False, False))
     await dfs_outline(manuscript)
 

@@ -14,6 +14,7 @@ class Element:
     requirements: str = None
     example: str = None
     content: str = None
+    template: List[str] = None
     # ref_uri: List[str] = None
 
 @dataclass
@@ -41,7 +42,7 @@ class Section:
             if with_requirements and e.requirements is not None:
                 requirements = "\n".join([("\t\t" if r.strip()[:2] in ["- ", "* "] else "") + r
                                           for r in e.requirements.split("\n")])
-                ctx += f"\t- **Requirements**\n\t{requirements}\n\n"
+                ctx += f"\t- **Requirements**\n{requirements}\n\n"
         if read_subsections:
             for sec in self.subsections:
                 ctx += sec.read(with_requirements=with_requirements,
@@ -52,8 +53,8 @@ class Section:
     def load_with_prev_sections(self, section_id, with_requirements=True, with_example=False, with_content=False) -> str:
         ctx = ""
         for i in range(section_id - 1):
-            ctx += self.read(i, with_requirements=with_requirements, with_example=with_example, with_content=with_content, fold_all=True)
-        return ctx + self.read(section_id, with_requirements=with_requirements, with_example=with_example, with_content=with_content, fold_other=True)
+            ctx += self.subsections[i].read(with_requirements=with_requirements, with_example=with_example, with_content=with_content, fold_all=True)
+        return ctx + self.read(with_requirements=with_requirements, with_example=with_example, with_content=with_content, fold_other=True)
 
     @staticmethod
     def parse(contents: str) -> List[Element]:
