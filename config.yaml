@@ -20,9 +20,15 @@ models:
     base_url_env: https://openrouter.ai/api/v1
     stream: false
 
+  qwen3-max:
+    provider: openrouter
+    model_name: qwen/qwen3-max
+    base_url_env: https://openrouter.ai/api/v1
+    stream: false
+
   qwen3-235b-a22b:
     provider: openrouter
-    model_name: qwen/qwen3-235b-a22b:free
+    model_name: qwen/qwen3-235b-a22b-thinking-2507
     base_url_env: https://openrouter.ai/api/v1
     stream: false
 

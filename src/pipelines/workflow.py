@@ -79,6 +79,7 @@ async def run_workflow(task_desc: str) -> str:
 
     # 解析demonstration report，第二遍解析同一个report可以注释掉
     demo_pdf_path = STOCK_REPORT_PATHS[stock_symbol][-1]
+    demo_date, demo_name = demo_pdf_path.name.split(".")[0].split("_")[-2:]
     demo_md_path = short_term_dir / f"demonstration" / (demo_pdf_path.name.split(".")[0] + ".md")
     if not demo_md_path.exists():
         final_text, images = pdf_to_markdown(demo_pdf_path, demo_md_path)
@@ -106,9 +107,13 @@ async def run_workflow(task_desc: str) -> str:
             print(f"\n====== 开始总结章节 {section_id} ======\n")
             await dfs_outline(subsection)
             if subsection.elements:
+                await planner.memory.clear()
+                content = (f"当前任务：{task_desc}\n\n为实现当前任务，我找到了某机构在{demo_date}撰写的一份研报，名为{demo_name}。"
+                           f"下文将附上的参考章节，请你考虑时间差和公司异同，分割和抽取信息，撰写一份用于当前新任务的大纲。\n\n"
+                           f"参考章节如下：\n\n{subsection.elements[0].reference}")
                 planner_input = Msg(
                     name="User",
-                    content=subsection.elements[0].example,
+                    content=content,
                     role="user",
                 )
                 # outline_msg = await planner(planner_input)
@@ -181,7 +186,7 @@ async def run_workflow(task_desc: str) -> str:
                             f"任务：{task_desc}\n"
                             f"当前正在撰写的要点：{element.summary}\n"
                             f"【写作要求】\n{element.requirements}\n"
-                            f"【参考范例】\n{element.example}\n\n"
+                            f"【参考范例】\n{element.reference}\n\n"
                             "请调用材料读取工具，不遗漏任何参考材料进行严格地审核，并给出结构化输出的结论。"
                         ),
                         role="user",

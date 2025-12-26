@@ -646,7 +646,7 @@ def pdf_to_markdown(
 def markdown_to_sections(markdown: Union[str, Path, List[str]]) -> Section:
     """
     将 markdown 文件递归解析为嵌套的 Section 结构，支持任意深度
-    非标题内容作为 Element 的 example 存储
+    非标题内容作为 Element 的 reference 存储
     """
     if isinstance(markdown, Path):
         markdown = markdown.read_text(encoding="utf-8").split("\n\n")
@@ -662,7 +662,7 @@ def markdown_to_sections(markdown: Union[str, Path, List[str]]) -> Section:
                    subsections=[], level=1)
     _parse_lines_as_section(markdown[i+1:], root)
     if '摘要' in root.subsections[0].title:
-        root.title += "\n".join([e.example for e in root.elements if e.example])
+        root.title += "\n".join([e.reference for e in root.elements if e.reference])
         root.elements = []
     return root
 
@@ -694,7 +694,7 @@ def _parse_lines_as_section(lines: List[str], parent: Section) -> int:
             # 如果级别低于当前级别，保存当前内容并返回
             if level <= parent.level:
                 if current_content:
-                    elem = Element(example='\n\n'.join(current_content).strip())
+                    elem = Element(reference='\n\n'.join(current_content).strip())
                     parent.elements.append(elem)
                 return i
 
@@ -702,7 +702,7 @@ def _parse_lines_as_section(lines: List[str], parent: Section) -> int:
             else:
                 # 保存当前积累的内容到父级
                 if current_content:
-                    elem = Element(example='\n\n'.join(current_content).strip())
+                    elem = Element(reference='\n\n'.join(current_content).strip())
                     parent.elements.append(elem)
                     current_content = []
 
@@ -728,7 +728,7 @@ def _parse_lines_as_section(lines: List[str], parent: Section) -> int:
 
     # 处理末尾的内容
     if current_content:
-        elem = Element(example='\n\n'.join(current_content).strip())
+        elem = Element(reference='\n\n'.join(current_content).strip())
         parent.elements.append(elem)
 
     return i

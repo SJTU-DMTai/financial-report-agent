@@ -12,7 +12,7 @@ class Element:
     finished: bool = False
     summary: str = None
     requirements: str = None
-    example: str = None
+    reference: str = None
     content: str = None
     template: List[str] = None
     # ref_uri: List[str] = None
@@ -25,7 +25,7 @@ class Section:
     elements: List[Element]
     subsections: List[Section]
 
-    def read(self, with_requirements=True, with_example=False, with_content=False,
+    def read(self, with_requirements=True, with_reference=False, with_content=False,
              fold_other=True, fold_all=False, read_subsections=False) -> str:
         ctx = f"{'#' * self.level} {self.title}\n"
         unfinished = [i for i, e in enumerate(self.elements) if not e.finished]
@@ -35,10 +35,10 @@ class Section:
             ctx += f"* [{'x' if e.finished else ' '}] {e.summary}\n"
             if fold_all or i != unfinished[0] and fold_other:
                 continue
-            if with_example and e.example is not None:
-                ctx += f"\t- **Example**\n\t{e.example}\n\n"
+            if with_reference and e.reference is not None:
+                ctx += f"\t- > **Reference**\n{'\n'.join(['\t\t> ' + l for l in e.reference.splitlines()])}\n\n"
             if with_content and e.content is not None:
-                ctx += f"\t- **Content**\n{e.content}\n\n"
+                ctx += f"\t- **Template**\n\t{e.content}\n\n"
             if with_requirements and e.requirements is not None:
                 requirements = "\n".join([("\t\t" if r.strip()[:2] in ["- ", "* "] else "") + r
                                           for r in e.requirements.split("\n")])
@@ -46,27 +46,27 @@ class Section:
         if read_subsections:
             for sec in self.subsections:
                 ctx += sec.read(with_requirements=with_requirements,
-                                with_example=with_example, with_content=with_content,
+                                with_reference=with_reference, with_content=with_content,
                                 fold_other=fold_other, fold_all=fold_all, read_subsections=True) + "\n\n"
         return ctx
 
-    def load_with_prev_sections(self, section_id, with_requirements=True, with_example=False, with_content=False) -> str:
+    def load_with_prev_sections(self, section_id, with_requirements=True, with_reference=False, with_content=False) -> str:
         ctx = ""
         for i in range(section_id - 1):
-            ctx += self.subsections[i].read(with_requirements=with_requirements, with_example=with_example, with_content=with_content, fold_all=True)
-        return ctx + self.read(with_requirements=with_requirements, with_example=with_example, with_content=with_content, fold_other=True)
+            ctx += self.subsections[i].read(with_requirements=with_requirements, with_reference=with_reference, with_content=with_content, fold_all=True)
+        return ctx + self.read(with_requirements=with_requirements, with_reference=with_reference, with_content=with_content, fold_other=True)
 
     @staticmethod
     def parse(contents: str) -> List[Element]:
-        keys = ['example', 'requirement', 'template', 'summary']
+        keys = ['reference', 'requirement', 'template', 'summary']
         cnts = [contents.count(f"<{k}>") for k in keys]
         cnts += [contents.count(f"</{k}>") for k in keys]
         for c1 in cnts:
             for c2 in cnts:
-                assert c1 == c2 > 0, "Incomplete answer. You must give example, requirement, and summary for each item. Please Retry."
+                assert c1 == c2 > 0, "Incomplete answer. You must give reference, template, requirement, and summary for each item. Please Retry."
         contents = contents.replace("\r\n", "\n")
-        res = re.findall(r"<example>(.+?)</example>\n*<template>(.+?)</template>\n*<requirement>(.+?)</requirement>\n*<summary>(.+?)</summary>", contents, re.DOTALL)
-        assert len(res) == cnts[0], "Format error. You did not give example, template, requirement, and summary in order. Please Retry."
+        res = re.findall(r"<reference>(.+?)</reference>\n*<template>(.+?)</template>\n*<requirement>(.+?)</requirement>\n*<summary>(.+?)</summary>", contents, re.DOTALL)
+        assert len(res) == cnts[0], "Format error. You did not give reference, template, requirement, and summary in order. Please Retry."
         res = [[s.strip() for s in _res] for _res in res]
-        return [Element(example=_res[0], content=_res[1], requirements=_res[2], summary=_res[3]) for _res in res]
+        return [Element(reference=_res[0], content=_res[1], requirements=_res[2], summary=_res[3]) for _res in res]
 
