@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import json
 import pickle
 import re
 import sys
+from dataclasses import asdict
 from pathlib import Path
 
 from agentscope.agent import ReActAgent
@@ -90,7 +92,7 @@ async def run_workflow(task_desc: str) -> str:
     demo_md_path = short_term_dir / f"demonstration" / (demo_pdf_path.name.split(".")[0] + ".md")
     if not demo_md_path.exists():
         final_text, images = pdf_to_markdown(demo_pdf_path, demo_md_path)
-    manuscript = markdown_to_sections(demo_md_path)
+    manuscript: Section = markdown_to_sections(demo_md_path)
 
     # outline_store = OutlineExperienceStore(
     #     base_dir=Path("data/memory/long_term/outlines"),
@@ -157,15 +159,16 @@ async def run_workflow(task_desc: str) -> str:
                             ]
             print(subsection.read(True, True, True, False, False))
 
-    outline_pth = short_term_dir / "outline.md"
-    if outline_pth.exists():
+    outline_md_pth = short_term_dir / "outline.md"
+    outline_json_pth = short_term_dir / "outline.json"
+    if not outline_json_pth.exists():
         await dfs_outline(manuscript)
         outline = manuscript.read(read_subsections=True, with_reference=True, with_content=True, fold_other=False)
-        outline_pth.write_text(outline)
-        pickle.dump(manuscript, open(short_term_dir / "manuscript.pkl", 'wb'))
+        outline_md_pth.write_text(outline)
+        outline_json_pth.write_text(manuscript.to_json(ensure_ascii=True))
     else:
-        outline = outline_pth.read_text()
-        pickle.load(short_term_dir / open(short_term_dir / "manuscript.pkl", 'rb'))
+        outline = outline_md_pth.read_text()
+        manuscript = Section.from_json(outline_json_pth.read_text())
     print(outline)
 
     # ----- 6. 调用 Writer：基于 outline.md 写 Manuscript 并导出 PDF -----
@@ -185,6 +188,7 @@ async def run_workflow(task_desc: str) -> str:
         for subsection in section.subsections:
             section_id = ((parent_id + ".") if parent_id else "") + str(subsection.section_id)
             print(f"\n====== 开始写作章节 {section_id} ======\n")
+            await writer.memory.clear()
             await dfs_report(subsection)
             for element in subsection.elements:
                 writer_input = Msg(

@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from dataclasses_json import dataclass_json
 from pathlib import Path
 from typing import List, Tuple
 
-
+@dataclass_json
 @dataclass
 class Element:
     finished: bool = False
@@ -17,6 +18,7 @@ class Element:
     template: List[str] = None
     # ref_uri: List[str] = None
 
+@dataclass_json
 @dataclass
 class Section:
     section_id: int
