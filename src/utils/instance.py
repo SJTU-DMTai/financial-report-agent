@@ -21,7 +21,7 @@ import config
 cfg = config.Config()
 
 
-def create_chat_model():
+def create_chat_model(reasoning=True):
     """统一创建一个聊天模型实例。
     """
     m = cfg.get_model_cfg()
@@ -32,13 +32,17 @@ def create_chat_model():
     base_url = m.get("base_url_env", "")
     stream = m["stream"]
 
+    temperature = m.get("temperature", 0)
+    # top_k = m.get("top_k", 1)
+
     if provider == "openrouter":
         return OpenAIChatModel(
             model_name=model_name,
             api_key=os.environ.get("API_KEY"),
             stream=stream,
             client_args={"base_url": base_url},
-            generate_kwargs={"extra_body": {"reasoning": {"enabled": True}}}
+            generate_kwargs={"extra_body": {"reasoning": {"enabled": reasoning}},
+                             "temperature": temperature},
         )
 
     elif provider == "dashscope":
@@ -62,12 +66,12 @@ def create_chat_model():
 def create_agent_formatter():
     m = cfg.get_model_cfg()
     provider = m["provider"]
-    token_counter = HuggingFaceTokenCounter(
-        "Qwen/Qwen2.5-7B-Instruct",
-        use_mirror=True,
-        use_fast=True,
-        trust_remote_code=True,
-    )
+    # token_counter = HuggingFaceTokenCounter(
+    #     "Qwen/Qwen2.5-7B-Instruct",
+    #     use_mirror=True,
+    #     use_fast=True,
+    #     trust_remote_code=True,
+    # )
 
     # if provider == "openrouter":
     #     return OpenAIChatFormatter(token_counter=token_counter, max_tokens=250_000)

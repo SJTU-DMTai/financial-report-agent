@@ -29,8 +29,8 @@ class Section:
              fold_other=True, fold_all=False, read_subsections=False) -> str:
         ctx = f"{'#' * self.level} {self.title}\n"
         unfinished = [i for i, e in enumerate(self.elements) if not e.finished]
-        if len(unfinished) == 0:
-            return "All finished."
+        # if len(unfinished) == 0:
+        #     return "All finished."
         for i, e in enumerate(self.elements):
             ctx += f"* [{'x' if e.finished else ' '}] {e.summary}\n"
             if fold_all or i != unfinished[0] and fold_other:
@@ -57,16 +57,17 @@ class Section:
         return ctx + self.read(with_requirements=with_requirements, with_reference=with_reference, with_content=with_content, fold_other=True)
 
     @staticmethod
-    def parse(contents: str) -> List[Element]:
-        keys = ['reference', 'requirement', 'template', 'summary']
+    def parse(contents: str) -> Element:
+        keys = ['requirement', 'template', 'summary']
         cnts = [contents.count(f"<{k}>") for k in keys]
         cnts += [contents.count(f"</{k}>") for k in keys]
         for c1 in cnts:
             for c2 in cnts:
-                assert c1 == c2 > 0, "Incomplete answer. You must give reference, template, requirement, and summary for each item. Please Retry."
+                assert c1 == c2 > 0, "Incomplete answer. You must give <template>, </template>, <requirement>, </requirement>, <summary> and </summary> for each item. Please Retry."
         contents = contents.replace("\r\n", "\n")
-        res = re.findall(r"<reference>(.+?)</reference>\n*<template>(.+?)</template>\n*<requirement>(.+?)</requirement>\n*<summary>(.+?)</summary>", contents, re.DOTALL)
-        assert len(res) == cnts[0], "Format error. You did not give reference, template, requirement, and summary in order. Please Retry."
-        res = [[s.strip() for s in _res] for _res in res]
-        return [Element(reference=_res[0], content=_res[1], requirements=_res[2], summary=_res[3]) for _res in res]
+        print(contents, flush=True)
+        res = re.findall(r"<template>(.+?)</template>.*<requirement>(.+?)</requirement>.*<summary>(.+?)</summary>", contents, re.DOTALL)
+        assert len(res) > 0, "Format error. You did not give template, requirement, and summary in order. Please Retry."
+        res = [s.strip() for s in res[0]]
+        return Element(content=res[0], requirements=res[1], summary=res[2])
 

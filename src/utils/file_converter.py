@@ -632,7 +632,7 @@ def pdf_to_markdown(
                         # Use level based on section number
                         processed_lines.append('#' * min(level, 6) + ' ' + title)
                     else:
-                        processed_lines.append('** ' + line.strip("#").strip() + ' **')
+                        processed_lines.append('**' + line.strip("#").strip() + '**')
                 else:
                     processed_lines.append(line)
     final_text = '\n\n'.join(processed_lines)
