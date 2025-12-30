@@ -1,12 +1,16 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import pickle
 import re
+import sys
 from pathlib import Path
 
+from agentscope.agent import ReActAgent
 from agentscope.message import Msg
 
-from memory.working import Section
+from memory.working import Section, Element
+from prompt import prompt_dict
 from src.utils.instance import create_chat_model, create_agent_formatter
 from src.memory.short_term import ShortTermMemoryStore
 from src.agents.searcher import create_searcher_agent, build_searcher_toolkit
@@ -29,6 +33,7 @@ async def run_workflow(task_desc: str) -> str:
     """
 
     cfg = config.Config()
+    formatter = create_agent_formatter()
 
     # ----- 1. 准备 memory store -----
 
@@ -46,6 +51,7 @@ async def run_workflow(task_desc: str) -> str:
 
     # ----- 2. 创建底层模型 -----
     model= create_chat_model()
+    model_instruct = create_chat_model(reasoning=False)
 
     # ----- 3. 创建 Searcher Agent -----
     searcher_toolkit = build_searcher_toolkit(
@@ -53,7 +59,7 @@ async def run_workflow(task_desc: str) -> str:
         # tool_use_store=tool_use_store,
     )
 
-    searcher = create_searcher_agent(model=model, formatter=create_agent_formatter(), toolkit=searcher_toolkit)
+    searcher = create_searcher_agent(model=model, formatter=formatter, toolkit=searcher_toolkit)
     # print("\n=== 打印 JSON Schema (get_json_schemas) ===")
     # schemas = searcher_toolkit.get_json_schemas()
     # print(schemas)
@@ -73,6 +79,7 @@ async def run_workflow(task_desc: str) -> str:
             stock_symbol = re.search(r"[0-9]+", outline_msg.get_text_content()).group()
             assert stock_symbol is not None
             print("股票代码：", stock_symbol)
+            await searcher.memory.clear()
             break
         except AssertionError as e:
             print(e)
@@ -97,7 +104,8 @@ async def run_workflow(task_desc: str) -> str:
     #     short_term=short_term,
     #     searcher=searcher,
     # )
-    planner = create_planner_agent(model=model, formatter=create_agent_formatter(), toolkit=None)
+
+    # planner = create_planner_agent(model=model, formatter=formatter, toolkit=None)
 
     async def dfs_outline(section: Section, parent_id=None):
         if section.subsections is None:
@@ -107,33 +115,57 @@ async def run_workflow(task_desc: str) -> str:
             print(f"\n====== 开始总结章节 {section_id} ======\n")
             await dfs_outline(subsection)
             if subsection.elements:
-                await planner.memory.clear()
-                content = (f"当前任务：{task_desc}\n\n为实现当前任务，我找到了某机构在{demo_date}撰写的一份研报，名为{demo_name}。"
-                           f"下文将附上的参考章节，请你考虑时间差和公司异同，分割和抽取信息，撰写一份用于当前新任务的大纲。\n\n"
-                           f"参考章节如下：\n\n{subsection.elements[0].reference}")
-                planner_input = Msg(
-                    name="User",
-                    content=content,
-                    role="user",
-                )
-                # outline_msg = await planner(planner_input)
+                decomposer_input = await formatter.format([
+                    Msg("system", prompt_dict["decompose"],"system"),
+                    Msg("user", subsection.elements[0].reference.replace("<SEP>", ""), "user",)
+                ])
                 for i in range(10):
                     try:
-                        outline_msg = await call_agent_with_retry(planner, planner_input)
-                        # print(outline_msg.get_text_content())
-                        subsection.elements = subsection.parse(outline_msg.get_text_content())
-                    except AssertionError as e:
+                        decomposed_content = await model_instruct(decomposer_input)
+                        break
+                    except Exception as e:
                         print(e)
-                        planner_input = Msg(
-                            name="User",
-                            content=str(e),
+                segments = Msg("assistant", decomposed_content.content, "assistant").get_text_content().split("<SEP>")
+                subsection.elements = []
+                for i, segment in enumerate(segments):
+                    planner_input = [
+                        Msg("system", prompt_dict["plan_outline"],"system"),
+                        Msg(
+                            name="user",
+                            content=f"当前任务：{task_desc}\n\n为实现当前任务，我找到了某机构在{demo_date}撰写的一份研报，名为{demo_name}。"
+                                    f"下文将附上从中摘出的一段参考片段，请你考虑时间差和公司异同，撰写一份用于当前新任务的撰写模版和要求。\n\n"
+                                    f"参考片段如下：\n\n{segment}",
                             role="user",
                         )
+                    ]
+                    # outline_msg = await planner(planner_input)
+                    print(segment, flush=True)
+                    for i in range(10):
+                        try:
+                            _input = await formatter.format(planner_input)
+                            outline_msg = await model(_input)
+                            # print(outline_msg.get_text_content())
+                            outline_msg = Msg("assistant", outline_msg.content, "assistant")
+                            subsection.elements.append(subsection.parse(outline_msg.get_text_content()))
+                            subsection.elements[-1].reference = segment
+                            break
+                        except AssertionError as e:
+                            print(e)
+                            planner_input += [
+                                outline_msg,
+                                Msg("user", str(e), "user")
+                            ]
             print(subsection.read(True, True, True, False, False))
-    await dfs_outline(manuscript)
 
-    outline = manuscript.read(read_subsections=True)
-    (short_term_dir / "outline").write_text(outline)
+    outline_pth = short_term_dir / "outline.md"
+    if outline_pth.exists():
+        await dfs_outline(manuscript)
+        outline = manuscript.read(read_subsections=True, with_reference=True, with_content=True, fold_other=False)
+        outline_pth.write_text(outline)
+        pickle.dump(manuscript, open(short_term_dir / "manuscript.pkl", 'wb'))
+    else:
+        outline = outline_pth.read_text()
+        pickle.load(short_term_dir / open(short_term_dir / "manuscript.pkl", 'rb'))
     print(outline)
 
     # ----- 6. 调用 Writer：基于 outline.md 写 Manuscript 并导出 PDF -----
@@ -141,7 +173,7 @@ async def run_workflow(task_desc: str) -> str:
         short_term=short_term,
         searcher=searcher,
     )
-    writer = create_writer_agent(model=model, formatter=create_agent_formatter(), toolkit=writer_toolkit)
+    writer = create_writer_agent(model=model, formatter=formatter, toolkit=writer_toolkit)
 
     verifier_toolkit = build_verifier_toolkit(
         short_term=short_term,
@@ -156,7 +188,7 @@ async def run_workflow(task_desc: str) -> str:
             await dfs_report(subsection)
             for element in subsection.elements:
                 writer_input = Msg(
-                    name="User",
+                    name="user",
                     content=(
                         f"任务：{task_desc}\n"
                         f"当前需要你撰写要点：{element.summary}\n"
@@ -175,13 +207,13 @@ async def run_workflow(task_desc: str) -> str:
 
                 max_verify_rounds = cfg.get_max_verify_rounds()
                 # 进入 Verifier 审核 loop
-                verifier = create_verifier_agent(model=model, formatter=create_agent_formatter(), toolkit=verifier_toolkit)
+                verifier = create_verifier_agent(model=model, formatter=formatter, toolkit=verifier_toolkit)
                 for round_idx in range(1, max_verify_rounds + 1):
 
                     print(f"\n--- Verifier 审核轮次 {round_idx}：章节 {section_id} ---\n")
                     await asyncio.sleep(5)
                     verifier_input = Msg(
-                        name="User",
+                        name="user",
                         content=(
                             f"任务：{task_desc}\n"
                             f"当前正在撰写的要点：{element.summary}\n"
@@ -207,7 +239,7 @@ async def run_workflow(task_desc: str) -> str:
                     problems_text = problems if problems else verdict_text
 
                     writer_fix_input = Msg(
-                        name="User",
+                        name="user",
                         content=(
                             "我给出了一些审核意见。"
                             f"未通过原因：{reason}\n"
@@ -225,7 +257,7 @@ async def run_workflow(task_desc: str) -> str:
                 element.finished = True
             section_text = "\n".join([e.content for e in subsection.elements])
             draft_msg = await call_agent_with_retry(writer, Msg(
-                name="User",
+                name="user",
                 content=(
                     "以下是所有要点整理后的本章节内容：\n\n"
                     f"{section_text}\n\n"
