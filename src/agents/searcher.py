@@ -25,11 +25,11 @@ def create_searcher_agent(
         name="Searcher",
         sys_prompt=prompt_dict['searcher_sys_prompt'],
         model=model,
-        memory=SlidingWindowMemory(),
+        # memory=SlidingWindowMemory(),
         formatter=formatter,
         toolkit=toolkit,
-        parallel_tool_calls=False,
-        max_iters=5,
+        parallel_tool_calls=True,
+        max_iters=15,
     )
 
 def build_searcher_toolkit(
