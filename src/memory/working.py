@@ -9,14 +9,31 @@ from typing import List, Tuple
 
 @dataclass_json
 @dataclass
-class Element:
+class Segment:
     finished: bool = False
-    summary: str = None
+    topic: str = None
     requirements: str = None
     reference: str = None
     content: str = None
     template: List[str] = None
-    # ref_uri: List[str] = None
+    evidences: List[str] = None
+
+    def __str__(self, with_requirements=True, with_reference=True, with_content=True, with_evidence=True):
+        ctx = ""
+        if with_reference and self.reference is not None:
+            ctx += f"\t+ > **原文**\n{'\n'.join(['\t\t> ' + l for l in self.reference.splitlines()])}\n\n"
+        if with_content:
+            if self.content is not None:
+                ctx += f"\t+ **内容**\n\t{self.content}\n\n"
+            elif self.template is not None:
+                ctx += f"\t+ **示例**\n\t{self.template}\n\n"
+        if with_requirements and self.requirements is not None:
+            requirements = "\n".join([("\t\t" if r.strip()[:2] in ["- ", "* "] else "") + r
+                                      for r in self.requirements.split("\n")])
+            ctx += f"\t+ **写作要求**\n{requirements}\n\n"
+        if with_evidence and self.evidences is not None:
+            ctx += f"\t+ **论据材料**\n{"\n".join("\t\t- " + e.replace("\n\n", "\n") for e in self.evidences)}\n\n"
+        return ctx
 
 @dataclass_json
 @dataclass
@@ -24,30 +41,24 @@ class Section:
     section_id: int
     level: int
     title: str
-    elements: List[Element]
+    segments: List[Segment]
     subsections: List[Section]
 
-    def read(self, with_requirements=True, with_reference=False, with_content=False,
+    def read(self, with_requirements=True, with_reference=False, with_content=False, with_evidence=False,
              fold_other=True, fold_all=False, read_subsections=False) -> str:
         ctx = f"{'#' * self.level} {self.title}\n"
-        unfinished = [i for i, e in enumerate(self.elements) if not e.finished]
+        unfinished = [i for i, s in enumerate(self.segments) if not s.finished]
         # if len(unfinished) == 0:
         #     return "All finished."
-        for i, e in enumerate(self.elements):
-            ctx += f"* [{'x' if e.finished else ' '}] {e.summary}\n"
+        for i, s in enumerate(self.segments):
+            ctx += f"* [{'x' if s.finished else ' '}] {s.topic}\n"
             if fold_all or i != unfinished[0] and fold_other:
                 continue
-            if with_reference and e.reference is not None:
-                ctx += f"\t- > **Reference**\n{'\n'.join(['\t\t> ' + l for l in e.reference.splitlines()])}\n\n"
-            if with_content and e.content is not None:
-                ctx += f"\t- **Template**\n\t{e.content}\n\n"
-            if with_requirements and e.requirements is not None:
-                requirements = "\n".join([("\t\t" if r.strip()[:2] in ["- ", "* "] else "") + r
-                                          for r in e.requirements.split("\n")])
-                ctx += f"\t- **Requirements**\n{requirements}\n\n"
+            ctx += s.__str__(with_requirements=with_requirements, with_reference=with_reference,
+                             with_content=with_content, with_evidence=with_evidence)
         if read_subsections:
             for sec in self.subsections:
-                ctx += sec.read(with_requirements=with_requirements,
+                ctx += sec.read(with_requirements=with_requirements, with_evidence=with_evidence,
                                 with_reference=with_reference, with_content=with_content,
                                 fold_other=fold_other, fold_all=fold_all, read_subsections=True) + "\n\n"
         return ctx
@@ -59,17 +70,21 @@ class Section:
         return ctx + self.read(with_requirements=with_requirements, with_reference=with_reference, with_content=with_content, fold_other=True)
 
     @staticmethod
-    def parse(contents: str) -> Element:
-        keys = ['requirement', 'template', 'summary']
+    def parse(contents: str) -> Segment:
+        keys = ['requirement', 'template', 'evidence', 'topic']
         cnts = [contents.count(f"<{k}>") for k in keys]
         cnts += [contents.count(f"</{k}>") for k in keys]
         for c1 in cnts:
             for c2 in cnts:
-                assert c1 == c2 > 0, "Incomplete answer. You must give <template>, </template>, <requirement>, </requirement>, <summary> and </summary> for each item. Please Retry."
+                assert c1 == c2 > 0, "Incomplete answer. You must give <template>, </template>, <requirement>, </requirement>, <topic> and </topic> for each item. Please Retry."
         contents = contents.replace("\r\n", "\n")
         print(contents, flush=True)
-        res = re.findall(r"<template>(.+?)</template>.*<requirement>(.+?)</requirement>.*<summary>(.+?)</summary>", contents, re.DOTALL)
-        assert len(res) > 0, "Format error. You did not give template, requirement, and summary in order. Please Retry."
+        res = re.findall(r"<template>(.+?)</template>.*<requirement>(.+?)</requirement>.*<topic>(.+?)</topic>", contents, re.DOTALL)
+        assert len(res) > 0, "Format error. You did not give template, evidence, requirement, and topic in order. Please Retry."
         res = [s.strip() for s in res[0]]
-        return Element(content=res[0], requirements=res[1], summary=res[2])
+        evidences = re.search(r"<evidence>(.+?)</evidence>", contents, re.DOTALL)
+        if evidences is not None:
+            evidences = evidences.group(1).replace("\n", "").replace(";", "；").split("；")
+            evidences = [e.strip() for e in evidences]
+        return Segment(template=res[0], requirements=res[1], topic=res[2], evidences=evidences)
 

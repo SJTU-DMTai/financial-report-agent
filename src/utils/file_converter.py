@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from memory.working import Section, Element
+from memory.working import Section, Segment
 from src.memory.short_term import ShortTermMemoryStore
 import pdfkit
 from pdfkit.configuration import Configuration
@@ -658,12 +658,12 @@ def markdown_to_sections(markdown: Union[str, Path, List[str]]) -> Section:
             title = line[2:]
             break
     if title is None: i = -1
-    root = Section(section_id=0, title=title, elements=[],
+    root = Section(section_id=0, title=title, segments=[],
                    subsections=[], level=1)
     _parse_lines_as_section(markdown[i+1:], root)
     if '摘要' in root.subsections[0].title:
-        root.title += "\n".join([e.reference for e in root.elements if e.reference])
-        root.elements = []
+        root.title += "\n".join([e.reference for e in root.segments if e.reference])
+        root.segments = []
     return root
 
 
@@ -694,16 +694,16 @@ def _parse_lines_as_section(lines: List[str], parent: Section) -> int:
             # 如果级别低于当前级别，保存当前内容并返回
             if level <= parent.level:
                 if current_content:
-                    elem = Element(reference='\n\n'.join(current_content).strip())
-                    parent.elements.append(elem)
+                    elem = Segment(reference='\n\n'.join(current_content).strip())
+                    parent.segments.append(elem)
                 return i
 
             # 如果级别大于当前级别，创建新 Section
             else:
                 # 保存当前积累的内容到父级
                 if current_content:
-                    elem = Element(reference='\n\n'.join(current_content).strip())
-                    parent.elements.append(elem)
+                    elem = Segment(reference='\n\n'.join(current_content).strip())
+                    parent.segments.append(elem)
                     current_content = []
 
                 title = stripped.lstrip('#').strip()
@@ -711,7 +711,7 @@ def _parse_lines_as_section(lines: List[str], parent: Section) -> int:
                     section_id=section_count + 1,
                     level=level,
                     title=title,
-                    elements=[],
+                    segments=[],
                     subsections=[]
                 )
                 parent.subsections.append(new_section)
@@ -728,8 +728,8 @@ def _parse_lines_as_section(lines: List[str], parent: Section) -> int:
 
     # 处理末尾的内容
     if current_content:
-        elem = Element(reference='\n\n'.join(current_content).strip())
-        parent.elements.append(elem)
+        elem = Segment(reference='\n\n'.join(current_content).strip())
+        parent.segments.append(elem)
 
     return i
 
@@ -746,8 +746,8 @@ def section_to_markdown(section: Section, level: int = 1) -> str:
         生成的 Markdown 文本
     """
     lines = [f"{'#' * level} {section.title}\n"]
-    # 添加当前 Section 的所有 elements 内容
-    for elem in section.elements:
+    # 添加当前 Section 的所有 segments 内容
+    for elem in section.segments:
         if elem.content:
             lines.append(elem.content + '\n')
 

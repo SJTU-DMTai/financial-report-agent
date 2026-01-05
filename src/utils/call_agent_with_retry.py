@@ -28,7 +28,7 @@ async def call_agent_with_retry(
             # 这些异常直接抛出去，不做重试
             raise
         except Exception as e:
-            print(msg, flush=True)
+            print(agent.memory.content, msg, flush=True)
             last_exc = e
             if attempt == max_retries:
                 print(f"[重试失败] 第 {attempt} 次仍然报错，放弃重试。异常：{type(e).__name__}: {e}")
