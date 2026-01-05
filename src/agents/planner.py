@@ -28,7 +28,7 @@ def create_planner_agent(
         name="Planner",
         sys_prompt=prompt_dict[sys_prompt_key],
         model=model,
-        memory=SlidingWindowMemory(),
+        # memory=SlidingWindowMemory(),
         formatter=formatter,
         toolkit=toolkit,
         parallel_tool_calls=False,

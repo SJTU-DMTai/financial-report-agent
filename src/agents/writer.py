@@ -31,7 +31,7 @@ def create_writer_agent(
         name="Writer",
         sys_prompt=prompt_dict['writer_sys_prompt'],
         model=model,
-        memory=SlidingWindowMemory(),
+        # memory=SlidingWindowMemory(),
         formatter=formatter,
         toolkit=toolkit,
         parallel_tool_calls=True,

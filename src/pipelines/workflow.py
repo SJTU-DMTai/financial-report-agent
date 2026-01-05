@@ -190,9 +190,9 @@ async def run_workflow(task_desc: str) -> str:
         for subsection in section.subsections:
             section_id = ((parent_id + ".") if parent_id else "") + str(subsection.section_id)
             print(f"\n====== 开始写作章节 {section_id} ======\n")
-            await writer.memory.clear()
             await dfs_report(subsection)
             for segment in subsection.segments:
+                await writer.memory.clear()
                 for i in range(len(segment.evidences)):
                     searcher_input = Msg(
                         name="user",
