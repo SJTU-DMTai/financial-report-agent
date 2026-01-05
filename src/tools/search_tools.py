@@ -291,6 +291,7 @@ class SearchTools:
                 role="user",
             )
             # res = await searcher(msg)
+            await searcher.memory.clear()
             res = await call_agent_with_retry(searcher,msg)
 
             # await searcher.memory.clear()
