@@ -10,6 +10,7 @@ from memory.working import Section
 from ..tools.outline_tools import *
 from ..tools.search_tools import *
 from ..memory.short_term import ShortTermMemoryStore
+from ..memory.long_term import LongTermMemoryStore
 from ..memory.working_memory import SlidingWindowMemory
 from ..prompt import prompt_dict
 
@@ -41,6 +42,8 @@ def create_planner_agent(
 # ---- Toolkit Builder ----
 def build_planner_toolkit(
     manuscript: Section,
+    short_term: ShortTermMemoryStore,
+    long_term: LongTermMemoryStore,
     searcher: ReActAgent,
 ) -> Toolkit:
     """创建 Planner 专用 Toolkit。"""
@@ -52,6 +55,6 @@ def build_planner_toolkit(
         toolkit.register_tool_function(outline_tools.read_demonstration)
     toolkit.register_tool_function(outline_tools.replace_outline)
 
-    search_tools = SearchTools(manuscript=manuscript)
+    search_tools = SearchTools(short_term=short_term,long_term=long_term)
     toolkit.register_tool_function(search_tools.searcher_tool(searcher))
     return toolkit

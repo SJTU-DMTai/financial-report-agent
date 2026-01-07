@@ -17,6 +17,7 @@ from ..tools.manuscipt_tools import *
 from ..tools.outline_tools import *
 from ..tools.search_tools import *
 from ..memory.short_term import ShortTermMemoryStore
+from ..memory.long_term import LongTermMemoryStore
 from ..prompt import prompt_dict
 
 
@@ -39,13 +40,15 @@ def create_verifier_agent(
 # ---- Toolkit Builder ----
 def build_verifier_toolkit(
     short_term: ShortTermMemoryStore,
+    long_term: LongTermMemoryStore,
 ) -> Toolkit:
     toolkit = Toolkit()
 
     # manuscript_tools = ManuscriptTools(short_term=short_term)
+
     # toolkit.register_tool_function(manuscript_tools.read_manuscript_section)
     # toolkit.register_tool_function(manuscript_tools.count_manuscript_words)
-    material_tools = MaterialTools(short_term=short_term)
+    material_tools = MaterialTools(short_term=short_term, long_term=long_term)
     toolkit.register_tool_function(
         material_tools.read_material
     )
