@@ -16,6 +16,7 @@ pytest==9.0.1
 PyYAML==6.0.3
 PyMuPDF==1.26.6
 requests==2.32.5
+seaborn==0.13.2
 scikit-learn==1.7.2
 trafilatura==2.0.0
 
