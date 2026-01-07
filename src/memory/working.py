@@ -24,7 +24,7 @@ class Segment:
             ctx += f"\t+ > **原文**\n{'\n'.join(['\t\t> ' + l for l in self.reference.splitlines()])}\n\n"
         if with_content:
             if self.content is not None:
-                ctx += f"\t+ **内容**\n\t{self.content}\n\n"
+                ctx += self.content + "\n\n"
             elif self.template is not None:
                 ctx += f"\t+ **示例**\n\t{self.template}\n\n"
         if with_requirements and self.requirements is not None:
@@ -52,8 +52,8 @@ class Section:
         #     return "All finished."
         for i, s in enumerate(self.segments):
             ctx += f"* [{'x' if s.finished else ' '}] {s.topic}\n"
-            if fold_all or i != unfinished[0] and fold_other:
-                continue
+            # if fold_all or i != unfinished[0] and fold_other:
+            #     continue
             ctx += s.__str__(with_requirements=with_requirements, with_reference=with_reference,
                              with_content=with_content, with_evidence=with_evidence)
         if read_subsections:
