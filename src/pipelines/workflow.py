@@ -11,10 +11,11 @@ from pathlib import Path
 from agentscope.agent import ReActAgent
 from agentscope.message import Msg
 
-from memory.working import Section, Segment
-from prompt import prompt_dict
+from src.memory.working import Section, Segment
+from src.prompt import prompt_dict
 from src.utils.instance import create_chat_model, create_agent_formatter
 from src.memory.short_term import ShortTermMemoryStore
+from src.memory.long_term import LongTermMemoryStore
 from src.agents.searcher import create_searcher_agent, build_searcher_toolkit
 from src.agents.writer import create_writer_agent, build_writer_toolkit
 from src.agents.planner import create_planner_agent, build_planner_toolkit
@@ -23,14 +24,15 @@ from src.agents.verifier import create_verifier_agent, build_verifier_toolkit
 from src.utils.file_converter import md_to_pdf, pdf_to_markdown, section_to_markdown
 from src.utils.parse_verdict import parse_verifier_verdict
 from src.utils.call_agent_with_retry import call_agent_with_retry
+from src.utils.get_entity_info import get_entity_info
+from src.utils.file_converter import markdown_to_sections
+from src.utils.local_file import STOCK_REPORT_PATHS
 import config
 import asyncio
 
-from utils.file_converter import markdown_to_sections
-from utils.local_file import STOCK_REPORT_PATHS
 
 
-async def run_workflow(task_desc: str) -> str:
+async def run_workflow(task_desc: str):
     """围绕一个 task description 执行完整的研报生成流程。
     """
 
@@ -46,6 +48,12 @@ async def run_workflow(task_desc: str) -> str:
     short_term = ShortTermMemoryStore(
         base_dir=short_term_dir,
     )
+    long_term_dir = PROJECT_ROOT / "data" / "memory" / "long_term"
+    
+    long_term = LongTermMemoryStore(
+        base_dir=long_term_dir,
+    )
+
 
     planner_cfg = cfg.get_planner_cfg()
     use_demo = planner_cfg.get("use_demonstration", False)
@@ -58,7 +66,7 @@ async def run_workflow(task_desc: str) -> str:
     # ----- 3. 创建 Searcher Agent -----
     searcher_toolkit = build_searcher_toolkit(
         short_term=short_term,
-        # tool_use_store=tool_use_store,
+        long_term=long_term,
     )
 
     searcher = create_searcher_agent(model=model, formatter=formatter, toolkit=searcher_toolkit)
@@ -68,23 +76,31 @@ async def run_workflow(task_desc: str) -> str:
 
 
     # ----- 4. 获取demonstration -----
-    searcher_input = Msg(
-        name="User",
-        content=f"下面是某个任务描述：{task_desc}\n"
-                f"首先，你需要识别目标股票代码（如果任务描述中只谈及股票名称，你需要将之转换为股票代码）。"
-                f"请只输出纯数字的股票代码，不做其他输出。",
-        role="user",
-    )
-    while True:
-        try:
-            outline_msg = await call_agent_with_retry(searcher, searcher_input)
-            stock_symbol = re.search(r"[0-9]+", outline_msg.get_text_content()).group()
-            assert stock_symbol is not None
-            print("股票代码：", stock_symbol)
-            await searcher.memory.clear()
-            break
-        except AssertionError as e:
-            print(e)
+    # searcher_input = Msg(
+    #     name="User",
+    #     content=f"下面是某个任务描述：{task_desc}\n"
+    #             f"首先，你需要识别目标股票代码（如果任务描述中只谈及股票名称，你需要将之转换为股票代码）。"
+    #             f"请只输出纯数字的股票代码，不做其他输出。",
+    #     role="user",
+    # )
+    # while True:
+    #     try:
+    #         outline_msg = await call_agent_with_retry(searcher, searcher_input)
+    #         stock_symbol = re.search(r"[0-9]+", outline_msg.get_text_content()).group()
+    #         assert stock_symbol is not None
+    #         print("股票代码：", stock_symbol)
+    #         await searcher.memory.clear()
+    #         break
+    #     except AssertionError as e:
+    #         print(e)
+
+    entity = get_entity_info(long_term, task_desc)
+    if not entity or not entity.get("code"):
+        raise ValueError(f"无法从 task_desc 解析股票实体/代码：{task_desc}")
+
+    stock_symbol = entity["code"]  # 纯数字 6 位代码
+    print("股票代码：", stock_symbol)
+
 
     # 解析demonstration report，第二遍解析同一个report可以注释掉
     demo_pdf_path = STOCK_REPORT_PATHS[stock_symbol][-1]
@@ -93,13 +109,6 @@ async def run_workflow(task_desc: str) -> str:
     if not demo_md_path.exists():
         final_text, images = pdf_to_markdown(demo_pdf_path, demo_md_path)
     manuscript: Section = markdown_to_sections(demo_md_path)
-
-    # outline_store = OutlineExperienceStore(
-    #     base_dir=Path("data/memory/long_term/outlines"),
-    # )
-    # tool_use_store = ToolUseExperienceStore(
-    #     base_path=Path("data/memory/long_term/tool_use"),
-    # )
 
     # ----- 5. 调用 Planner：生成 / 修订 outline.md -----
     # planner_toolkit = build_planner_toolkit(
@@ -174,12 +183,14 @@ async def run_workflow(task_desc: str) -> str:
     # ----- 6. 调用 Writer：基于 outline.md 写 Manuscript 并导出 PDF -----
     writer_toolkit = build_writer_toolkit(
         short_term=short_term,
+        long_term=long_term,
         searcher=searcher,
     )
     writer = create_writer_agent(model=model, formatter=formatter, toolkit=writer_toolkit)
 
     verifier_toolkit = build_verifier_toolkit(
         short_term=short_term,
+        long_term=long_term,
     )
     verifier = create_verifier_agent(model=model, formatter=formatter, toolkit=verifier_toolkit)
 
@@ -297,4 +308,3 @@ async def run_workflow(task_desc: str) -> str:
     markdown_text = section_to_markdown(manuscript)
     (short_term_dir / "manuscript.md").write_text(markdown_text, encoding="utf-8")
     # md_to_pdf(markdown_text, short_term=short_term)
-

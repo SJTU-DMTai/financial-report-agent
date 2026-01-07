@@ -4,7 +4,8 @@ from __future__ import annotations
 from typing import Optional, Callable, Any, Dict, Union
 
 import io
-import time
+import time as time_module
+from datetime import datetime
 import akshare as ak
 import pandas as pd
 import re
@@ -14,6 +15,8 @@ import fitz
 from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse, Toolkit
 from ..memory.short_term import ShortTermMemoryStore, MaterialType
+from ..memory.long_term import LongTermMemoryStore
+from ..utils.get_entity_info import get_entity_info
 import json
 import copy
 
@@ -101,11 +104,15 @@ def add_exchange_prefix(symbol: str, type: str) -> str:
     else:
         raise ValueError("type 需为 'upper' 或 'lower'。")
 
-
+def fmt_yyyymmdd(s: str) -> str:
+        s = (s or "").strip()
+        if len(s) == 8 and s.isdigit():
+            return datetime.strptime(s, "%Y%m%d").strftime("%Y-%m-%d")
+        return s  # 已是 YYYY-MM-DD 或其他格式则原样返回
 class MaterialTools:
-    def __init__(self, short_term: Optional[ShortTermMemoryStore] = None) -> None:
+    def __init__(self, short_term: Optional[ShortTermMemoryStore] = None, long_term: Optional[LongTermMemoryStore] = None) -> None:
         self.short_term = short_term
-
+        self.long_term = long_term
     def read_material(
             self,
             ref_id: str,
@@ -115,9 +122,8 @@ class MaterialTools:
     ) -> ToolResponse:
         """
         统一读取material。支持读取全文、通过参数、按行/条目截取其中部分。
-        - 表格（MaterialType.TABLE）：按行号切片，可选按列筛选。
-        - 文本（MaterialType.TEXT）：按行号切片。
-        - JSON（MaterialType.JSON）：按列表索引切片，可通过 query_key 获取特定条目内容。
+        - 表格：按行号切片，可选按列筛选。
+        - JSON：可通过 query_key 获取特定条目内容。
 
         如果start_index， end_index，query_key都为空表示读取全文。
         
@@ -125,18 +131,39 @@ class MaterialTools:
             ref_id (str): Material 的唯一标识 ID。
             start_index (int | None): 
                 - 对于表格：起始行号（包含）。
-                - 对于文本/Markdown：起始行号（包含）。
-                - 对于 JSON list：起始条目索引（包含）。
                 - 如果为空表示从第0行开始。
             end_index (int | None): 
                 - 对于表格：结束行号（不包含）。
-                - 对于文本/Markdown：结束行号（不包含）。
-                - 对于 JSON list：结束条目索引（不包含）。
                 - 如果为空表示到最后一条结束。
             query_key (str | None):
                 - 对于 JSON list：可选，用于对每个条目提取该字段。
                 - 对于表格：可选，用于筛选特定列（如 "Date,Close"）。
         """
+
+        # """
+        # 统一读取material。支持读取全文、通过参数、按行/条目截取其中部分。
+        # - 表格（MaterialType.TABLE）：按行号切片，可选按列筛选。
+        # - 文本（MaterialType.TEXT）：按行号切片。
+        # - JSON（MaterialType.JSON）：按列表索引切片，可通过 query_key 获取特定条目内容。
+
+        # 如果start_index， end_index，query_key都为空表示读取全文。
+        
+        # Args:
+        #     ref_id (str): Material 的唯一标识 ID。
+        #     start_index (int | None): 
+        #         - 对于表格：起始行号（包含）。
+        #         - 对于文本/Markdown：起始行号（包含）。
+        #         - 对于 JSON list：起始条目索引（包含）。
+        #         - 如果为空表示从第0行开始。
+        #     end_index (int | None): 
+        #         - 对于表格：结束行号（不包含）。
+        #         - 对于文本/Markdown：结束行号（不包含）。
+        #         - 对于 JSON list：结束条目索引（不包含）。
+        #         - 如果为空表示到最后一条结束。
+        #     query_key (str | None):
+        #         - 对于 JSON list：可选，用于对每个条目提取该字段。
+        #         - 对于表格：可选，用于筛选特定列（如 "Date,Close"）。
+        # """
         if start_index is not None:
             start_index = int(start_index)
         if end_index is not None:
@@ -146,7 +173,6 @@ class MaterialTools:
 
         if not meta:
             return ToolResponse(
-    
                 content=[TextBlock(type="text", text=f"[read_material]未找到该 ID 对应的 Material")],
                 metadata={"ref_id": ref_id}
             )
@@ -157,7 +183,7 @@ class MaterialTools:
             elif meta.m_type == MaterialType.TEXT:
                 return self._read_text_impl(ref_id, start_index, end_index)
             elif meta.m_type == MaterialType.JSON:
-                return self._read_json_impl(ref_id, start_index, end_index, query_key)
+                return self._read_json_impl(ref_id, query_key)
             else:  
                 return ToolResponse(
                     content=[TextBlock(type="text", text=f"[read_material]不支持的文件类型: {meta.m_type}")],
@@ -192,11 +218,39 @@ class MaterialTools:
         if start < 0: start = 0
         if end > total_rows: end = total_rows
         
-        sliced_df = df.iloc[start:end]
+        sliced_df = df.iloc[start:end].copy()
+
+        if ("_disclosure_" in ref_id) and ("公告" in sliced_df.columns):
+            MAX_TOTAL_CHARS = 20000
+            MIN_PER_CELL = 200
+            SUFFIX = "\n...... [内容过长，已截断，如需要完整阅读请对此条结果单独使用read_material工具]"
+
+            # 只统计当前页（切片范围内）“公告”列的字符数
+            ann_series = sliced_df["公告"]
+
+            # 只对 str 进行统计/截断；非字符串保持原样
+            valid_indices = []
+            total_len = 0
+
+            for idx, v in ann_series.items():
+                if isinstance(v, str) and v:
+                    l = len(v)
+                    valid_indices.append(idx)
+                    total_len += l
+            if total_len > MAX_TOTAL_CHARS and valid_indices:
+                n_items = len(valid_indices)
+                per_limit = max(MAX_TOTAL_CHARS // n_items, MIN_PER_CELL)
+
+
+                for idx in valid_indices:
+                    v = sliced_df.at[idx, "公告"]
+                    if isinstance(v, str) and v:
+                        if len(v) > per_limit:
+                            sliced_df.at[idx, "公告"] = v[:per_limit] + SUFFIX
+
         
-        # 转换为 Markdown 或 CSV 字符串给 LLM
-        preview_str = sliced_df.to_markdown(index=False, disable_numparse=True)
-        
+        # preview_str = sliced_df.to_markdown(index=False, disable_numparse=True)
+        preview_str = sliced_df.to_csv(index=False)
         text = (f"[read_material] ID: {ref_id}\n"
                 f"完整 material 共 {total_rows} 行。已读取范围: 行 [{start}, {end})。\n"
                 f"内容:\n{preview_str}")
@@ -231,53 +285,19 @@ class MaterialTools:
     def _read_json_impl(
         self,
         ref_id: str,
-        start_index: int | None,
-        end_index: int | None,
         key_path: str | None,
     ) -> ToolResponse:
         data = self.short_term.load_material(ref_id)  
         # if isinstance(data, list):
-        n = len(data)
-        # 处理切片：start_index/end_index 控制“第几条”
-        start = start_index if start_index is not None else 0
-        end = end_index if end_index is not None else n
-
-        # 边界保护
-        start = max(0, min(start, n))
-        end = max(start, min(end, n))
-
-        sliced = copy.deepcopy(data[start:end])
+        sliced = copy.deepcopy(data[:])
 
         if (ref_id.startswith("search_engine")):
-            MAX_TOTAL_CHARS = 20000
-            page_items = []  # (item, len(page_text))
-            total_page_len = 0
-
             if isinstance(sliced, list):
                 for item in sliced:
                     if isinstance(item, dict):
                         # 删除 relevance 字段
                         item.pop("relevance", None)
 
-                        page_text = item.get("page_text")
-                        if isinstance(page_text, str) and page_text:
-                            l = len(page_text)
-                            page_items.append((item, l))
-                            total_page_len += l
-
-            # 根据总长度控制截断
-            if total_page_len > MAX_TOTAL_CHARS and page_items:
-                # 等额分配，每条最多多少字符
-                n_items = len(page_items)
-                per_limit = max(MAX_TOTAL_CHARS // n_items, 1)
-
-                for item, l in page_items:
-                    page_text = item["page_text"]
-                    if len(page_text) > per_limit:
-                        item["page_text"] = (
-                            page_text[:per_limit]
-                            + "\n...... [内容过长，已截断，如需要完整阅读请对此条搜索结果单独使用read_material工具]"
-                        )
 
         # 如果有 key_path，则提取每条对应字段，否则展示整个条目
         if key_path:
@@ -297,7 +317,6 @@ class MaterialTools:
 
         text = (
             f"[read_material] ID: {ref_id}\n"
-            f"完整 material 共 {n} 条。已读取 JSON 列表范围 [{start}, {end})\n"
             f"内容:\n{json_str}"
         )
 
@@ -308,13 +327,19 @@ class MaterialTools:
     def _save_df_to_material(
             self,
             df: pd.DataFrame,
-            ref_id: str
+            ref_id: str,
+            description: str,
+            entity:Dict[str,str] | None = None,
+            time:Dict[str,str] | None = None,
     ) -> int:
         """DataFrame 存入 short-term material（CSV），返回行数。"""
         if self.short_term is not None:
             self.short_term.save_material(ref_id=ref_id, 
                                           content=df, 
-                                          source="AKshare API")
+                                          description=description,
+                                          source="AKshare API",
+                                          entity=entity,
+                                          time=time)
         return len(df)
 
     # ===================== 股价数据 =====================
@@ -332,15 +357,26 @@ class MaterialTools:
                 - 为 None 时：保留全部 A 股的实时行情数据；
                 - 不为 None 时：仅保留 DataFrame 中 "代码" 列等于该值的记录。
         """
+        time_point = datetime.now().strftime("%Y-%m-%d %H:%M")
 
         df = ak.stock_zh_a_spot_em()
+        entity = None
         if symbol is not None:
             # 文档中 "代码" 列为股票代码
             df = df[df["代码"] == symbol]
+            entity = get_entity_info(long_term=self.long_term, text=str(symbol))
+        ref_id = f"{symbol or 'all'}_realtime_price_{int(time_module.time())}"
+        if symbol:
+            description = f"{entity['name']}（{entity['code']}）股票实时行情数据（获取时间：{time_point}）"
+        else:
+            description = f"A股全市场股票实时行情数据（获取时间：{time_point}）"
 
-            ref_id = f"{symbol or 'all'}_realtime_price_{int(time.time())}"
-
-        self._save_df_to_material(df, ref_id)
+        self._save_df_to_material(df=df,
+                                ref_id=ref_id,
+                                description=description,
+                                entity=entity,
+                                time={"point":time_point},
+                                )
         header = f"[fetch_realtime_price_material] 股价实时行情（symbol={symbol or 'ALL'}）"
         return _build_tool_response_from_df(
             df,
@@ -353,7 +389,7 @@ class MaterialTools:
             self,
             symbol: str,
             period: str = "daily",
-            start_date: str = "20100101",
+            start_date: str = "20000101",
             end_date: str = "20991231",
             adjust: str = "",       
     ) -> ToolResponse:
@@ -371,7 +407,7 @@ class MaterialTools:
                 - "weekly": 周频数据；
                 - "monthly": 月频数据。
             start_date (str):
-                历史行情起始日期，格式为 "YYYYMMDD"，例如 "20100101"。
+                历史行情起始日期，格式为 "YYYYMMDD"，例如 "20000101"。
             end_date (str):
                 历史行情结束日期，格式为 "YYYYMMDD"，例如 "20251231"。
             adjust (str):
@@ -390,9 +426,12 @@ class MaterialTools:
         )
 
 
-        ref_id = f"{symbol}_history_price_{start_date}_{end_date}_{int(time.time())}"
+        ref_id = f"{symbol}_history_price_{start_date}_{end_date}_{int(time_module.time())}"
+        entity = get_entity_info(long_term=self.long_term, text=symbol)
+        time_range = {"start": fmt_yyyymmdd(start_date),"end":fmt_yyyymmdd(end_date)}
+        description = f"{entity['name']}（{entity['code']}）股票历史行情数据（{fmt_yyyymmdd(start_date)}~{fmt_yyyymmdd(end_date)}）"
 
-        self._save_df_to_material(df, ref_id)
+        self._save_df_to_material(df=df, ref_id=ref_id,description=description,entity=entity,time=time_range)
 
         header = (
             f"[fetch_history_price_material] {symbol} {period} 股价历史行情 "
@@ -427,9 +466,10 @@ class MaterialTools:
         """
         df = ak.stock_news_em(symbol=symbol)
 
-        ref_id = f"{symbol}_news_{int(time.time())}"
-
-        self._save_df_to_material(df, ref_id)
+        ref_id = f"{symbol}_news_{int(time_module.time())}"
+        entity = get_entity_info(long_term=self.long_term, text=symbol)
+        description = f"{entity['name']}（{entity['code']}）股票新闻资讯"
+        self._save_df_to_material(df=df, ref_id=ref_id,entity=entity,description=description)
         header = f"[fetch_stock_news_material] 个股新闻（symbol={symbol}）"
         return _build_tool_response_from_df(
             df,
@@ -562,8 +602,9 @@ class MaterialTools:
             )
 
         
-        df = df.head(10) # 避免获取的公告数量过多取前10条，后续可以改成按照某些条件排序取前10条
-
+        # df = df.head(10) # 避免获取的公告数量过多取前10条，后续可以改成按照某些条件排序取前10条
+        if df is not None and len(df) > 10:
+            df = df.sample(n=10)
         # 2. 遍历 df 行，构造 PDF URL 并抽文本
         raw_texts: list[str] = []
         for _, row in df.iterrows():
@@ -596,9 +637,15 @@ class MaterialTools:
         df["公告"] = texts
         if "公告链接" in df.columns:
             df = df.drop(columns=["公告链接"])
-        ref_id = f"{symbol}_disclosure_{category or 'all'}_{int(time.time())}"
+        ref_id = f"{symbol}_disclosure_{category or 'all'}_{int(time_module.time())}"
 
-        self._save_df_to_material(df, ref_id)
+        entity = get_entity_info(long_term=self.long_term, text=symbol)
+        description = f"{entity['name']}（{entity['code']}）股票"
+        parts = [x for x in (keyword, category) if x]
+        if parts:
+            description += " " + " ".join(parts)
+        description = description + "信息披露公告"
+        self._save_df_to_material(df=df, ref_id=ref_id, entity=entity, description=description)
         header = (
             f"[fetch_disclosure_material] 信息披露公告（symbol={symbol}, market={market}, "
             f"category={category or '全部'}, {start_date}~{end_date}）"
@@ -641,10 +688,16 @@ class MaterialTools:
 
 
         safe_indicator = indicator.replace(" ", "")
-        ref_id = f"{symbol}_balance_{safe_indicator}_{int(time.time())}"
-
-        self._save_df_to_material(df, ref_id)
+        ref_id = f"{symbol}_balance_{safe_indicator}_{int(time_module.time())}"
+        entity = get_entity_info(long_term=self.long_term, text=symbol)
+        description = f"{entity['name']}（{entity['code']}）{indicator}资产负债表"
+        self._save_df_to_material(
+            df=df, ref_id=ref_id,
+            description=description,
+            entity=entity,
+            )
         header = f"[fetch_balance_sheet_material] 资产负债表（symbol={symbol}, indicator={indicator}）"
+
         return _build_tool_response_from_df(
             df,
             ref_id=ref_id,
@@ -675,9 +728,14 @@ class MaterialTools:
 
 
         safe_indicator = indicator.replace(" ", "")
-        ref_id = f"{symbol}_profit_{safe_indicator}_{int(time.time())}"
-
-        self._save_df_to_material(df, ref_id)
+        ref_id = f"{symbol}_profit_{safe_indicator}_{int(time_module.time())}"
+        entity = get_entity_info(long_term=self.long_term, text=symbol)
+        description = f"{entity['name']}（{entity['code']}）{indicator}利润表"
+        self._save_df_to_material(
+            df=df, ref_id=ref_id,
+            description=description,
+            entity=entity,
+            )
         header = f"[fetch_profit_table_material] 利润表（symbol={symbol}, indicator={indicator}）"
         return _build_tool_response_from_df(
             df,
@@ -708,9 +766,14 @@ class MaterialTools:
 
 
         safe_indicator = indicator.replace(" ", "")
-        ref_id = f"{symbol}_cashflow_{safe_indicator}_{int(time.time())}"
-
-        self._save_df_to_material(df, ref_id)
+        ref_id = f"{symbol}_cashflow_{safe_indicator}_{int(time_module.time())}"
+        entity = get_entity_info(long_term=self.long_term, text=symbol)
+        description = f"{entity['name']}（{entity['code']}）{indicator}现金流量表"
+        self._save_df_to_material(
+            df=df, ref_id=ref_id,
+            description=description,
+            entity=entity,
+            )
         header = f"[fetch_cashflow_table_material] 现金流量表（symbol={symbol}, indicator={indicator}）"
         return _build_tool_response_from_df(
             df,
@@ -743,9 +806,18 @@ class MaterialTools:
 
         df = ak.stock_gdfx_free_top_10_em(symbol=add_exchange_prefix(symbol, "lower"), date=date)
 
-        ref_id = f"{symbol}_top10_free_{date}_{int(time.time())}"
+        ref_id = f"{symbol}_top10_free_{date}_{int(time_module.time())}"
+        time_point = fmt_yyyymmdd(date)
+        time = {"point":time_point}
+        entity = get_entity_info(long_term=self.long_term, text=symbol)
+        description = f"{entity['name']}（{entity['code']}）报告期{time_point}的十大流通股东"
+        self._save_df_to_material(
+            df=df, ref_id=ref_id,
+            description=description,
+            entity=entity,
+            time=time,
+            )
 
-        self._save_df_to_material(df, ref_id)
         header = f"[fetch_top10_float_shareholders_material] 十大流通股东（symbol={symbol}, date={date}）"
         return _build_tool_response_from_df(
             df,
@@ -773,9 +845,17 @@ class MaterialTools:
                 2025 年的季度最后日分别为：20250331、20250630、20250930、20251231。
         """
         df = ak.stock_gdfx_top_10_em(symbol=add_exchange_prefix(symbol, "lower"), date=date)
-        ref_id = f"{symbol}_top10_{date}_{int(time.time())}"
-
-        self._save_df_to_material(df, ref_id)
+        ref_id = f"{symbol}_top10_{date}_{int(time_module.time())}"
+        time_point = fmt_yyyymmdd(date)
+        time = {"point":time_point}
+        entity = get_entity_info(long_term=self.long_term, text=symbol)
+        description = f"{entity['name']}（{entity['code']}）报告期{time_point}的十大股东"
+        self._save_df_to_material(
+            df=df, ref_id=ref_id,
+            description=description,
+            entity=entity,
+            time=time,
+            )
         header = f"[fetch_top10_shareholders_material] 十大股东（symbol={symbol}, date={date}）"
         return _build_tool_response_from_df(
             df,
@@ -786,7 +866,7 @@ class MaterialTools:
 
     async def fetch_main_shareholders_material(
             self,
-            stock: str,
+            symbol: str,
     ) -> ToolResponse:
         """获取指定股票的主要股东信息，并保存表格结果到Material当中，返回Material标识ref_id。
         抓取所有历史披露的主要股东信息，
@@ -794,19 +874,25 @@ class MaterialTools:
         适用场景：分析公司历史上的主要股东变化；辅助研报中“股权结构与股东情况”章节的撰写。
 
         Args:
-            stock (str):
+            symbol (str):
                 股票代码，例如 "600004"。
         """
-        df = ak.stock_main_stock_holder(stock=stock)
-        ref_id = f"{stock}_main_holders_{int(time.time())}"
+        df = ak.stock_main_stock_holder(stock=symbol)
+        ref_id = f"{symbol}_main_holders_{int(time_module.time())}"
 
-        self._save_df_to_material(df, ref_id)
-        header = f"[fetch_main_shareholders_material] 主要股东（stock={stock}）"
+        entity = get_entity_info(long_term=self.long_term, text=symbol)
+        description = f"{entity['name']}（{entity['code']}）的主要股东"
+        self._save_df_to_material(
+            df=df, ref_id=ref_id,
+            description=description,
+            entity=entity,
+            )
+        header = f"[fetch_main_shareholders_material] 主要股东（symbol={symbol}）"
         return _build_tool_response_from_df(
             df,
             ref_id=ref_id,
             header=header,
-            extra_meta={"stock": stock},
+            extra_meta={"symbol": symbol},
         )
 
     async def fetch_shareholder_count_detail_material(
@@ -824,9 +910,15 @@ class MaterialTools:
         """
         df = ak.stock_zh_a_gdhs_detail_em(symbol=symbol)
 
-        ref_id = f"{symbol}_shareholder_count_detail_{int(time.time())}"
+        ref_id = f"{symbol}_shareholder_count_detail_{int(time_module.time())}"
 
-        self._save_df_to_material(df, ref_id)
+        entity = get_entity_info(long_term=self.long_term, text=symbol)
+        description = f"{entity['name']}（{entity['code']}）股东户数详情"
+        self._save_df_to_material(
+            df=df, ref_id=ref_id,
+            description=description,
+            entity=entity,
+            )
         header = f"[fetch_shareholder_count_detail_material] 股东户数详情（symbol={symbol}）"
         return _build_tool_response_from_df(
             df,
@@ -851,9 +943,15 @@ class MaterialTools:
         df = ak.stock_shareholder_change_ths(symbol=symbol)
 
 
-        ref_id = f"{symbol}_shareholder_change_{int(time.time())}"
+        ref_id = f"{symbol}_shareholder_change_{int(time_module.time())}"
 
-        self._save_df_to_material(df, ref_id)
+        entity = get_entity_info(long_term=self.long_term, text=symbol)
+        description = f"{entity['name']}（{entity['code']}）股东持股变动"
+        self._save_df_to_material(
+            df=df, ref_id=ref_id,
+            description=description,
+            entity=entity,
+            )
         header = f"[fetch_shareholder_change_material] 股东持股变动（symbol={symbol}）"
         return _build_tool_response_from_df(
             df,
@@ -877,9 +975,15 @@ class MaterialTools:
         """
         df = ak.stock_zyjs_ths(symbol=symbol)
 
-        ref_id = f"{symbol}_business_description_{int(time.time())}"
+        ref_id = f"{symbol}_business_description_{int(time_module.time())}"
+        entity = get_entity_info(long_term=self.long_term, text=symbol)
+        description = f"{entity['name']}（{entity['code']}）主营业务、产品介绍"
+        self._save_df_to_material(
+            df=df, ref_id=ref_id,
+            description=description,
+            entity=entity,
+            )
 
-        self._save_df_to_material(df, ref_id)
         header = f"[fetch_business_description_material] 主营介绍（symbol={symbol}）"
         return _build_tool_response_from_df(
             df,
@@ -903,9 +1007,15 @@ class MaterialTools:
 
         df = ak.stock_zygc_em(symbol=add_exchange_prefix(symbol, "upper"))
 
-        ref_id = f"{symbol}_business_composition_{int(time.time())}"
+        ref_id = f"{symbol}_business_composition_{int(time_module.time())}"
 
-        self._save_df_to_material(df, ref_id)
+        entity = get_entity_info(long_term=self.long_term, text=symbol)
+        description = f"{entity['name']}（{entity['code']}）主营构成、业务的收入与利润结构"
+        self._save_df_to_material(
+            df=df, ref_id=ref_id,
+            description=description,
+            entity=entity,
+            )
         header = f"[fetch_business_composition_material] 主营构成（symbol={symbol}）"
         return _build_tool_response_from_df(
             df,

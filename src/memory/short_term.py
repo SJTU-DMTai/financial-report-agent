@@ -20,6 +20,8 @@ class MaterialMeta:
     ref_id: str
     m_type: MaterialType
     filename: str
+    entity: Dict[str, str] = field(default_factory=lambda: {"name": "", "code": ""})
+    time: Dict[str, str] = field(default_factory=dict)  # {}, {"point":...}, {"start":...,"end":...}
     description: str = ""
     source: str = ""  # 来源标记
 
@@ -232,40 +234,13 @@ class ShortTermMemoryStore:
     # Material 存储
     # -----------------------------------------
 
-    # def save_material(self, ref_id: str, content: str, ext: str = "md") -> None:
-    #     """
-    #     content：可以是 markdown / csv / json 文本。
-    #     ext：决定文件后缀，支持 "md", "txt", "csv", "json"
-    #     """
-    #     self.ensure_dirs()
-    #     path = self.material_dir / f"{ref_id}.{ext}"
-    #     path.write_text(content, encoding="utf-8")
-
-    # def load_material(self, ref_id: str, ext: str = "md"):
-    #     """
-    #     如果 ext='csv' → 返回 pandas DataFrame
-    #     如果 ext='json' → 返回 dict
-    #     如果 ext='md'或'txt' → 返回 str
-
-    #     """
-    #     path = self.material_dir / f"{ref_id}.{ext}"
-    #     if not path.exists():
-    #         return None
-
-    #     text = path.read_text(encoding="utf-8")
-
-    #     # --- 根据扩展名返回适当的数据类型 ---
-    #     if ext == "csv":
-    #         return pd.read_csv(StringIO(text))
-
-    #     if ext == "json":
-    #         return json.loads(text)
-
-    #     # 默认是 markdown
-    #     return text
-
-
-    def save_material(self, ref_id: str, content: Union[str, pd.DataFrame, dict, list], description: str = "", source: str = "", forced_ext: str = None) -> None:
+    def save_material(self, ref_id: str, 
+                    content: Union[str, pd.DataFrame, dict, list], 
+                    description: str = "", 
+                    source: str = "", 
+                    entity: Optional[Dict[str, str]] = None,
+                    time: Optional[Dict[str, str]] = None,
+                    forced_ext: str = None) -> None:
         self.ensure_dirs()
         
         # 简化判断逻辑
@@ -282,7 +257,27 @@ class ShortTermMemoryStore:
             m_type = MaterialType.TEXT
             (self.material_dir / f"{ref_id}.{ext}").write_text(str(content), encoding="utf-8")
 
-        self._registry[ref_id] = MaterialMeta(ref_id, m_type, f"{ref_id}.{ext}", description, source)
+        entity = entity if entity is not None else {"name": "", "code": ""}
+        time = time if time is not None else {}
+        
+        _DESC_SEP_RE = re.compile(r"[，,。.;；:：/\\|()（）\[\]{}<>《》“”\"'!?！？\t\r\n]+")
+        _DESC_WS_RE = re.compile(r"\s+")
+
+        description = (description or "").strip()
+        description = _DESC_SEP_RE.sub(" ", description)
+        description = _DESC_WS_RE.sub(" ", description)
+        description = description.lower()
+
+
+        self._registry[ref_id] = MaterialMeta(
+            ref_id=ref_id,
+            m_type=m_type,
+            filename=f"{ref_id}.{ext}",
+            entity=entity,
+            time=time,
+            description=description,
+            source=source,
+        )
         self._save_registry()
 
     def load_material(self, ref_id: str) -> Union[pd.DataFrame, dict, str, None]:

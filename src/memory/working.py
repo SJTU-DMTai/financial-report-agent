@@ -18,22 +18,44 @@ class Segment:
     template: str = None
     evidences: List[str] = None
 
-    def __str__(self, with_requirements=True, with_reference=True, with_content=True, with_evidence=True):
-        ctx = ""
-        if with_reference and self.reference is not None:
-            ctx += f"\t+ > **原文**\n{'\n'.join(['\t\t> ' + l for l in self.reference.splitlines()])}\n\n"
-        if with_content:
-            if self.content is not None:
-                ctx += self.content + "\n\n"
-            elif self.template is not None:
-                ctx += f"\t+ **示例**\n\t{self.template}\n\n"
-        if with_requirements and self.requirements is not None:
-            requirements = "\n".join([("\t\t" if r.strip()[:2] in ["- ", "* "] else "") + r
-                                      for r in self.requirements.split("\n")])
-            ctx += f"\t+ **写作要求**\n{requirements}\n\n"
-        if with_evidence and self.evidences is not None:
-            ctx += f"\t+ **论据材料**\n{"\n".join("\t\t- " + e.replace("\n\n", "\n") for e in self.evidences)}\n\n"
-        return ctx
+def __str__(
+    self,
+    with_requirements=True,
+    with_reference=True,
+    with_content=True,
+    with_evidence=True,
+):
+    ctx = ""
+
+    if with_reference and self.reference is not None:
+        ref_text = "\n".join(
+            ["\t\t> " + l for l in self.reference.splitlines()]
+        )
+        ctx += f"\t+ > **原文**\n{ref_text}\n\n"
+
+    if with_content:
+        if self.content is not None:
+            ctx += f"{self.content}\n\n"
+        elif self.template is not None:
+            ctx += f"\t+ **示例**\n\t{self.template}\n\n"
+
+    if with_requirements and self.requirements is not None:
+        requirements = "\n".join(
+            [
+                ("\t\t" if r.strip()[:2] in ["- ", "* "] else "") + r
+                for r in self.requirements.split("\n")
+            ]
+        )
+        ctx += f"\t+ **写作要求**\n{requirements}\n\n"
+
+    if with_evidence and self.evidences is not None:
+        evidence_text = "\n".join(
+            "\t\t- " + e.replace("\n\n", "\n")
+            for e in self.evidences
+        )
+        ctx += f"\t+ **论据材料**\n{evidence_text}\n\n"
+
+    return ctx
 
 @dataclass_json
 @dataclass
