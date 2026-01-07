@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from memory.working import Section, Segment
+from src.memory.working import Section, Segment
 from src.memory.short_term import ShortTermMemoryStore
 import pdfkit
 from pdfkit.configuration import Configuration
