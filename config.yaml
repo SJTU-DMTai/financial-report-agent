@@ -118,4 +118,4 @@ wkhtmltopdf_path:
   path: E:/wkhtmltopdf/bin/wkhtmltopdf.exe
 
 planner:
-  use_demonstration: False
+  use_demonstration: True
