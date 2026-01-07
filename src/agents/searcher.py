@@ -29,7 +29,7 @@ def create_searcher_agent(
         formatter=formatter,
         toolkit=toolkit,
         parallel_tool_calls=True,
-        max_iters=15,
+        max_iters=5,
     )
 
 def build_searcher_toolkit(
@@ -42,7 +42,7 @@ def build_searcher_toolkit(
     material_tools = MaterialTools(short_term=short_term)
 
     search_tools = SearchTools(short_term=short_term)
-    toolkit.register_tool_function(search_tools.search_engine)
+    # toolkit.register_tool_function(search_tools.search_engine)
     # -------- Material Tools --------
 
     # ========================================
@@ -61,9 +61,9 @@ def build_searcher_toolkit(
     # 金融新闻 News
     # ========================================
 
-    # toolkit.register_tool_function(
-    #     material_tools.fetch_stock_news_material
-    # )
+    toolkit.register_tool_function(
+        material_tools.fetch_stock_news_material
+    )
 
     toolkit.register_tool_function(
         material_tools.fetch_disclosure_material
