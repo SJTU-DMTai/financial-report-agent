@@ -4,8 +4,9 @@ import os
 prompt_dict = {}
 for filename in os.listdir(os.path.dirname(__file__)):
     if filename.endswith(".md"):
-        prompt_dict[filename.split(".")[0]] = "\n".join(open(os.path.join(os.path.dirname(__file__), filename)).readlines())
-
+         path = os.path.join(os.path.dirname(__file__), filename)
+         with open(path, "r", encoding="utf-8") as f:
+            prompt_dict[filename.split(".")[0]] = f.read()
 
 prompt_dict['searcher_sys_prompt'] = """
 你是 Searcher agent，负责面向金融领域的检索工作。

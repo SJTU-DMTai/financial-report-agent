@@ -7,16 +7,17 @@ from agentscope.agent import ReActAgent
 from agentscope.message import Msg, TextBlock
 from agentscope.tool import Toolkit, ToolResponse
 
-from memory.working import Section
+from ..memory.working import Section
 from ..memory.short_term import ShortTermMemoryStore
 from ..memory.long_term import LongTermMemoryStore
 
 
 class OutlineTools:
 
-    def __init__(self, manuscript: Section):
+    def __init__(self, manuscript: Section,long_term:LongTermMemoryStore,short_term:ShortTermMemoryStore):
         self.manuscript = manuscript
-
+        self.long_term = long_term
+        self.short_term = short_term
 
     # ---- Outline Tool: Read / Replace / Save to long-term ----
     def read_outline(self) -> ToolResponse:

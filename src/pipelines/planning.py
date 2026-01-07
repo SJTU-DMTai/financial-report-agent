@@ -4,8 +4,8 @@ from pathlib import Path
 
 from agentscope.model import ChatModelBase
 
-from memory.working import Section
-from prompt import prompt_dict
+from src.memory.working import Section
+from src.prompt import prompt_dict
 from utils.file_converter import pdf_to_markdown, markdown_to_sections
 from utils.instance import create_agent_formatter
 
@@ -27,7 +27,7 @@ async def planning(task_desc: str, demo_pdf_path: Path, short_term_dir: Path,
             return
         for subsection in section.subsections:
             section_id = ((parent_id + ".") if parent_id else "") + str(subsection.section_id)
-            print(f"\n====== ¿ªÊ¼×Ü½áÕÂ½Ú {section_id} ======\n")
+            print(f"\n====== å¼€å§‹æ€»ç»“ç« èŠ‚ {section_id} ======\n")
             await dfs_outline(subsection)
             if subsection.segments:
                 decomposer_input = await formatter.format([
@@ -47,9 +47,9 @@ async def planning(task_desc: str, demo_pdf_path: Path, short_term_dir: Path,
                         Msg("system", prompt_dict["plan_outline"],"system"),
                         Msg(
                             name="user",
-                            content=f"µ±Ç°ÈÎÎñ£º{task_desc}\n\nÎªÊµÏÖµ±Ç°ÈÎÎñ£¬ÎÒÕÒµ½ÁËÄ³»ú¹¹ÔÚ{demo_date}×«Ğ´µÄÒ»·İÑĞ±¨£¬ÃûÎª{demo_name}¡£"
-                                    f"ÏÂÎÄ½«¸½ÉÏ´ÓÖĞÕª³öµÄÒ»¶Î²Î¿¼Æ¬¶Î£¬ÇëÄã¿¼ÂÇÊ±¼ä²îºÍ¹«Ë¾ÒìÍ¬£¬×«Ğ´Ò»·İÓÃÓÚµ±Ç°ĞÂÈÎÎñµÄ×«Ğ´Ä£°æºÍÒªÇó¡£\n\n"
-                                    f"²Î¿¼Æ¬¶ÎÈçÏÂ£º\n\n{segment}",
+                            content=f"å½“å‰ä»»åŠ¡ï¼š{task_desc}\n\nä¸ºå®ç°å½“å‰ä»»åŠ¡ï¼Œæˆ‘æ‰¾åˆ°äº†æŸæœºæ„åœ¨{demo_date}æ’°å†™çš„ä¸€ä»½ç ”æŠ¥ï¼Œåä¸º{demo_name}ã€‚"
+                                    f"ä¸‹æ–‡å°†é™„ä¸Šä»ä¸­æ‘˜å‡ºçš„ä¸€æ®µå‚è€ƒç‰‡æ®µï¼Œè¯·ä½ è€ƒè™‘æ—¶é—´å·®å’Œå…¬å¸å¼‚åŒï¼Œæ’°å†™ä¸€ä»½ç”¨äºå½“å‰æ–°ä»»åŠ¡çš„æ’°å†™æ¨¡ç‰ˆå’Œè¦æ±‚ã€‚\n\n"
+                                    f"å‚è€ƒç‰‡æ®µå¦‚ä¸‹ï¼š\n\n{segment}",
                             role="user",
                         )
                     ]
