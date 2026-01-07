@@ -1,58 +1,50 @@
-# -*- coding: utf-8 -*-
-from __future__ import annotations
-
 from dataclasses import dataclass
 from pathlib import Path
-import json
-from typing import Any
-
+from typing import Optional, List, Dict
+import pandas as pd
+import akshare as ak
 
 @dataclass
-class OutlineExperienceStore:
-    """实现 Outline 的长期经验库。（使用本地文件记录memory展示结构，不包含具体实现）
-    """
-
+class LongTermMemoryStore:
     base_dir: Path
 
-    def ensure_dir(self) -> None:
+    def ensure_dir(self):
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
-    def list_all(self) -> list[Path]:
+    @property
+    def code_name_path(self) -> Path:
+        return self.base_dir / "a_share_code_name.csv"
+
+    def refresh_code_name(self) -> pd.DataFrame:
+        """手动更新：从 akshare 获取股票代码-股票名称，覆盖写入本地"""
         self.ensure_dir()
-        return sorted(self.base_dir.glob("*.md"))
+        df = ak.stock_info_a_code_name()
+        df["code"] = df["code"].astype(str).str.zfill(6)
+        df["name"] = df["name"].astype(str)
+        df.to_csv(self.code_name_path, index=False, encoding="utf-8-sig")
+        return df
 
-    def save_outline(self, task_id: str, outline_content: str, meta: dict[str, Any]) -> Path:
-        self.ensure_dir()
-        path = self.base_dir / f"{task_id}.md"
-        path.write_text(outline_content, encoding="utf-8")
-        meta_path = self.base_dir / f"{task_id}.meta.json"
-        meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-        return path
+    def _load_code_name(self) -> Optional[pd.DataFrame]:
+        if not self.code_name_path.exists():
+            return None
+        return pd.read_csv(self.code_name_path, dtype=str)
 
-    def load_outline(self, task_id: str) -> str:
-        path = self.base_dir / f"{task_id}.md"
-        if not path.exists():
-            return ""
-        return path.read_text(encoding="utf-8")
+    def name_by_code(self, code: str) -> Optional[str]:
+        """代码 -> 名称"""
+        code = str(code).zfill(6)
+        df = self._load_code_name()
+        if df is None:
+            df = self.refresh_code_name()
+        hit = df[df["code"] == code]
+        return None if hit.empty else hit.iloc[0]["name"]
 
-
-@dataclass
-class ToolUseExperienceStore:
-    """记录工具调用经验 <tool_name, list of exp>。（使用本地文件记录memory展示结构，不包含具体实现）"""
-
-    base_path: Path
-
-    def ensure_dir(self) -> None:
-        self.base_path.mkdir(parents=True, exist_ok=True)
-
-    def append_experience(self, tool_name: str, exp: dict[str, Any]) -> None:
-        self.ensure_dir()
-        path = self.base_path / f"{tool_name}.jsonl"
-        with path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(exp, ensure_ascii=False) + "\n")
-
-    def load_experiences(self, tool_name: str) -> list[dict[str, Any]]:
-        path = self.base_path / f"{tool_name}.jsonl"
-        if not path.exists():
-            return []
-        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    def codes_by_name(self, name: str, fuzzy: bool = True) -> List[Dict[str, str]]:
+        """名称 -> 代码（可能多个），fuzzy: 是否支持模糊匹配"""
+        df = self._load_code_name()
+        if df is None:
+            df = self.refresh_code_name()
+        if fuzzy:
+            hit = df[df["name"].str.contains(name, na=False)]
+        else:
+            hit = df[df["name"] == name]
+        return hit[["code","name"]].to_dict(orient="records")

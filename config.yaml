@@ -1,6 +1,6 @@
 # config.yaml
 models:
-  default: deepseek-v3.1-nex-n1   # 默认使用的模型 id
+  default: mimo   # 默认使用的模型 id
 
   # grok:
   #   provider: openrouter
@@ -8,6 +8,17 @@ models:
   #   base_url_env: https://openrouter.ai/api/v1
   #   stream: false
 
+  mimo_openrouter:
+    provider: openrouter
+    model_name: xiaomi/mimo-v2-flash:free
+    base_url_env: https://openrouter.ai/api/v1
+    stream: false
+
+  mimo:
+    provider: xiaomi
+    model_name: mimo-v2-flash
+    base_url_env: https://api.xiaomimimo.com/v1
+    stream: false
   devstral:
     provider: openrouter
     model_name: mistralai/devstral-2512:free
@@ -107,4 +118,4 @@ wkhtmltopdf_path:
   path: E:/wkhtmltopdf/bin/wkhtmltopdf.exe
 
 planner:
-  use_demonstration: True
+  use_demonstration: False

@@ -18,6 +18,7 @@ from ..tools.outline_tools import *
 from ..tools.search_tools import *
 from ..tools.calculate_tools import *
 from ..memory.short_term import ShortTermMemoryStore
+from ..memory.long_term import LongTermMemoryStore
 from ..memory.working_memory import SlidingWindowMemory
 from ..prompt import prompt_dict
 
@@ -41,6 +42,7 @@ def create_writer_agent(
 # ---- Toolkit Builder ----
 def build_writer_toolkit(
     short_term: ShortTermMemoryStore,
+    long_term: LongTermMemoryStore,
     searcher: ReActAgent,
 ) -> Toolkit:
     toolkit = Toolkit()
@@ -49,18 +51,18 @@ def build_writer_toolkit(
     # toolkit.register_tool_function(manuscript_tools.read_manuscript_section)
     # toolkit.register_tool_function(manuscript_tools.replace_manuscript_section)
 
-    search_tools = SearchTools(short_term=short_term)
+    search_tools = SearchTools(short_term=short_term,long_term=long_term)
     toolkit.register_tool_function(search_tools.searcher_tool(searcher))
 
     chart_tools = GraphicTools(short_term=short_term)
     toolkit.register_tool_function(chart_tools.generate_chart_by_template)
     toolkit.register_tool_function(chart_tools.generate_chart_by_python_code)
 
-    material_tools = MaterialTools(short_term=short_term)
+    material_tools = MaterialTools(short_term=short_term, long_term=long_term)
     toolkit.register_tool_function(
         material_tools.read_material
     )
-    calculate_tools = CalculateTools(short_term=short_term)
+    calculate_tools = CalculateTools(short_term=short_term,long_term=long_term)
     toolkit.register_tool_function(calculate_tools.calculate_cashflow_metric)
     toolkit.register_tool_function(calculate_tools.calculate_financial_ratio)
     toolkit.register_tool_function(calculate_tools.calculate_forecast_metric)

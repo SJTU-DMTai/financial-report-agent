@@ -51,7 +51,8 @@ def create_chat_model(reasoning=True):
             api_key=os.environ.get("API_KEY"),
             stream=stream,
         )
-    elif provider == "modelscope":
+    
+    elif provider == "xiaomi":
         return OpenAIChatModel(
             model_name=model_name,
             api_key=os.environ.get("API_KEY"),
@@ -82,7 +83,7 @@ def create_agent_formatter():
     # else:
     #     raise ValueError(f"未知 provider: {provider}")
 
-    if provider == "openrouter":
+    if provider in ("openrouter", "xiaomi"):
         return OpenAIChatFormatter()
     elif provider == "modelscope":
         return PatchedOpenAIChatFormatter()

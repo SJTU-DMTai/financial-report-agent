@@ -12,6 +12,7 @@ from ..tools.material_tools import *
 
 from ..tools.search_tools import *
 from ..memory.short_term import ShortTermMemoryStore
+from ..memory.long_term import LongTermMemoryStore
 from ..memory.working_memory import SlidingWindowMemory
 
 def create_searcher_agent(
@@ -34,14 +35,14 @@ def create_searcher_agent(
 
 def build_searcher_toolkit(
         short_term: ShortTermMemoryStore,
-        # tool_use_store: ToolUseExperienceStore,
+        long_term: LongTermMemoryStore,
 ) -> Toolkit:
     """创建 Searcher 专用 Toolkit。
     """
     toolkit = Toolkit()
-    material_tools = MaterialTools(short_term=short_term)
+    material_tools = MaterialTools(short_term=short_term, long_term=long_term)
 
-    search_tools = SearchTools(short_term=short_term)
+    search_tools = SearchTools(short_term=short_term, long_term=long_term)
     toolkit.register_tool_function(search_tools.search_engine)
     # -------- Material Tools --------
 

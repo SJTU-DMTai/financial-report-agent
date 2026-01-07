@@ -77,7 +77,7 @@ def _inject_refs(
 # ---------- 第一轮：处理显式写出的 ref_id:xxx 或 ref_id:xxx|yyy ----------
     # 不要求方括号存在，detail(yyy) 可缺省
     pattern_main = re.compile(
-        r"ref_id[:=]([0-9A-Za-z_\u4e00-\u9fff\-]+)(?:\|([^；\]\s]+))?"
+        r"ref_id[:=]\s*([0-9A-Za-z_\u4e00-\u9fff\-]+)(?:\|([^；\]\s]+))?"
     )
 
     text = md_text
@@ -435,7 +435,7 @@ def md_to_pdf(
     <meta charset="utf-8">
     <style>
         body {{
-            font-family: "Noto Sans CJK SC", "Microsoft YaHei", "SimSun", "Songti SC", sans-serif;
+            font-family: "Noto Sans CJK SC", "Microsoft YaHei", "SimSun", "Songti SC","Segoe UI Emoji", sans-serif;
             font-size: 19px; 
             line-height: 1.7;
         }}
@@ -534,6 +534,7 @@ def md_to_pdf(
 
     options = {
         "encoding": "UTF-8",
+        "disable-smart-shrinking": None,
         "enable-internal-links": None,
         "enable-local-file-access": None,
         "footer-center": "[page] / [topage]",

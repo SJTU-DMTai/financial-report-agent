@@ -6,11 +6,12 @@ import re
 from agentscope.agent import ReActAgent
 from agentscope.message import Msg, TextBlock
 from agentscope.tool import Toolkit, ToolResponse
-
+import seaborn
 import base64
 from io import BytesIO
 from typing import Any, Dict, List, Literal, Optional
 import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import matplotlib.font_manager as fm
@@ -29,7 +30,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 cfg = config.Config()
-matplotlib.use("Agg")
+
 
 
 FONT_PATH = cfg.get_font_path("chinese")
@@ -446,6 +447,10 @@ class GraphicTools:
         if style:
             try:
                 plt.style.use(style)
+                if font_prop:
+                    matplotlib.rcParams["font.family"] = font_prop.get_name()
+                    matplotlib.rcParams["font.sans-serif"] = [font_prop.get_name()]
+                    matplotlib.rcParams["axes.unicode_minus"] = False
             except Exception:
                 # 样式错误时忽略，保持默认
                 pass
@@ -650,6 +655,5 @@ print("<img_b64>" + img_b64 + "</img_b64>")
             content=[text_block],
             metadata={
                 "chart_id": chart_id,
-                "file_path": file_path,
             },
         )
