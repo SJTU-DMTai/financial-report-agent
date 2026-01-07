@@ -10,7 +10,7 @@ from agentscope.tool import ToolResponse
 from agentscope.agent import ReActAgent
 from agentscope.message import Msg
 from ..memory.short_term import ShortTermMemoryStore
-from ..memory.long_term import ToolUseExperienceStore
+from ..memory.long_term import LongTermMemoryStore
 from .material_tools import *
 import re
 from urllib.parse import urljoin
@@ -19,15 +19,18 @@ from bs4 import BeautifulSoup
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import jieba
-import time
+import time as time_module
 from trafilatura import extract
+from htmldate import find_date
+from urllib.parse import urlparse
 from ..utils.call_agent_with_retry import call_agent_with_retry
-
-
+from ..utils.get_entity_info import get_entity_info
+from ..utils.retrieve_in_memory import retrieve_in_memory
 class SearchTools:
 
-    def __init__(self, short_term: ShortTermMemoryStore) -> None:
+    def __init__(self, short_term: ShortTermMemoryStore, long_term: LongTermMemoryStore) -> None:
         self.short_term = short_term
+        self.long_term = long_term
 
 
     # ================= 辅助函数 =================
@@ -100,7 +103,7 @@ class SearchTools:
         corpus = [query]
         for item in candidates:
             # 权重优化：标题重复3次以增加标题匹配的权重
-            doc_content = (item['title'] + " ") * 3 + item['description'] + " " + item['page_text'][:5000]
+            doc_content = (item['title'] + " ") * 3 + item['page_description'] + " " + item['page_text'][:5000]
             corpus.append(doc_content)
 
         # 2. 向量化 (Fit Transform once)
@@ -130,9 +133,8 @@ class SearchTools:
 
     #searcher agent使用
     async def search_engine(self, query: str, max_results: int = 10) -> ToolResponse:
-        """进行 Web 搜索并返回搜索结果预览，并保存搜索结果到Material当中，返回Material标识ref_id。
-
-        - 调用 DuckDuckGo 的搜索引擎接口，根据给定关键词返回若干条过滤后的搜索结果，适合获取大致信息或者是新闻等。
+        """进行 Web 搜索并返回搜索结果预览，并保存每一条搜索结果到Material当中，返回每一条Material标识ref_id。
+        - 调用搜索引擎，根据给定关键词返回若干条过滤后的搜索结果，适合获取大致信息或者是新闻等。
         - 如果需要完整、可核查的原文内容，或者是结构化数据请调用其他工具。
         Args:
             query (str):
@@ -145,8 +147,8 @@ class SearchTools:
         except (TypeError, ValueError):
             max_results = 10
 
-        ref_id = None
         candidates: List[Dict[str, Any]] = []
+        item_ref_ids: List[str] = []
         try:
             ddgs = DDGS()
             # 1) 调用 DuckDuckGo 搜索接口
@@ -175,6 +177,18 @@ class SearchTools:
                     if not html_bytes:
                         continue
                     page_text, img_urls = self._extract_text_and_images(html_bytes, link)
+                    published_date = None
+                    try:
+                        published_date = find_date(
+                            html_bytes,
+                            url=link,
+                            original_date=True,
+                            extensive_search=True,
+                            deferred_url_extractor=True,   # 降低从 URL 猜日期的优先级，减少误判
+                        )
+                    except Exception:
+                        published_date = None
+
                 except Exception:
                     # 单条失败不影响整体
                     continue
@@ -192,8 +206,9 @@ class SearchTools:
                 candidates.append({
                     "title": title,
                     "link": link,
-                    "description": desc or snippet, # 优先用搜索结果摘要，没有则用正文摘要
+                    "page_description": desc or snippet, # 优先用搜索结果摘要，没有则用正文摘要
                     "page_text": page_text,
+                    "published_date": published_date,
                     # "images": img_urls
                 })
 
@@ -214,41 +229,90 @@ class SearchTools:
                 if len(candidates) > max_results:
                     candidates = candidates[:max_results]
 
-                new_candidates = []
+                pre_ref_id = f"search_engine_{int(time_module.time())}"
+                
                 for i, item in enumerate(candidates):
-                    new_item = {"index": i}  # 放最前
-                    new_item.update(item)    # 其余字段按原顺序追加
-                    new_candidates.append(new_item)
+                    item_ref_id = pre_ref_id + f"{i:03d}"
+                    published_date = item.get("published_date")
+                    time = {"point": published_date} if published_date else None
+                    
+                    entity = get_entity_info(long_term=self.long_term, text=query)
+                    if entity is None:
+                        entity = get_entity_info(long_term=self.long_term, text=candidates[i]["page_description"]+candidates[i]["page_text"])
+                    
+                    desc = ""
+                    if published_date:
+                        desc = desc+ f"网页发布时间：{published_date} "
+                    
+                    if entity:
+                        desc = desc+f"发布关于{entity['name']}（{entity['code']}）的内容:"
+                    else:
+                        desc = desc+f"发布关于{query}的内容:"
+                    desc = desc + candidates[i]["title"] + " "
+                    desc = desc + candidates[i]["page_description"]+ " "
+                    link = candidates[i].get("link", "")
+                    domain = urlparse(link).netloc
+                    if domain.startswith("www."):
+                        domain = domain[4:]
 
-                candidates = new_candidates
+                    self.short_term.save_material(
+                        ref_id=item_ref_id,
+                        content=[candidates[i]],
+                        time=time,
+                        entity=entity,
+                        description=desc,
+                        # source=f"Search Engine 搜索「{query}」的结果"
+                        source=f"Search Engine 搜索结果（来源：{domain}）"
+                    )
+                    item_ref_ids.append(item_ref_id)
 
-                ref_id = f"search_engine_{int(time.time())}"
-                self.short_term.save_material(
-                    ref_id=ref_id,
-                    content=candidates,
-                    description=f"Search Engine 搜索「{query}」的结果",
-                    source="Search Engine"
-                )
+
+                # 以下仅仅为调试使用 （便于看到单次搜索内容）
+                # index_payload = {
+                #     "query": query,
+                #     "max_results": max_results,
+                #     "result_count": len(candidates),
+                #     "items": [
+                #         {
+                #             "index": i,
+                #             "ref_id": item_ref_ids[i],
+                #             "title": candidates[i].get("title", ""),
+                #             "link": candidates[i].get("link", ""),
+                #             "description": candidates[i].get("page_description", ""),
+                #             "page_text": candidates[i].get("page_text"),
+                #             "relevance": candidates[i].get("relevance", 0.0),
+                #         }
+                #         for i in range(len(candidates))
+                #     ],
+                # }
+                # self.short_term.save_material(
+                #     ref_id=pre_ref_id,
+                #     content=index_payload,
+                #     description=f"Search Engine 搜索「{query}」的结果",
+                #     source="Search Engine",
+                # )
+                # 以上仅仅为调试使用 （便于看到单次搜索内容）
+
 
                 lines: List[str] = [f"[search_engine] 搜索：{query}", 
-                                    f"Material 已写入 ref_id='{ref_id}'（JSON 格式）",
-                                    "以下为搜索结果预览",
-                                    ""]
+                                    "以下为搜索结果预览（每条结果已单独写入 Material）：",
+                                    ]
                 for i, item in enumerate(candidates, start=0):
                     title = item["title"]
-                    desc = item.get("description", "无摘要")
                     link = item["link"]
+                    desc = item["page_description"]
                     # images = item.get("images") or []
                     # relevance = item.get("relevance", 0.0)
 
                     lines.append(f"第{i}条. {title}")
                     lines.append(f"   链接: {link}")
+                    lines.append(f"   Material 已写入 ref_id='{item_ref_ids[i]}'（JSON 格式）")
                     lines.append(f"   搜索摘要: {desc}")
 
                     page_text_i = item.get("page_text", "")
                     snippet = page_text_i.replace("\n", " ")
                     snippet = re.sub(r"\s{2,}", " ", snippet)
-                    snippet = snippet[:300] + ("..." if len(snippet) > 300 else "")
+                    snippet = snippet[:1000] + ("......[内容过长，已截断，如需要完整阅读请对此条结果单独使用read_material工具]" if len(snippet) > 1000 else "")
                     lines.append(f"   页面正文摘录: {snippet}")
 
                     # if images:
@@ -272,7 +336,6 @@ class SearchTools:
                     text=text,
                 ),
             ],
-            metadata={"ref_id": ref_id, "result_count": len(candidates)}
         )
 
     # planner和writer调用
@@ -280,21 +343,98 @@ class SearchTools:
         """把 Searcher agent 封装成 agent 可见的工具函数。"""
         async def search_with_searcher(query: str) -> ToolResponse:
             """使用指定的 Searcher 工具 基于 query 执行一次检索并返回总结结果。同时将获取的结果保存为Material。
-
             Args:
                 query (str): 检索需求的自然语言描述。
-
             """
+
+            candidates = retrieve_in_memory(
+                short_term=self.short_term,
+                long_term=self.long_term,
+                query=query,
+            )
+            if candidates:
+                lines = [
+                    f"你需要检索的信息：{query}",
+                    "",
+                    "用户提供的候选材料（materials）及其部分预览如下:",
+                    "",
+                ]
+
+                for i, meta in enumerate(candidates, 1):
+                    ref_id = meta.get("ref_id", "")
+                    desc = meta.get("description", "")
+                    src = meta.get("source", "")
+                    m_type = meta.get("m_type", "")
+                    lines.append(f"第{i}条材料：Material 的唯一标识 ref_id={ref_id}")
+                    lines.append(f"    简短描述: {desc}")
+                    lines.append(f"    来源: {src}")
+
+                    try:
+                        content = self.short_term.load_material(ref_id) if self.short_term is not None else None
+                    except Exception:
+                        content = None
+
+                    # (A) 搜索引擎：search_engine_*
+                    if isinstance(ref_id, str) and ref_id.startswith("search_engine_"):
+                        page_text_preview = ""
+                        if isinstance(content, list) and content:
+                            first = content[0] if isinstance(content[0], dict) else None
+                            if isinstance(first, dict):
+                                page_text = first.get("page_text") or ""
+                                page_text_preview = page_text[:100]
+                        lines.append("    部分内容预览：")
+                        lines.append(f"   {page_text_preview}")
+
+
+                    # (B) 计算结果：calculate_*
+                    elif isinstance(ref_id, str) and ref_id.startswith("calculate_"):
+                        params = None
+                        result = None
+                        if isinstance(content, list) and content:
+                            first = content[0] if isinstance(content[0], dict) else None
+                            if isinstance(first, dict):
+                                params = first.get("parameters", None)
+                                result = first.get("result", None)
+                        if params:
+                            lines.append("    计算参数:")
+                            lines.append(f"    {params}")
+                        lines.append("    计算结果:")
+                        lines.append(f"    {result}")
+
+                    # (C) 表格：非前缀类时，用 m_type==table 给出前几行
+                    elif m_type == "table":
+                        preview = ""
+                        if isinstance(content, pd.DataFrame) and not content.empty:
+                            df_preview = content.head(3).copy()
+                            MAX_CELL_CHARS = 200
+                            SUFFIX = "…[内容过长，已截断]"
+                            for col in df_preview.columns:
+                                df_preview[col] = df_preview[col].apply(
+                                    lambda v: (
+                                        v[:MAX_CELL_CHARS] + SUFFIX
+                                        if isinstance(v, str) and len(v) > MAX_CELL_CHARS
+                                        else v
+                                    )
+                                )
+
+                            preview = df_preview.to_csv(index=False)
+
+                        lines.append("    前3行预览:")
+                        lines.append(preview)
+
+                    lines.append("")  # 空行分隔
+                final_prompt = "\n".join(lines)
+            else:
+                final_prompt = f"你需要检索的信息：{query}"
+
+
             msg = Msg(
                 name="user",
-                content=query,
+                content=final_prompt,
                 role="user",
             )
-            # res = await searcher(msg)
             await searcher.memory.clear()
             res = await call_agent_with_retry(searcher,msg)
-
-            # await searcher.memory.clear()
             
             return ToolResponse(
                 content=res.content,

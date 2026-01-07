@@ -22,4 +22,4 @@ def run_workflow():
     print(f"{text}")
     
 if __name__ == "__main__":
-    run_workflow()
+    run_workflow() #python -m tests.test_pdf

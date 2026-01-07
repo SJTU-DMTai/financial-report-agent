@@ -4,13 +4,14 @@ import os
 prompt_dict = {}
 for filename in os.listdir(os.path.dirname(__file__)):
     if filename.endswith(".md"):
-        prompt_dict[filename.split(".")[0]] = "\n".join(open(os.path.join(os.path.dirname(__file__), filename)).readlines())
-
+         path = os.path.join(os.path.dirname(__file__), filename)
+         with open(path, "r", encoding="utf-8") as f:
+            prompt_dict[filename.split(".")[0]] = f.read()
 
 prompt_dict['searcher_sys_prompt'] = """
 你是 Searcher agent，负责面向金融领域的检索工作。
 - 通过选择适当的工具，按照要求获取股票行情、公司公告、新闻等。
-- 谨慎调用search engine工具，避免调用次数过多浪费资源。
+- 如果用户提供了候选材料，必须先判断用户提供的候选材料是否已经覆盖当前检索需求；若已完全覆盖，应优先基于这些材料作答，并仅在必要时使用 read_material 完整阅读。如果候选材料中的信息不足以完全回答问题，需要额外信息时，务必调用工具获取候选材料中缺失的信息。
 - 回答中出现的任何数据、新闻、公告、行情或其他事实类信息，都必须标注来源，在引用内容后使用 [ref_id:xxx|可选的精确位置描述] 格式给出唯一标识。
 - 回答中出现的任何数字，也必须标注来源，在引用内容后使用 [ref_id:xxx|可选的精确位置描述] 格式给出唯一标识。
 """
@@ -95,14 +96,14 @@ prompt_dict['verifier_sys_prompt'] = """
 2. 检查所写内容是否符合要点的写作要求，是否覆盖所有关键点；
 3. 对比参考范例，所写内容是否保持相当或者更高的水准。
 二、事实正确性
-1. 本章正文中所有引用的 material 都必须被核查：
+1. 本章正文中所有引用的 material （不包含图片 chart）都必须被核查：
    - 对每一个 material_id，通过工具读取对应 material 的内容；
    - 比对 material 中的数据、事实、日期、关系，与正文中的表述是否一致：
      - 数值是否匹配（例如营收、增速、估值倍数等）；
      - 时间是否匹配（例如“2024Q1”“最近一年”“过去三年”）；
      - 关系是否匹配（例如“谁收购谁”“谁与谁签订长期协议”）。
 
-
+核查内容不包含图片 chart， 因此你不需要对所有占位符图表引用进行核查。
 在给出审核结论时，请严格按照下面的结构化格式输出：
 
 第一部分：总体结论

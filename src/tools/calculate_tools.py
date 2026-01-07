@@ -15,12 +15,14 @@ from agentscope.message import TextBlock, ImageBlock, Base64Source
 from agentscope.tool import ToolResponse
 from agentscope.tool._coding._python import execute_python_code
 from ..memory.short_term import ShortTermMemoryStore
-
+from ..memory.long_term import LongTermMemoryStore
+from ..utils.get_entity_info import get_entity_info
 class CalculateTools:
     """金融研报场景的计算工具集合。"""
 
-    def __init__(self, short_term: Optional[ShortTermMemoryStore] = None) -> None:
+    def __init__(self, short_term: ShortTermMemoryStore, long_term: LongTermMemoryStore) -> None:
         self.short_term = short_term
+        self.long_term = long_term
 
     # --------- 通用内部工具函数 ---------
     def _get_required(self, params: Dict[str, Any], key: str) -> float:
@@ -47,39 +49,110 @@ class CalculateTools:
         result_type: str | None,
         params: Dict[str, Any] | None = None,
         code: str | None = None,
+        description: str | None = None,
     ) -> str:
         """
         把本次计算的输入输出写入 material，并返回 ref_id。
         """
 
         ref_id = f"{tool_name}_result_{int(time.time())}"
+
+        source = "计算工具"
         if code:
-            description = f"自行编写python代码进行数据分析或计算结果"
+            final_description = (description or "").strip() or "自定义 Python 数据分析/计算结果"
         else:
-            description = f"系统预定义工具 {tool_name}:{sub_type} 计算结果"
-        source = "calculate_tools_result"
+            tool_label_map = {
+                "calculate_valuation_metric": "估值指标计算",
+                "calculate_financial_ratio": "财务比率计算",
+                "calculate_cashflow_metric": "现金流指标计算",
+                "calculate_timeseries_transform": "时间序列变换",
+                "calculate_forecast_metric": "预测辅助计算",
+                "calculate_math_metric": "数学计算",
+            }
 
+            subtype_label_map = {
+                "calculate_valuation_metric": {
+                    "pe": "市盈率（PE）",
+                    "peg": "PEG",
+                    "pb": "市净率（PB）",
+                    "ev": "企业价值（EV）",
+                    "ev_ebitda": "EV/EBITDA",
+                    "ev_ebit": "EV/EBIT",
+                    "dcf": "现金流折现（DCF）",
+                    "terminal_value": "终值（Terminal Value）",
+                    "discount_factor": "折现因子（Discount Factor）",
+                    "wacc": "加权平均资本成本（WACC）",
+                    "cost_equity": "股权成本（CAPM）",
+                },
+                "calculate_financial_ratio": {
+                    "roe": "净资产收益率（ROE）",
+                    "roic": "投入资本回报率（ROIC）",
+                    "gross_margin": "毛利率（Gross Margin）",
+                    "op_margin": "营业利润率（Operating Margin）",
+                    "net_margin": "净利率（Net Margin）",
+                    "yoy": "同比增速（YoY）",
+                    "qoq": "环比增速（QoQ）",
+                    "cagr": "复合年增长率（CAGR）",
+                    "de_ratio": "资产负债率/杠杆（D/E）",
+                    "interest_coverage": "利息保障倍数（Interest Coverage）",
+                },
+                "calculate_cashflow_metric": {
+                    "fcf": "自由现金流（FCF）",
+                    "nopat": "税后营业利润（NOPAT）",
+                    "fcff": "企业自由现金流（FCFF）",
+                    "ttm": "TTM 合计（最近12个月）",
+                },
+                "calculate_timeseries_transform": {
+                    "align_quarterly_to_annual": "季度数据聚合为年度数据",
+                    "rolling_average": "滑动平均（Rolling Average）",
+                    "annualize_quarterly_value": "单季值年化",
+                },
+                "calculate_forecast_metric": {
+                    "project_revenue": "收入预测序列",
+                    "project_margin": "利润率预测序列",
+                    "discount_series": "现金流折现序列",
+                },
+                "calculate_math_metric": {
+                    "npv": "净现值（NPV）",
+                    "linear_regression": "线性回归拟合（Linear Regression）",
+                },
+            }
 
+            tool_label = tool_label_map.get(tool_name, tool_name)
+            sub_label = ""
+            if sub_type:
+                sub_label = subtype_label_map.get(tool_name, {}).get(sub_type, str(sub_type))
+
+            if sub_label:
+                base_description = f"调用工具进行{tool_label}：{sub_label}"
+            else:
+                base_description = f"调用工具进行{tool_label}"
+
+            extra = (description or "").strip()
+            final_description = f"{base_description} {extra}" if extra else base_description
         content = [
             {
-                "description":description,
+                "description": final_description,
                 "tool": tool_name,
                 "sub_type": sub_type,
-                "parameters": params or "",
+                "parameters": params or {},
                 "code": code or "",
-                "result_type": result_type,   # 新增字段
+                "result_type": result_type,
                 "result": result,
             }
         ]
+        entity = get_entity_info(self.long_term, final_description);
+
         try:
             self.short_term.save_material(
                 ref_id=ref_id,
-                content=content,           # dict -> JSON 文件
-                description=description,   # 包含使用的工具名称
+                content=content,
+                description=final_description,
+                entity=entity,
                 source=source,
             )
         except Exception:
-            ref_id = ""
+            return ""
 
         return ref_id
 
@@ -100,6 +173,7 @@ class CalculateTools:
             "cost_equity",
         ],
         params: Dict[str, Any],
+        description: str | None = None,
     ) -> ToolResponse:
         """
         预定义金融计算工具，计算常见估值类指标，并保存计算结果到Material当中，返回Material标识ref_id。
@@ -107,6 +181,7 @@ class CalculateTools:
             {
               "metric_type": "<见下方枚举之一>",
               "params": { ... 对应该类型的参数 ... }
+              "description": "<可选，对本次计算的补充说明文字，建议简要说明计算对象（如股票名称）、时间范围以及所计算的指标或变换>"
             }
 
         通用约定：
@@ -310,6 +385,7 @@ class CalculateTools:
                 params=params,
                 result=result,
                 result_type="float",
+                description=description,
             )
 
             text_block: TextBlock = {
@@ -347,6 +423,7 @@ class CalculateTools:
             "interest_coverage",
         ],
         params: Dict[str, Any],
+        description: str | None = None,
     ) -> ToolResponse:
         """
         预定义金融计算工具，用于计算常见财务比率，并保存计算结果到Material当中，返回Material标识ref_id。
@@ -355,6 +432,7 @@ class CalculateTools:
             {
               "ratio_type": "<见下方枚举之一>",
               "params": { ... 对应该类型的参数 ... }
+              "description": "<可选，对本次计算的补充说明文字，建议简要说明计算对象（如股票名称）、时间范围以及所计算的指标或变换>"
             }
 
         通用约定：
@@ -521,6 +599,7 @@ class CalculateTools:
                 params=params,
                 result=result,
                 result_type="float",
+                description=description,
             )
             
             text_block: TextBlock = {
@@ -548,6 +627,7 @@ class CalculateTools:
         self,
         metric_type: Literal["fcf", "nopat", "fcff", "ttm"],
         params: Dict[str, Any],
+        description: str | None = None,
     ) -> ToolResponse:
         """
         预定义金融计算工具，用于计算自由现金流等与现金流相关的指标，并保存计算结果到Material当中，返回Material标识ref_id。
@@ -556,6 +636,7 @@ class CalculateTools:
             {
               "metric_type": "<见下方枚举之一>",
               "params": { ... 对应该类型的参数 ... }
+              "description": "<可选，对本次计算的补充说明文字，建议简要说明计算对象（如股票名称）、时间范围以及所计算的指标或变换>"
             }
 
         通用约定：
@@ -644,6 +725,7 @@ class CalculateTools:
                 params=params,
                 result=result,
                 result_type="float",
+                description=description,
             )
 
             text_block: TextBlock = {
@@ -675,6 +757,7 @@ class CalculateTools:
             "annualize_quarterly_value",
         ],
         params: Dict[str, Any],
+        description: str | None = None,
     ) -> ToolResponse:
         """
         预定义金融计算工具，用于对时间序列进行常见的变换与对齐处理，并保存计算结果到Material当中，返回Material标识ref_id。
@@ -683,6 +766,7 @@ class CalculateTools:
             {
               "transform_type": "<见下方枚举之一>",
               "params": { ... 对应该类型的参数 ... }
+              "description": "<可选，对本次计算的补充说明文字，建议简要说明计算对象（如股票名称）、时间范围以及所计算的指标或变换>"
             }
 
         通用约定：
@@ -775,6 +859,7 @@ class CalculateTools:
                 params=params,
                 result=result,
                 result_type="float",
+                description=description,
             )
 
             text_block: TextBlock = {
@@ -801,6 +886,7 @@ class CalculateTools:
         self,
         forecast_type: Literal["project_revenue", "project_margin", "discount_series"],
         params: Dict[str, Any],
+        description: str | None = None,
     ) -> ToolResponse:
         """
         预定义金融计算工具，预测场景下的常用辅助计算工具，并保存计算结果到Material当中，返回Material标识ref_id。
@@ -809,6 +895,7 @@ class CalculateTools:
             {
               "forecast_type": "<见下方枚举之一>",
               "params": { ... 对应该类型的参数 ... }
+              "description": "<可选，对本次计算的补充说明文字，建议简要说明计算对象（如股票名称）、时间范围以及所计算的指标或变换>"
             }
 
         通用约定：
@@ -908,6 +995,7 @@ class CalculateTools:
                 params=params,
                 result=result,
                 result_type="float",
+                description=description,
             )
 
             text_block: TextBlock = {
@@ -934,6 +1022,7 @@ class CalculateTools:
         self,
         metric_type: Literal["npv", "linear_regression"],
         params: Dict[str, Any],
+        description: str | None = None,
     ) -> ToolResponse:
         """
         预定义的通用数学类工具，目前支持：
@@ -945,6 +1034,7 @@ class CalculateTools:
             {
               "metric_type": "<见下方枚举之一>",
               "params": { ... 对应该类型的参数 ... }
+              "description": "<可选，对本次计算的补充说明文字，建议简要说明计算对象（如股票名称）、时间范围以及所计算的指标或变换>"
             }
 
         通用约定：
@@ -1122,6 +1212,7 @@ class CalculateTools:
                 params=params,
                 result=result,
                 result_type="float",
+                description=description,
             )
 
             text_block: TextBlock = {
@@ -1203,7 +1294,7 @@ class CalculateTools:
                 若为 None，则不注入任何material变量。
                 注意，可以被注入到变量的material必须包含数值数据，比如TABLE会完整加载为dataframe，calculate_*_result会提取其中result字段的数据。
             description (str | None):
-                可选对本次计算的说明文字，若为空则使用默认描述。
+                可选，对本次计算的补充说明文字，建议简要说明计算对象（如股票名称）、时间范围以及所计算的指标或变换。
 
         Returns:
             ToolResponse:
@@ -1472,10 +1563,11 @@ else:
 
         ref_id = self._save_calc_result(
                 tool_name="calculate_or_analysis_by_python_code",
-                sub_type="python code",
+                sub_type=None,
                 result=structured_result,
                 result_type=result_type,
                 code=code,
+                description=description,
             )
 
         text_block: TextBlock = {
