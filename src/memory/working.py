@@ -15,7 +15,7 @@ class Segment:
     requirements: str = None
     reference: str = None
     content: str = None
-    template: List[str] = None
+    template: str = None
     evidences: List[str] = None
 
     def __str__(self, with_requirements=True, with_reference=True, with_content=True, with_evidence=True):
