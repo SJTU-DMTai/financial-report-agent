@@ -34,5 +34,12 @@ dependencies = [
     "jieba",
     "trafilatura",
     "marker-pdf",
-    "dataclasses-json"
+    "dataclasses-json",
+    "seaborn",
+    "PyYAML",
+    "PyMuPDF",
+    "htmldate",
+    "beautifulsoup4",
+    "requests",
+    "Markdown",
 ]
