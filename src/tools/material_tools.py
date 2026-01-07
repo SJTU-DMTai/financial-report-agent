@@ -109,10 +109,12 @@ def fmt_yyyymmdd(s: str) -> str:
         if len(s) == 8 and s.isdigit():
             return datetime.strptime(s, "%Y%m%d").strftime("%Y-%m-%d")
         return s  # 已是 YYYY-MM-DD 或其他格式则原样返回
+
 class MaterialTools:
     def __init__(self, short_term: Optional[ShortTermMemoryStore] = None, long_term: Optional[LongTermMemoryStore] = None) -> None:
         self.short_term = short_term
         self.long_term = long_term
+
     def read_material(
             self,
             ref_id: str,
