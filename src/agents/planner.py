@@ -6,7 +6,7 @@ from agentscope.memory import InMemoryMemory
 from agentscope.tool import Toolkit
 from agentscope.model import DashScopeChatModel
 
-from memory.working import Section
+from ..memory.working import Section
 from ..tools.outline_tools import *
 from ..tools.search_tools import *
 from ..memory.short_term import ShortTermMemoryStore
