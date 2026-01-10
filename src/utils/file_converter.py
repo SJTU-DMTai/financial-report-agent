@@ -551,14 +551,12 @@ def md_to_pdf(
     return text
 
 
-def detect_section(line: str) -> Tuple[int, str]:
+def detect_section(line: str) -> Tuple[int, str, bool]:
     """
     Detect sections using multiple patterns.
     """
-    line2 = re.sub(r"<span.+</span>", "", line).strip()
-    # Pattern 1: Standard (1., 1.1, 1.1.1)
-    pattern1 = r'#+\s+([0-9一二三四五六七八九十IVX]+(?:\.\d+)*)[、.\s章节]?\s*(.+)'
-    match = re.match(pattern1, line2)
+    pattern1 = r'#+\s+<span id=.+></span>\s+([0-9一二三四五六七八九十IVX]+(?:\.\d+)*)[、.\s章节]?\s*(.+)'
+    match = re.match(pattern1, line)
     if match:
         section_num = match.group(1)
         title = match.group(2).strip()
@@ -566,22 +564,20 @@ def detect_section(line: str) -> Tuple[int, str]:
         title = f"{section_num} {title}"
         if section_num.count('.') == 0:
             title += "."
-        return level, title
+        return level, title, True
 
     pattern2 = r'#+\s+<span id=.+></span>\s*(.+)$'
     match = re.match(pattern2, line)
     if match and re.search(r"[图表][\s*]+\d", line) is None:
         title = match.group(1).strip()
         level = line.split(" ")[0].count("#")
-        return level, title
-    return 0, ""
+        return level, title, True
+    return 0, "", False
 
 def clean_ocr_text(text, pdf_name):
     processed_lines = []
 
-    found_h1 = False
-    found_section_1 = False
-    summary_content = []
+    has_section_number = False
     skip_toc = False
     title = None
 
@@ -610,7 +606,7 @@ def clean_ocr_text(text, pdf_name):
                 # Skip TOC content (until we find a numbered section or new header)
                 if skip_toc:
                     if line.startswith('#'):
-                        level, title = detect_section(line)
+                        level, title, has_section_number = detect_section(line)
                         if level:
                             skip_toc = False
                     else:
@@ -618,7 +614,7 @@ def clean_ocr_text(text, pdf_name):
 
                 # Detect if line starts with markdown header
                 if re.search(r"^#+ ", line):
-                    level, title = detect_section(line)
+                    level, title, has_section_number = detect_section(line)
                     if level:
                         # Use level based on section number
                         processed_lines.append('#' * max(2, min(level, 6)) + ' ' + title)
@@ -626,6 +622,14 @@ def clean_ocr_text(text, pdf_name):
                         processed_lines.append('**' + line.strip("#").strip() + '**')
                 else:
                     processed_lines.append(line)
+    """
+    If there is no section number, assume that the max. level is 3 (i.e., ###).
+    """
+    if not has_section_number:
+        for i, line in enumerate(processed_lines):
+            if match := re.match(r"^(#{4,6})\s+(.+)", line):
+                content = match.group(2)
+                processed_lines[i] = '#' * 3 + ' ' + content
     return '\n\n'.join(processed_lines)
 
 def pdf_to_markdown(
