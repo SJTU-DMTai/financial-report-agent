@@ -44,7 +44,6 @@ def build_planner_toolkit(
     manuscript: Section,
     short_term: ShortTermMemoryStore,
     long_term: LongTermMemoryStore,
-    searcher: ReActAgent,
 ) -> Toolkit:
     """创建 Planner 专用 Toolkit。"""
     toolkit = Toolkit()
@@ -54,7 +53,4 @@ def build_planner_toolkit(
     if use_demo:
         toolkit.register_tool_function(outline_tools.read_demonstration)
     toolkit.register_tool_function(outline_tools.replace_outline)
-
-    search_tools = SearchTools(short_term=short_term,long_term=long_term)
-    toolkit.register_tool_function(search_tools.searcher_tool(searcher))
     return toolkit

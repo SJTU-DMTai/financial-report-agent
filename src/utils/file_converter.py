@@ -570,23 +570,13 @@ def detect_section(line: str) -> Tuple[int, str]:
 
     pattern2 = r'#+\s+<span id=.+></span>\s*(.+)$'
     match = re.match(pattern2, line)
-    if match and re.search(r"[图表]\s?\d", line) is None:
+    if match and re.search(r"[图表][\s*]+\d", line) is None:
         title = match.group(1).strip()
         level = line.split(" ")[0].count("#")
         return level, title
     return 0, ""
 
-
-def pdf_to_markdown(
-    pdf_path: Union[str, Path], output_path: Union[str, Path]
-):
-    """
-    将 demonstration report PDF 转换为结构化 Markdown，提取图片和表格并以特定格式嵌入。
-    """
-    converter = PdfConverter(artifact_dict=create_model_dict())
-    rendered = converter(str(pdf_path))
-    text, metadata, images = text_from_rendered(rendered)
-
+def clean_ocr_text(text, pdf_name):
     processed_lines = []
 
     found_h1 = False
@@ -602,7 +592,7 @@ def pdf_to_markdown(
         if title is None:
             if "[Table\\_Title]" not in text:
                 if match := re.match(r"^#+ (.+)", line):
-                    title = match.group(1) if detect_section(line)[0] == 0 else pdf_path.name
+                    title = match.group(1) if detect_section(line)[0] == 0 else pdf_name
                     processed_lines.append("# " + title)
             else:
                 if match := re.match(r"^#{1,3}\s+\[Table\\_Title] (.+)", line):
@@ -631,12 +621,26 @@ def pdf_to_markdown(
                     level, title = detect_section(line)
                     if level:
                         # Use level based on section number
-                        processed_lines.append('#' * min(level, 6) + ' ' + title)
+                        processed_lines.append('#' * max(2, min(level, 6)) + ' ' + title)
                     else:
                         processed_lines.append('**' + line.strip("#").strip() + '**')
                 else:
                     processed_lines.append(line)
-    final_text = '\n\n'.join(processed_lines)
+    return '\n\n'.join(processed_lines)
+
+def pdf_to_markdown(
+    pdf_path: Union[str, Path], output_path: Union[str, Path]
+):
+    """
+    将 demonstration report PDF 转换为结构化 Markdown，提取图片和表格并以特定格式嵌入。
+    """
+    if isinstance(pdf_path, str):
+        pdf_path = Path(pdf_path)
+
+    converter = PdfConverter(artifact_dict=create_model_dict())
+    rendered = converter(str(pdf_path))
+    text, metadata, images = text_from_rendered(rendered)
+    final_text = clean_ocr_text(text, pdf_path.name.replace(".pdf", "").split("_")[-1])
     if isinstance(output_path, Path):
         output_path = Path(output_path)
     if not output_path.parent.exists():
