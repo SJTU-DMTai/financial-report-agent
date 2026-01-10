@@ -1,12 +1,18 @@
 # config.yaml
 models:
-  default: deepseek-v3.1-nex-n1   # 默认使用的模型 id
+  default: gpt-4o-mini   # 默认使用的模型 id
 
   # grok:
   #   provider: openrouter
   #   model_name: x-ai/grok-4.1-fast:free
   #   base_url_env: https://openrouter.ai/api/v1
   #   stream: false
+
+  gpt-4o-mini:
+    provider: openrouter
+    model_name: openai/gpt-4o-mini
+    base_url_env: https://openrouter.ai/api/v1
+    stream: false
 
   devstral:
     provider: openrouter

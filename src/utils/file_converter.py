@@ -1,5 +1,30 @@
 # -*- coding: utf-8 -*-
-from memory.working import Section, Segment
+
+# ========== 在导入任何模块之前设置环境变量 ==========
+import os
+import sys
+
+# 禁用所有进度条显示
+os.environ["TQDM_DISABLE"] = "1"  # 全局禁用 tqdm 进度条
+os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"  # 禁用 huggingface 进度条
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"  # 减少 transformers 输出
+
+# Windows 特定编码修复
+if sys.platform == 'win32':
+    try:
+        import io
+        # 修复标准输出的编码
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='ignore')
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='ignore')
+        
+        # 设置控制台代码页为 UTF-8
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        kernel32.SetConsoleOutputCP(65001)
+    except:
+        pass
+    
+from src.memory.working import Section, Segment
 from src.memory.short_term import ShortTermMemoryStore
 import pdfkit
 from pdfkit.configuration import Configuration

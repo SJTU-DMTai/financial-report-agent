@@ -7,7 +7,7 @@ from agentscope.agent import ReActAgent
 from agentscope.message import Msg, TextBlock
 from agentscope.tool import Toolkit, ToolResponse
 
-from memory.working import Section
+from ..memory.working import Section
 from ..memory.short_term import ShortTermMemoryStore
 from ..memory.long_term import OutlineExperienceStore
 
