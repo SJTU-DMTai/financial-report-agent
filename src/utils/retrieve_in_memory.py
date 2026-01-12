@@ -6,6 +6,9 @@ from dataclasses import asdict
 from typing import Any, Dict, List, Optional, Tuple
 import math
 import re
+import hashlib
+import pandas as pd
+
 from ..utils.get_entity_info import get_entity_info
 from ..memory.short_term import ShortTermMemoryStore, MaterialMeta
 from ..memory.long_term import LongTermMemoryStore
@@ -125,11 +128,11 @@ def _rule_score(
         if code in desc:
             score += 0.6
 
-    if name:
-        if (meta.entity or {}).get("name") == name:
-            score += 0.6
-        if name in desc:
-            score += 0.3
+    # if name:
+    #     if (meta.entity or {}).get("name") == name:
+    #         score += 0.6
+    #     if name in desc:
+    #         score += 0.3
 
     # 2) 时间加权
     years_q = time_sig.get("years") or set()
@@ -149,12 +152,12 @@ def _rule_score(
     if years_q:
         # meta.time 或 description 命中任一年
         if any(y in meta_time_text for y in years_q) or any(y in desc for y in years_q):
-            score += 0.25
+            score += 0.5
 
     # 季度命中（允许字面出现 2025q3）
     for (y, q) in quarters_q:
         if (f"{y}q{q}" in desc) or (f"{y} q{q}" in desc) or (y in desc and q in desc):
-            score += 0.25
+            score += 0.5
             break
 
     # 3) 关键词命中（指标/任务词）
@@ -162,7 +165,7 @@ def _rule_score(
     active = [kw for kw in keywords if kw and kw in query]
     if active:
         hit = sum(1 for kw in active if kw in desc)
-        score += min(0.12 * hit, 0.6)
+        score += min(0.3 * hit, 1.2)
 
     return score
 
@@ -240,7 +243,7 @@ def retrieve_in_memory(
 ) -> List[Dict[str, Any]]:
     """
     三层策略：
-      层0：结构化过滤/加权（entity / time）
+      层0：结构化过滤（entity / time），去重
       层1：规则召回（关键词/代码/简称命中），截断到 pre_k
       层2：对候选集使用 BM25 重排
 
@@ -273,6 +276,56 @@ def retrieve_in_memory(
         same_name = [m for m in metas_all if (m.entity or {}).get("name") == name]
         if same_name:
             metas = same_name
+
+    # 去重
+    seen = set()
+    metas_dedup: List[MaterialMeta] = []
+    for m in metas:
+        key = None
+        try:
+            m_type = getattr(m.m_type, "value", str(m.m_type))
+
+            # (1) table: 前3行+后3行 hash
+            if m_type == "table":
+                df = short_term.load_material(m.ref_id)
+                if isinstance(df, pd.DataFrame) and not df.empty:
+                    head = df.head(3).fillna("")
+                    tail = df.tail(3).fillna("")
+                    MAX_CELL_CHARS = 200
+
+                    for part in (head, tail):
+                        for col in part.columns:
+                            part[col] = part[col].apply(
+                                lambda v: (v[:MAX_CELL_CHARS] if isinstance(v, str) and len(v) > MAX_CELL_CHARS else v)
+                            )
+
+                    sig_src = head.to_csv(index=False) + "\n---\n" + tail.to_csv(index=False)
+                    key = "table:" + hashlib.md5(sig_src.encode("utf-8")).hexdigest()
+
+            # (2) search_engine_*: 用首条 link 去重
+            elif isinstance(m.ref_id, str) and m.ref_id.startswith("search_engine_"):
+                data = short_term.load_material(m.ref_id)
+                link = ""
+                if isinstance(data, list) and data:
+                    first = data[0] if isinstance(data[0], dict) else None
+                    if isinstance(first, dict):
+                        link = (first.get("link") or "").strip()
+                        if link:
+                            link = link.split("#", 1)[0]  # 去掉 fragment，避免微小差异
+                if link:
+                    key = "search:" + link
+
+        except Exception:
+            key = None  # 任何异常都不去重，避免误删
+
+        if key is not None:
+            if key in seen:
+                continue
+            seen.add(key)
+        metas_dedup.append(m)
+
+    metas = metas_dedup
+    
 
     time_sig = _extract_query_time_signals(query)
     kw = _DEFAULT_KEYWORDS

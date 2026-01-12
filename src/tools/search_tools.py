@@ -236,9 +236,9 @@ class SearchTools:
                     published_date = item.get("published_date")
                     time = {"point": published_date} if published_date else None
                     
-                    entity = get_entity_info(long_term=self.long_term, text=query)
-                    if entity is None:
-                        entity = get_entity_info(long_term=self.long_term, text=candidates[i]["page_description"]+candidates[i]["page_text"])
+                    # entity = get_entity_info(long_term=self.long_term, text=query)
+                    
+                    entity = get_entity_info(long_term=self.long_term, text=candidates[i]["page_description"]+candidates[i]["page_text"])
                     
                     desc = ""
                     if published_date:
@@ -246,8 +246,8 @@ class SearchTools:
                     
                     if entity:
                         desc = desc+f"发布关于{entity['name']}（{entity['code']}）的内容:"
-                    else:
-                        desc = desc+f"发布关于{query}的内容:"
+                    # else:
+                    #     desc = desc+f"发布关于{query}的内容:"
                     desc = desc + candidates[i]["title"] + " "
                     desc = desc + candidates[i]["page_description"]+ " "
                     link = candidates[i].get("link", "")
