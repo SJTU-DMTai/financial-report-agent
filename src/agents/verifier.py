@@ -25,22 +25,37 @@ def create_verifier_agent(
     model,
     formatter,
     toolkit: Toolkit,
+    multi_source_verification : bool = False,
 ) -> ReActAgent:
-    return ReActAgent(
-        name="Verifier",
-        sys_prompt=prompt_dict['verifier_sys_prompt'],
-        model=model,
-        memory=InMemoryMemory(),
-        formatter=formatter,
-        toolkit=toolkit,
-        parallel_tool_calls=True,
-        max_iters=15,
-    )
+    if not multi_source_verification:
+        return ReActAgent(
+            name="Verifier",
+            sys_prompt=prompt_dict['verifier_sys_prompt'],
+            model=model,
+            memory=InMemoryMemory(),
+            formatter=formatter,
+            toolkit=toolkit,
+            parallel_tool_calls=True,
+            max_iters=15,
+        )
+
+    else:
+        return ReActAgent(
+            name="Verifier",
+            sys_prompt=prompt_dict['multi_source_verify_sys_prompt'],
+            model=model,
+            memory=InMemoryMemory(),
+            formatter=formatter,
+            toolkit=toolkit,
+            parallel_tool_calls=True,
+            max_iters=15,
+        )
 
 # ---- Toolkit Builder ----
 def build_verifier_toolkit(
     short_term: ShortTermMemoryStore,
     long_term: LongTermMemoryStore,
+    multi_source_verification : bool = False,
 ) -> Toolkit:
     toolkit = Toolkit()
 
@@ -49,9 +64,39 @@ def build_verifier_toolkit(
     # toolkit.register_tool_function(manuscript_tools.read_manuscript_section)
     # toolkit.register_tool_function(manuscript_tools.count_manuscript_words)
     material_tools = MaterialTools(short_term=short_term, long_term=long_term)
-    toolkit.register_tool_function(
-        material_tools.read_material
-    )
+    search_tools = SearchTools(short_term=short_term, long_term=long_term)
+    if not multi_source_verification:
+        toolkit.register_tool_function(
+            material_tools.read_material
+        )
 
+    else:
+        toolkit.create_tool_group(
+        group_name="multi_source_search",
+        description="多源交叉验证",
+        active=False,
+        )
+        toolkit.register_tool_function(material_tools.fetch_history_price_material, group_name="multi_source_search")
+        toolkit.register_tool_function(material_tools.fetch_stock_news_material, group_name="multi_source_search")
+        toolkit.register_tool_function(material_tools.fetch_disclosure_material, group_name="multi_source_search")
+        toolkit.register_tool_function(material_tools.fetch_balance_sheet_material, group_name="multi_source_search")
+        toolkit.register_tool_function(material_tools.fetch_profit_table_material, group_name="multi_source_search")
+        toolkit.register_tool_function(material_tools.fetch_cashflow_table_material, group_name="multi_source_search")
+        toolkit.register_tool_function(material_tools.fetch_top10_float_shareholders_material, group_name="multi_source_search")
+        toolkit.register_tool_function(material_tools.fetch_top10_shareholders_material, group_name="multi_source_search")
+        toolkit.register_tool_function(material_tools.fetch_main_shareholders_material, group_name="multi_source_search")
+        toolkit.register_tool_function(material_tools.fetch_shareholder_count_detail_material, group_name="multi_source_search")
+        toolkit.register_tool_function(material_tools.fetch_shareholder_change_material, group_name="multi_source_search")
+        toolkit.register_tool_function(material_tools.fetch_business_description_material, group_name="multi_source_search")
+        toolkit.register_tool_function(material_tools.fetch_business_composition_material, group_name="multi_source_search")
+        toolkit.register_tool_function(search_tools.search_engine, group_name="multi_source_search")
+        toolkit.register_tool_function(material_tools.read_material)
+
+        toolkit.create_tool_group(
+            group_name="numeric_consistency",
+            description="计算数值一致性验证",
+            active=False,
+        )
     return toolkit
+
 

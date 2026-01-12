@@ -109,12 +109,10 @@ def fmt_yyyymmdd(s: str) -> str:
         if len(s) == 8 and s.isdigit():
             return datetime.strptime(s, "%Y%m%d").strftime("%Y-%m-%d")
         return s  # 已是 YYYY-MM-DD 或其他格式则原样返回
-
 class MaterialTools:
     def __init__(self, short_term: Optional[ShortTermMemoryStore] = None, long_term: Optional[LongTermMemoryStore] = None) -> None:
         self.short_term = short_term
         self.long_term = long_term
-
     def read_material(
             self,
             ref_id: str,
@@ -141,31 +139,6 @@ class MaterialTools:
                 - 对于 JSON list：可选，用于对每个条目提取该字段。
                 - 对于表格：可选，用于筛选特定列（如 "Date,Close"）。
         """
-
-        # """
-        # 统一读取material。支持读取全文、通过参数、按行/条目截取其中部分。
-        # - 表格（MaterialType.TABLE）：按行号切片，可选按列筛选。
-        # - 文本（MaterialType.TEXT）：按行号切片。
-        # - JSON（MaterialType.JSON）：按列表索引切片，可通过 query_key 获取特定条目内容。
-
-        # 如果start_index， end_index，query_key都为空表示读取全文。
-        
-        # Args:
-        #     ref_id (str): Material 的唯一标识 ID。
-        #     start_index (int | None): 
-        #         - 对于表格：起始行号（包含）。
-        #         - 对于文本/Markdown：起始行号（包含）。
-        #         - 对于 JSON list：起始条目索引（包含）。
-        #         - 如果为空表示从第0行开始。
-        #     end_index (int | None): 
-        #         - 对于表格：结束行号（不包含）。
-        #         - 对于文本/Markdown：结束行号（不包含）。
-        #         - 对于 JSON list：结束条目索引（不包含）。
-        #         - 如果为空表示到最后一条结束。
-        #     query_key (str | None):
-        #         - 对于 JSON list：可选，用于对每个条目提取该字段。
-        #         - 对于表格：可选，用于筛选特定列（如 "Date,Close"）。
-        # """
         if start_index is not None:
             start_index = int(start_index)
         if end_index is not None:
@@ -182,8 +155,6 @@ class MaterialTools:
             # 2. 策略分发 (Strategy Dispatch)
             if meta.m_type == MaterialType.TABLE:
                 return self._read_table_impl(ref_id, start_index, end_index, query_key)
-            elif meta.m_type == MaterialType.TEXT:
-                return self._read_text_impl(ref_id, start_index, end_index)
             elif meta.m_type == MaterialType.JSON:
                 return self._read_json_impl(ref_id, query_key)
             else:  
@@ -262,27 +233,6 @@ class MaterialTools:
             metadata={"ref_id": ref_id, "type": "table", "rows": len(sliced_df)}
         )
 
-    def _read_text_impl(self, ref_id, start_line, end_line):
-        # 适用于 .txt, .md
-        content = self.short_term.load_material(ref_id) # 返回 str
-        lines = content.split('\n')
-        total_lines = len(lines)
-
-        start = start_line if start_line is not None else 0
-        end = end_line if end_line is not None else total_lines
-
-        # 截取
-        sliced_lines = lines[start:end]
-        preview_str = "\n".join(sliced_lines)
-
-        text = (f"[read_material] ID: {ref_id}\n"
-                f"完整 material 共 {total_lines} 行。已读取范围: 行 [{start}, {end})。\n"
-                f"内容:\n{preview_str}")
-        
-        return ToolResponse(
-            content=[TextBlock(type="text", text=text)],
-            metadata={"ref_id": ref_id, "type": "text", "lines": len(sliced_lines)}
-        )
 
     def _read_json_impl(
         self,
@@ -331,6 +281,7 @@ class MaterialTools:
             df: pd.DataFrame,
             ref_id: str,
             description: str,
+            source: str,
             entity:Dict[str,str] | None = None,
             time:Dict[str,str] | None = None,
     ) -> int:
@@ -339,7 +290,8 @@ class MaterialTools:
             self.short_term.save_material(ref_id=ref_id, 
                                           content=df, 
                                           description=description,
-                                          source="AKshare API",
+                                          source=source,
+                                        #   source="AKshare API",
                                           entity=entity,
                                           time=time)
         return len(df)
@@ -376,6 +328,7 @@ class MaterialTools:
         self._save_df_to_material(df=df,
                                 ref_id=ref_id,
                                 description=description,
+                                source="AKshare API:eastmoney",
                                 entity=entity,
                                 time={"point":time_point},
                                 )
@@ -433,7 +386,12 @@ class MaterialTools:
         time_range = {"start": fmt_yyyymmdd(start_date),"end":fmt_yyyymmdd(end_date)}
         description = f"{entity['name']}（{entity['code']}）股票历史行情数据（{fmt_yyyymmdd(start_date)}~{fmt_yyyymmdd(end_date)}）"
 
-        self._save_df_to_material(df=df, ref_id=ref_id,description=description,entity=entity,time=time_range)
+        self._save_df_to_material(df=df,
+                                    ref_id=ref_id,
+                                    description=description,
+                                    source="AKshare API:eastmoney",
+                                    entity=entity,
+                                    time=time_range)
 
         header = (
             f"[fetch_history_price_material] {symbol} {period} 股价历史行情 "
@@ -455,26 +413,103 @@ class MaterialTools:
     # ===================== 金融新闻 =====================
     async def fetch_stock_news_material(
             self,
-            symbol: str,    
+            symbol: str = "",  
+            keyword: str = "",  
     ) -> ToolResponse:
         """获取指定个股的新闻资讯数据，并保存表格结果到Material当中，返回Material标识ref_id。
-        相关的最新新闻资讯（默认为当日最近约 100 条），包括新闻标题、内容摘要、发布时间、来源和链接等，
+        相关的最新新闻资讯（默认为当日最近约 100 条），包括新闻标题、内容摘要、发布时间、来源等，
         适用场景：为个股研报生成“新闻动态”“舆情分析”等部分提供原始素材；需要快速获取近期与某股票相关的新闻列表。
 
         Args:
             symbol (str):
-                个股新闻检索关键词，通常为股票代码，例如 "603777"；
+                沪深京 A 股股票代码（不带市场标识），例如 "000001"；为空字符串时不做股票过滤。
+            keyword (str):
+                新闻检索关键词，例如 "新能源 储能 政策"；为空字符串时不做关键词过滤。
 
         """
-        df = ak.stock_news_em(symbol=symbol)
+        def stock_news_em(keyword: str = "603777") -> pd.DataFrame:
 
-        ref_id = f"{symbol}_news_{int(time_module.time())}"
-        entity = get_entity_info(long_term=self.long_term, text=symbol)
-        description = f"{entity['name']}（{entity['code']}）股票新闻资讯"
-        self._save_df_to_material(df=df, ref_id=ref_id,entity=entity,description=description)
-        header = f"[fetch_stock_news_material] 个股新闻（symbol={symbol}）"
+            url = "http://search-api-web.eastmoney.com/search/jsonp"
+            params = {
+                "cb": "cb",
+                "param": '{"uid":"",'
+                + f'"keyword":"{keyword}"'
+                + ',"type":["cmsArticleWebOld"],"client":"web","clientType":"web","clientVersion":"curr",'
+                + '"param":{"cmsArticleWebOld":{"searchScope":"default","sort":"default","pageIndex":1,'
+                + '"pageSize":100,"preTag":"<em>","postTag":"</em>"}}}',
+            }
+            headers = {
+                "User-Agent": "Mozilla/5.0"
+            }
+            r: requests.Response = requests.get(url, params=params, headers=headers)
+            data_text = r.text
+            data_json = json.loads(
+                re.search(r'^\w+\((.*)\)$', data_text).group(1)
+            )
+            temp_df = pd.DataFrame(data_json["result"]["cmsArticleWebOld"])
+            temp_df["url"] = "http://finance.eastmoney.com/a/" + temp_df["code"] + ".html"
+            temp_df.rename(
+                columns={
+                    "date": "发布时间",
+                    "mediaName": "文章来源",
+                    "code": "-",
+                    "title": "新闻标题",
+                    "content": "新闻内容",
+                    "url": "新闻链接",
+                    "image": "-",
+                },
+                inplace=True,
+            )
+            temp_df["关键词"] = symbol
+            temp_df = temp_df[
+                [
+                    # "关键词",
+                    "新闻标题",
+                    "新闻内容",
+                    "发布时间",
+                    "文章来源",
+                    # "新闻链接",
+                ]
+            ]
+            temp_df["新闻标题"] = (
+                temp_df["新闻标题"]
+                .str.replace(r"\(<em>", "", regex=True)
+                .str.replace(r"</em>\)", "", regex=True)
+            )
+            temp_df["新闻标题"] = (
+                temp_df["新闻标题"]
+                .str.replace(r"<em>", "", regex=True)
+                .str.replace(r"</em>", "", regex=True)
+            )
+            temp_df["新闻内容"] = (
+                temp_df["新闻内容"]
+                .str.replace(r"\(<em>", "", regex=True)
+                .str.replace(r"</em>\)", "", regex=True)
+            )
+            temp_df["新闻内容"] = (
+                temp_df["新闻内容"]
+                .str.replace(r"<em>", "", regex=True)
+                .str.replace(r"</em>", "", regex=True)
+            )
+            temp_df["新闻内容"] = temp_df["新闻内容"].str.replace(r"\u3000", "", regex=True)
+            temp_df["新闻内容"] = temp_df["新闻内容"].str.replace(r"\r\n", " ", regex=True)
+            return temp_df
+        df = stock_news_em(keyword=symbol+" "+keyword)
+
+        ref_id = f"{symbol or keyword}_news_{int(time_module.time())}"
+        entity = None
+        if symbol:
+            entity = get_entity_info(long_term=self.long_term, text=symbol)
+            description = f"{entity['name']}（{entity['code']}）股票新闻资讯 {keyword}"
+            new_df = stock_news_em(keyword=entity['name']+" "+keyword)
+            final_df=pd.concat([df, new_df], ignore_index=True)
+        else:
+            description = f"{keyword}新闻资讯"
+            final_df = df
+        self._save_df_to_material(df=final_df, ref_id=ref_id,source="AKshare API:eastmoney",entity=entity,description=description)
+        header = f"[fetch_stock_news_material] 股票新闻资讯"
         return _build_tool_response_from_df(
-            df,
+            final_df,
             ref_id=ref_id,
             header=header,
             extra_meta={"symbol": symbol},
@@ -647,7 +682,7 @@ class MaterialTools:
         if parts:
             description += " " + " ".join(parts)
         description = description + "信息披露公告"
-        self._save_df_to_material(df=df, ref_id=ref_id, entity=entity, description=description)
+        self._save_df_to_material(df=df, ref_id=ref_id, source="AKshare API:CNINFO", entity=entity, description=description)
         header = (
             f"[fetch_disclosure_material] 信息披露公告（symbol={symbol}, market={market}, "
             f"category={category or '全部'}, {start_date}~{end_date}）"
@@ -697,6 +732,7 @@ class MaterialTools:
             df=df, ref_id=ref_id,
             description=description,
             entity=entity,
+            source="AKshare API:Hithink",
             )
         header = f"[fetch_balance_sheet_material] 资产负债表（symbol={symbol}, indicator={indicator}）"
 
@@ -736,6 +772,7 @@ class MaterialTools:
         self._save_df_to_material(
             df=df, ref_id=ref_id,
             description=description,
+            source="AKshare API:Hithink",
             entity=entity,
             )
         header = f"[fetch_profit_table_material] 利润表（symbol={symbol}, indicator={indicator}）"
@@ -774,6 +811,7 @@ class MaterialTools:
         self._save_df_to_material(
             df=df, ref_id=ref_id,
             description=description,
+            source="AKshare API:Hithink",
             entity=entity,
             )
         header = f"[fetch_cashflow_table_material] 现金流量表（symbol={symbol}, indicator={indicator}）"
@@ -816,6 +854,7 @@ class MaterialTools:
         self._save_df_to_material(
             df=df, ref_id=ref_id,
             description=description,
+            source="AKshare API:eastmoney",
             entity=entity,
             time=time,
             )
@@ -855,6 +894,7 @@ class MaterialTools:
         self._save_df_to_material(
             df=df, ref_id=ref_id,
             description=description,
+            source="AKshare API:eastmoney",
             entity=entity,
             time=time,
             )
@@ -887,6 +927,7 @@ class MaterialTools:
         self._save_df_to_material(
             df=df, ref_id=ref_id,
             description=description,
+            source="AKshare API:Sina Finance",
             entity=entity,
             )
         header = f"[fetch_main_shareholders_material] 主要股东（symbol={symbol}）"
@@ -919,6 +960,7 @@ class MaterialTools:
         self._save_df_to_material(
             df=df, ref_id=ref_id,
             description=description,
+            source="AKshare API:eastmoney",
             entity=entity,
             )
         header = f"[fetch_shareholder_count_detail_material] 股东户数详情（symbol={symbol}）"
@@ -952,6 +994,7 @@ class MaterialTools:
         self._save_df_to_material(
             df=df, ref_id=ref_id,
             description=description,
+            source="AKshare API:Hithink",
             entity=entity,
             )
         header = f"[fetch_shareholder_change_material] 股东持股变动（symbol={symbol}）"
@@ -983,6 +1026,7 @@ class MaterialTools:
         self._save_df_to_material(
             df=df, ref_id=ref_id,
             description=description,
+            source="AKshare API:Hithink",
             entity=entity,
             )
 
@@ -1016,6 +1060,7 @@ class MaterialTools:
         self._save_df_to_material(
             df=df, ref_id=ref_id,
             description=description,
+            source="AKshare API:eastmoney",
             entity=entity,
             )
         header = f"[fetch_business_composition_material] 主营构成（symbol={symbol}）"
