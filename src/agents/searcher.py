@@ -47,6 +47,7 @@ def build_searcher_toolkit(
     material_tools = MaterialTools(short_term=short_term, long_term=long_term)
 
     toolkit.register_tool_function(get_retrieve_fn(short_term, long_term))
+    toolkit.register_tool_function(SearchTools.fetch_url_page_text)
 
     # search_tools = SearchTools(short_term=short_term)
     # toolkit.register_tool_function(search_tools.search_engine)
