@@ -83,16 +83,6 @@ class SearchTools:
 
         return text, img_urls
 
-    @staticmethod
-    async def fetch_url_page_text(url: str) -> str:
-        """返回url对应网页的文本结果。
-        Args:
-            url (str):
-                网页地址。
-        """
-        bytes = SearchTools._fetch_page_html(url)
-        page_text, img_urls = SearchTools._extract_text_and_images(bytes, url)
-        return page_text
 
     def _calculate_batch_relevance(self, query: str, candidates: List[Dict[str, Any]]) -> List[float]:
         """
@@ -371,6 +361,18 @@ class SearchTools:
 
         return search_with_searcher
 
+    @staticmethod
+    async def fetch_url_page_text(url: str) -> ToolResponse:
+        """返回url对应网页的文本结果。
+        Args:
+            url (str):
+                网页地址。
+        """
+        bytes = SearchTools._fetch_page_html(url)
+        page_text, img_urls = SearchTools._extract_text_and_images(bytes, url)
+        return ToolResponse(
+                content=page_text,
+        )
 
 def get_retrieve_fn(short_term, long_term) -> ToolResponse:
     async def retrieve_local_material(query):
