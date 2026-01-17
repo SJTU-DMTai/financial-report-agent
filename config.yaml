@@ -111,6 +111,13 @@ models:
 font:
   chinese: C:/Windows/Fonts/msyh.ttc
 
+pdf_style:
+  base_color: "#1F4E79"
+  body_font_path: "C:/Windows/Fonts/msyh.ttc"
+  heading_font_path: "C:/Windows/Fonts/msyhbd.ttc"
+  mono_font_path: "C:/Windows/Fonts/consola.ttf"
+
+
 verify_config:
   max_verify_rounds: 2
 

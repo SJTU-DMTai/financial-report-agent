@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from src.memory.working import Section, Segment
 from src.memory.short_term import ShortTermMemoryStore
+from src.utils.generate_palette import generate_palette
 import pdfkit
 from pdfkit.configuration import Configuration
 from pathlib import Path
@@ -288,6 +289,79 @@ def _build_appendix_md(citations: List[Dict]) -> str:
 
     return "\n".join(lines)
 
+
+def _build_header_html(title: str, rule_color: str, subtle_text: str, font_face_css: str, font_family: str) -> str:
+    title_esc = (title or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    {font_face_css}
+    body {{
+      margin: 0;
+      padding: 0;
+      font-family: {font_family};
+    }}
+  </style>
+</head>
+<body>
+  <div style="font-size:12px; color:{subtle_text}; padding:0 2mm 1.5mm 2mm; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+    {title_esc}
+  </div>
+  <div style="border-bottom:2.5px solid {rule_color};"></div>
+</body>
+</html>"""
+
+def _build_footer_html(rule_color: str, subtle_text: str, font_face_css: str, font_family: str) -> str:
+    return f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    {font_face_css}
+    body {{
+      margin: 0;
+      padding: 0;
+      font-family: {font_family};
+    }}
+  </style>
+</head>
+<body>
+  <div style="border-top:2.5px solid {rule_color};"></div>
+  <div style="font-size:12px; color:{subtle_text}; padding:2mm 2mm 0 2mm; text-align:center;">
+    <span class="page"></span> / <span class="topage"></span>
+  </div>
+  <script>
+    (function() {{
+      var qs = window.location.search.substring(1).split("&");
+      var p = {{}};
+      for (var i=0;i<qs.length;i++) {{
+        var kv = qs[i].split("=");
+        p[kv[0]] = decodeURIComponent(kv[1] || "");
+      }}
+      var page = document.querySelector(".page");
+      var topage = document.querySelector(".topage");
+      if (page) page.textContent = p.page || "";
+      if (topage) topage.textContent = p.topage || "";
+    }})();
+  </script>
+</body>
+</html>"""
+
+
+
+def _as_file_uri(p: str) -> str:
+    if not p:
+        return ""
+    return Path(p).expanduser().resolve().as_uri()
+
+def _safe_trim_title(title: str, max_len: int) -> str:
+    title = (title or "").strip()
+    if max_len and len(title) > max_len:
+        return title[:max_len - 1] + "…"
+    return title
+
 def md_to_pdf(
         md_text: str,
         short_term : ShortTermMemoryStore,
@@ -295,6 +369,8 @@ def md_to_pdf(
     ):
     """将所有 Manuscript 章节按顺序合并并导出为 PDF 文件。
     """
+
+    main_title = ""
     # 全局引用信息：key=(ref_id, detail) -> index
     citation_index_map: dict[tuple[str, str], int] = {}
     citations: list[dict] = []
@@ -362,173 +438,154 @@ def md_to_pdf(
         html_sections = [toc_page_html]
 
     # ==== 5) 把章节+目录按页分隔线连接回去 ====
-    body_html = '\n<hr style="page-break-after: always; border: none;" />\n'.join(html_sections)
+        
+    cfg = config.Config()
+    WKHTMLTOPDF_PATH = cfg.get_wkhtmltopdf_path()
+    style = cfg.get_pdf_style()
     
-    # # 3. 生成附录区域（改为附录 -> 数据来源附录 + 预留部分）
-    # appendix_html = ""
-    # if citations:
-    #     appendix_lines: list[str] = []
-    #     appendix_lines.append('<hr style="page-break-before: always; border: none;" />')
+    base_color = style["base_color"]  # get_pdf_style 已保证默认值
+    pal = generate_palette(base_color)
 
-    #     # 附录大标题
-    #     appendix_lines.append('<h1>附录</h1>')
+    body_font_uri = _as_file_uri(style.get("body_font_path", ""))
+    heading_font_uri = _as_file_uri(style.get("heading_font_path", ""))
+    mono_font_uri = _as_file_uri(style.get("mono_font_path", ""))
 
-    #     # ========== 第一部分：数据来源附录 ==========
-    #     appendix_lines.append('<h2>第一部分：数据来源附录</h2>')
-    #     appendix_lines.append('<ol>')
+    fallback_sans = '"Noto Sans CJK SC","Microsoft YaHei","SimSun","Songti SC","Segoe UI Emoji",sans-serif'
+    fallback_mono = '"JetBrains Mono","Consolas","Courier New",monospace'
 
-    #     # 按 index 排序，保证顺序一致
-    #     for c in sorted(citations, key=lambda x: x["index"]):
-    #         idx = c["index"]
-    #         ref_id = c["ref_id"]
-    #         detail = c["detail"]
-    #         meta = c["meta"]
+    body_family = f'"PDFBody",{fallback_sans}' if body_font_uri else fallback_sans
+    heading_family = f'"PDFHeading",{fallback_sans}' if heading_font_uri else fallback_sans
+    mono_family = f'"PDFMono",{fallback_mono}' if mono_font_uri else fallback_mono
 
-    #         esc_ref_id = html.escape(ref_id)
-    #         esc_detail = html.escape(detail) if detail else ""
-    #         if meta is not None:
-    #             esc_filename = html.escape(meta.filename)
-    #             esc_m_type = html.escape(meta.m_type.value)
-    #             esc_desc = html.escape(meta.description) if meta.description else ""
-    #             esc_source = html.escape(meta.source) if meta.source else ""
-    #         else:
-    #             esc_filename = ""
-    #             esc_m_type = ""
-    #             esc_desc = ""
-    #             esc_source = ""
+    font_face_css = ""
+    if body_font_uri:
+        font_face_css += f'@font-face{{font-family:"PDFBody";src:url("{body_font_uri}");}}\n'
+    if heading_font_uri:
+        font_face_css += f'@font-face{{font-family:"PDFHeading";src:url("{heading_font_uri}");}}\n'
+    if mono_font_uri:
+        font_face_css += f'@font-face{{font-family:"PDFMono";src:url("{mono_font_uri}");}}\n'
 
-    #         li_parts: list[str] = []
-    #         li_parts.append(f'<p><strong>{esc_ref_id}</strong>')
-    #         if esc_detail:
-    #             li_parts.append(f'（引用字段/行：{esc_detail}）')
-    #         li_parts.append('</p>')
-
-    #         if meta is not None:
-    #             li_parts.append("<ul>")
-    #             li_parts.append(f"<li>文件名：{esc_filename}</li>")
-    #             li_parts.append(f"<li>类型：{esc_m_type}</li>")
-    #             if esc_desc:
-    #                 li_parts.append(f"<li>描述：{esc_desc}</li>")
-    #             if esc_source:
-    #                 li_parts.append(f"<li>来源：{esc_source}</li>")
-    #             li_parts.append("</ul>")
-    #         else:
-    #             li_parts.append("<p><em>警告：未在 registry 中找到该 ref_id 对应的元数据。</em></p>")
-
-    #         li_html = f'<li id="ref-{idx}">' + "".join(li_parts) + "</li>"
-    #         appendix_lines.append(li_html)
-
-    #     appendix_lines.append("</ol>")
-
-    #     # ========== 第二部分：预留（暂时为空） ==========
-
-    #     # appendix_lines.append('<h2>第二部分：附加资料（预留）</h2>')
-    #     # appendix_lines.append('<p>（本部分暂未添加内容。）</p>')
-
-    #     appendix_html = "\n".join(appendix_lines)
-
-    # if appendix_html:
-    #     body_html = body_html + "\n\n" + appendix_html
-    full_html = f"""<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <style>
-        body {{
-            font-family: "Noto Sans CJK SC", "Microsoft YaHei", "SimSun", "Songti SC","Segoe UI Emoji", sans-serif;
-            font-size: 19px; 
-            line-height: 1.7;
-        }}
-        h1, h2, h3, h4, h5, h6 {{
-            font-weight: bold;
-        }}
-        /* ==== 总标题：文档中第一个 h1 的特殊样式 ==== */
-        body > h1:first-of-type {{
-            font-size: 38px;
-            font-weight: 1000;
-            text-align: center;
-            margin-top: 40px;
-            margin-bottom: 30px;
-            letter-spacing: 0.05em;
-        }}
-        code, pre {{
-            font-family: "JetBrains Mono", "Consolas", "Courier New", monospace;
-        }}
-        img {{
-            max-width: 100%;
-            height: auto;
-            display: block;
-            margin: 12px auto;
-        }}
-        table {{
-            border-collapse: collapse;
-            width: 100%;
-        }}
-        table, th, td {{
-            border: 1px solid #ccc;
-        }}
-        th, td {{
-            padding: 4px 8px;
-        }}
-
-        .toc {{
-            margin-top: 12px;
-        }}
-        .toc-title {{
-            text-align: center;
-        }}
-        .toc ul {{
-            list-style-type: none;
-            padding-left: 0;
-        }}
-        .toc li {{
-            margin: 4px 0;
-        }}
-        .toc a {{
-            text-decoration: none;
-        }}
-
-        .toc > ul > li > a {{
-            font-weight: 700;
-            color: #000;
-        }}
-
-        /* 二级目录 */
-        .toc > ul > li > ul > li > a {{
-            padding-left: 1.5em;
-            font-weight: 500;
-            color: #555;
-        }}
-
-        /* 三级目录 */
-        .toc > ul > li > ul > li > ul > li > a {{
-            padding-left: 3em;
-            font-size: 0.9em;
-            color: #777;
-        }}
-
-    </style>
-</head>
-<body>
-{body_html}
-</body>
-</html>"""
-
+        
     if not main_title:
         now = datetime.now()
-        main_title = f"金融研报_{now.strftime('%Y%m%d_%H%M%S')}"
+        main_title = f"深度研报_{now.strftime('%Y%m%d_%H%M%S')}"
 
     # 生成文件名，替换掉不安全字符
     safe_name = re.sub(r'[\\/:*?"<>|]', "_", main_title)
-    safe_name = safe_name.strip()
-    safe_name = safe_name + ".pdf"
+    safe_name = safe_name.strip()+".pdf"
 
     # 3. 调用 pdfkit 生成 PDF
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     pdf_path = out_dir / safe_name
 
-    html_path = out_dir / f"source_{time.time()}.html"
+    # ==== header/footer HTML 写入临时文件 ====
+
+
+    c_base  = pal["base"]["base"]
+    c_dark1 = pal["base"]["dark1"]
+    c_dark2 = pal["base"]["dark2"]
+    c_light1 = pal["base"]["light1"]
+    c_light2 = pal["base"]["light2"]
+
+    header_title = _safe_trim_title(main_title, max_len=50)
+    header_html = _build_header_html(header_title, rule_color=c_dark1, subtle_text=c_dark2, font_face_css=font_face_css, font_family=body_family)
+    footer_html = _build_footer_html(rule_color=c_dark1, subtle_text=c_dark2, font_face_css=font_face_css, font_family=body_family)
+
+
+    header_path = out_dir / f"_header_{int(time.time()*1000)}.html"
+    footer_path = out_dir / f"_footer_{int(time.time()*1000)}.html"
+    header_path.write_text(header_html, encoding="utf-8")
+    footer_path.write_text(footer_html, encoding="utf-8")
+
+    body_html = '\n<hr class="page-break" />\n'.join(html_sections)
+
+    full_html = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    {font_face_css}
+
+    * {{ box-sizing: border-box; }}
+    body {{
+      font-family: {body_family};
+      color: #000;
+      font-size: 15px;
+      line-height: 1.75;
+    }}
+
+    img {{
+    max-width: 100% !important;
+    height: auto !important;
+    display: block;
+    margin: 10px auto;
+    }}
+
+    /* 标题体系：统一用 base 色 */
+    h1, h2, h3, h4, h5, h6 {{
+      font-family: {heading_family};
+      color: {c_base};
+      font-weight: 800;
+    }}
+
+    /* 链接 */
+    a {{ color: {c_base}; text-decoration: none; }}
+    a:hover {{ text-decoration: underline; }}
+
+    /* 分割线/页内强调线：dark1 */
+    hr.page-break {{ border: none; page-break-after: always; margin: 0; }}
+    blockquote {{
+      border-left: 3px solid {c_dark1};
+      background: {c_light2};
+      margin: 3mm 0;
+      padding: 2mm 3mm;
+    }}
+
+    /* 次级文字：dark2（用于目录二级、注释等） */
+    .toc > ul > li > ul > li > a {{
+      color: {c_dark2};
+    }}
+
+    .toc-title {{
+    text-align: center !important;
+    width: 100%;
+    margin: 20px 0 12px 0;
+    }}
+
+    /* 表格：边框 light1；表头底 light2 */
+    th, td {{
+      border: 1px solid {c_light1};
+      padding: 6px 10px;
+      vertical-align: middle;
+      word-break: break-word;
+    }}
+    table {{
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0 16px 0;
+      table-layout: fixed;
+      font-size: 12px; 
+    }}
+    
+    th {{
+      background: {c_light2};
+      font-weight: 700;
+      text-align: center;
+      color: {c_dark1};
+    }}
+    tr {{
+      height: 34px;
+    }}
+
+    
+  </style>
+</head>
+<body>
+{body_html}
+</body>
+</html>"""
+    html_path = out_dir / f"source_{int(time.time()*1000)}.html"
     with open(html_path, "w", encoding="utf-8") as f:
         f.write(full_html)
 
@@ -537,18 +594,29 @@ def md_to_pdf(
         "disable-smart-shrinking": None,
         "enable-internal-links": None,
         "enable-local-file-access": None,
-        "footer-center": "[page] / [topage]",
-        "footer-font-size": "10",
-        "footer-spacing": "5",
+
+        "header-html": str(header_path),
+        "header-spacing": "6",
+        "footer-html": str(footer_path),
+        "footer-spacing": "6",
+
+        # 建议固定边距，避免页眉覆盖正文
+        "margin-top": "18mm",
+        "margin-bottom": "16mm",
+        "margin-left": "14mm",
+        "margin-right": "14mm",
+        "page-size": "A4",
     }
     
-    cfg = config.Config()
-    WKHTMLTOPDF_PATH = cfg.get_wkhtmltopdf_path()
     pdfkit_config = Configuration(wkhtmltopdf=WKHTMLTOPDF_PATH)
-    pdfkit.from_string(full_html, str(pdf_path), options=options, configuration=pdfkit_config)
+    #pdfkit.from_string(full_html, str(pdf_path), options=options, configuration=pdfkit_config)
+    pdfkit.from_file(str(html_path), str(pdf_path), options=options, configuration=pdfkit_config)
+
 
     text = f"[md_to_pdf] 已输出 PDF: {pdf_path}"
     return text
+
+
 
 
 def detect_section(line: str) -> Tuple[int, str, bool]:
