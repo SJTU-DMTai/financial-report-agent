@@ -624,7 +624,7 @@ class MaterialTools:
         )
 
 
-        ref_id = f"{symbol}_history_price_{start_date}_{end_date}_{int(time_module.time())}"
+        ref_id = f"{symbol}_history_price_{start_date}_{end_date}_period{period}_adjust{adjust}"
         entity = get_entity_info(long_term=self.long_term, text=symbol)
         time_range = {"start": fmt_yyyymmdd(start_date),"end":fmt_yyyymmdd(end_date)}
         description = f"{entity['name']}（{entity['code']}）股票历史行情数据（{fmt_yyyymmdd(start_date)}~{fmt_yyyymmdd(end_date)}）"
@@ -692,7 +692,7 @@ class MaterialTools:
         df = pd.concat(dfs)
         df.sort_values("发布时间", inplace=True, ascending=False)
 
-        ref_id = f"{keyword}_news_{int(time_module.time())}"
+        ref_id = f"{symbol}{('_' + keyword) if keyword else ''}_news_daterange_{df['发布时间'].min()}-{df['发布时间'].max()}"
         entity = None
         if keyword:
             entity = get_entity_info(long_term=self.long_term, text=symbol)
@@ -703,7 +703,7 @@ class MaterialTools:
             description = f"{keyword}新闻资讯"
             final_df = df
         self._save_df_to_material(df=final_df, ref_id=ref_id,source="AKshare API:eastmoney",entity=entity,description=description)
-        header = f"[fetch_stock_news_material] 股票新闻资讯"
+        header = f"[fetch_stock_news_material] 股票新闻资讯（新闻内容大于156字的部分被省略，请根据url搜索）"
         return _build_tool_response_from_df(
             final_df,
             ref_id=ref_id,
@@ -857,7 +857,7 @@ class MaterialTools:
 
             if text:  # 只保存有内容的公告
                 # 为每个公告创建唯一的 ref_id
-                disclosure_ref_id = f"{symbol}_disclosure_{announce_date}_{idx}"
+                disclosure_ref_id = f"{symbol}_disclosure_{announce_date}"
 
                 # 创建详细的描述，包含工具名、源URL等信息
                 description_parts = [
@@ -983,7 +983,7 @@ class MaterialTools:
 
 
         safe_indicator = indicator.replace(" ", "")
-        ref_id = f"{symbol}_profit_{safe_indicator}_{int(time_module.time())}"
+        ref_id = f"{symbol}_profit_{safe_indicator}"
         entity = get_entity_info(long_term=self.long_term, text=symbol)
         description = f"{entity['name']}（{entity['code']}）{indicator}利润表"
         self._save_df_to_material(
@@ -1022,7 +1022,7 @@ class MaterialTools:
 
 
         safe_indicator = indicator.replace(" ", "")
-        ref_id = f"{symbol}_cashflow_{safe_indicator}_{int(time_module.time())}"
+        ref_id = f"{symbol}_cashflow_{safe_indicator}"
         entity = get_entity_info(long_term=self.long_term, text=symbol)
         description = f"{entity['name']}（{entity['code']}）{indicator}现金流量表"
         self._save_df_to_material(
@@ -1238,7 +1238,7 @@ class MaterialTools:
         df = ak.stock_zyjs_ths(symbol=symbol)
         data = df.iloc[0].to_dict()
 
-        ref_id = f"{symbol}_business_description_{int(time_module.time())}"
+        ref_id = f"{symbol}_business_description"
         entity = get_entity_info(long_term=self.long_term, text=symbol)
         description = f"{entity['name']}（{entity['code']}）主营业务、产品介绍"
         self._save_df_to_material(
@@ -1271,7 +1271,7 @@ class MaterialTools:
 
         df = ak.stock_zygc_em(symbol=add_exchange_prefix(symbol, "upper"))
 
-        ref_id = f"{symbol}_business_composition_{int(time_module.time())}"
+        ref_id = f"{symbol}_business_composition"
 
         entity = get_entity_info(long_term=self.long_term, text=symbol)
         description = f"{entity['name']}（{entity['code']}）主营构成、业务的收入与利润结构"

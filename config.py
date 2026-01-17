@@ -7,8 +7,8 @@ class Config:
     def __init__(self, path: str = "config.yaml"):
         with open(path, "r", encoding="utf-8") as f:
             self.data = yaml.safe_load(f)
+
     def get_pdf_style(self) -> dict:
-        """∂¡»° PDF —˘ Ω≈‰÷√"""
         style = self.data.get("pdf_style", {}) or {}
         if "base_color" not in style:
             style["base_color"] = "#498ECE"

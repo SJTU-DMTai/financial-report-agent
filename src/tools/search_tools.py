@@ -32,10 +32,10 @@ class SearchTools:
         self.short_term = short_term
         self.long_term = long_term
 
-
     # ================= 辅助函数 =================
 
-    def _fetch_page_html(self, url: str, timeout: int = 10) -> bytes:
+    @staticmethod
+    def _fetch_page_html(url: str, timeout: int = 10) -> bytes:
         """用 requests 获取网页 HTML 内容"""
         headers = {
             "User-Agent": (
@@ -51,8 +51,8 @@ class SearchTools:
             return b""
         return resp.content   # 注意：这里返回的是 bytes
 
-
-    def _extract_text_and_images(self, html: bytes, base_url: str) -> Tuple[str, List[str]]:
+    @staticmethod
+    def _extract_text_and_images(html: bytes, base_url: str) -> Tuple[str, List[str]]:
         """文本使用 trafilatura 提取主内容；图片使用 BeautifulSoup 提取。"""
         if not html:
             return "", []
@@ -83,6 +83,16 @@ class SearchTools:
 
         return text, img_urls
 
+    @staticmethod
+    async def fetch_url_page_text(url: str) -> str:
+        """返回url对应网页的文本结果。
+        Args:
+            url (str):
+                网页地址。
+        """
+        bytes = SearchTools._fetch_page_html(url)
+        page_text, img_urls = SearchTools._extract_text_and_images(bytes, url)
+        return page_text
 
     def _calculate_batch_relevance(self, query: str, candidates: List[Dict[str, Any]]) -> List[float]:
         """

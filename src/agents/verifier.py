@@ -72,9 +72,9 @@ def build_verifier_toolkit(
 
     else:
         toolkit.create_tool_group(
-        group_name="multi_source_search",
-        description="多源交叉验证",
-        active=False,
+            group_name="multi_source_search",
+            description="澶氭簮浜ゅ弶楠岃瘉证",
+            active=False,
         )
         toolkit.register_tool_function(material_tools.fetch_history_price_material, group_name="multi_source_search")
         toolkit.register_tool_function(material_tools.fetch_stock_news_material, group_name="multi_source_search")
@@ -94,7 +94,7 @@ def build_verifier_toolkit(
 
         toolkit.create_tool_group(
             group_name="numeric_consistency",
-            description="计算数值一致性验证",
+            description="锟斤拷锟斤拷锟斤拷值一锟斤拷锟斤拷锟斤拷证",
             active=False,
         )
     return toolkit
