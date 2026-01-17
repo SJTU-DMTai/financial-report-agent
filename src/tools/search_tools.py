@@ -338,7 +338,6 @@ class SearchTools:
             ],
         )
 
-    # planner和writer调用
     def searcher_tool(self, searcher: ReActAgent) -> Callable[[str], ToolResponse]:
         """把 Searcher agent 封装成 agent 可见的工具函数。"""
         async def search_with_searcher(query: str) -> ToolResponse:
@@ -346,88 +345,7 @@ class SearchTools:
             Args:
                 query (str): 检索需求的自然语言描述。
             """
-
-            candidates = retrieve_in_memory(
-                short_term=self.short_term,
-                long_term=self.long_term,
-                query=query,
-            )
-            if candidates:
-                lines = [
-                    f"你需要检索的信息：{query}",
-                    "",
-                    "用户提供的候选材料（materials）及其部分预览如下:",
-                    "",
-                ]
-
-                for i, meta in enumerate(candidates, 1):
-                    ref_id = meta.get("ref_id", "")
-                    desc = meta.get("description", "")
-                    src = meta.get("source", "")
-                    m_type = meta.get("m_type", "")
-                    lines.append(f"第{i}条材料：Material 的唯一标识 ref_id={ref_id}")
-                    lines.append(f"    简短描述: {desc}")
-                    lines.append(f"    来源: {src}")
-
-                    try:
-                        content = self.short_term.load_material(ref_id) if self.short_term is not None else None
-                    except Exception:
-                        content = None
-
-                    # (A) 搜索引擎：search_engine_*
-                    if isinstance(ref_id, str) and ref_id.startswith("search_engine_"):
-                        page_text_preview = ""
-                        if isinstance(content, list) and content:
-                            first = content[0] if isinstance(content[0], dict) else None
-                            if isinstance(first, dict):
-                                page_text = first.get("page_text") or ""
-                                page_text_preview = page_text[:100]
-                        lines.append("    部分内容预览：")
-                        lines.append(f"   {page_text_preview}")
-
-
-                    # (B) 计算结果：calculate_*
-                    elif isinstance(ref_id, str) and ref_id.startswith("calculate_"):
-                        params = None
-                        result = None
-                        if isinstance(content, list) and content:
-                            first = content[0] if isinstance(content[0], dict) else None
-                            if isinstance(first, dict):
-                                params = first.get("parameters", None)
-                                result = first.get("result", None)
-                        if params:
-                            lines.append("    计算参数:")
-                            lines.append(f"    {params}")
-                        lines.append("    计算结果:")
-                        lines.append(f"    {result}")
-
-                    # (C) 表格：非前缀类时，用 m_type==table 给出前几行
-                    elif m_type == "table":
-                        preview = ""
-                        if isinstance(content, pd.DataFrame) and not content.empty:
-                            df_preview = content.head(3).copy()
-                            MAX_CELL_CHARS = 200
-                            SUFFIX = "…[内容过长，已截断]"
-                            for col in df_preview.columns:
-                                df_preview[col] = df_preview[col].apply(
-                                    lambda v: (
-                                        v[:MAX_CELL_CHARS] + SUFFIX
-                                        if isinstance(v, str) and len(v) > MAX_CELL_CHARS
-                                        else v
-                                    )
-                                )
-
-                            preview = df_preview.to_csv(index=False)
-
-                        lines.append("    前3行预览:")
-                        lines.append(preview)
-
-                    lines.append("")  # 空行分隔
-                final_prompt = "\n".join(lines)
-            else:
-                final_prompt = f"你需要检索的信息：{query}"
-
-
+            final_prompt = get_retrieve_fn(self.short_term, self.long_term)(query).content
             msg = Msg(
                 name="user",
                 content=final_prompt,
@@ -442,3 +360,105 @@ class SearchTools:
             )
 
         return search_with_searcher
+
+
+def get_retrieve_fn(short_term, long_term) -> ToolResponse:
+    async def retrieve_local_material(query):
+        """
+        在已保存的本地材料中按关键词搜索和query相关的材料，返回部分预览内容。
+        Args:
+            query (str):
+                搜索内容。
+        """
+        candidates = retrieve_in_memory(
+            short_term=short_term,
+            long_term=long_term,
+            query=query,
+        )
+        if candidates:
+            lines = [
+                f"你需要检索的信息：{query}",
+                "",
+                "用户本地保存的候选材料（materials）及其部分预览如下:",
+                "",
+            ]
+
+            for i, meta in enumerate(candidates, 1):
+                ref_id = meta.get("ref_id", "")
+                desc = meta.get("description", "")
+                src = meta.get("source", "")
+                m_type = meta.get("m_type", "")
+                lines.append(f"第{i}条材料：Material 的唯一标识 ref_id={ref_id}")
+                if desc:
+                    lines.append(f"    简短描述: {desc}")
+                if src:
+                    lines.append(f"    来源: {src}")
+
+                try:
+                    content = short_term.load_material(ref_id) if short_term is not None else None
+                except Exception:
+                    content = None
+
+                # (A) 搜索引擎：search_engine_*
+                if isinstance(ref_id, str) and ref_id.startswith("search_engine_"):
+                    page_text_preview = ""
+                    if isinstance(content, list) and content:
+                        first = content[0] if isinstance(content[0], dict) else None
+                        if isinstance(first, dict):
+                            page_text = first.get("page_text") or ""
+                            page_text_preview = page_text[:100]
+                    lines.append("    部分内容预览：")
+                    lines.append(f"   {page_text_preview}")
+
+
+                # (B) 计算结果：calculate_*
+                elif isinstance(ref_id, str) and ref_id.startswith("calculate_"):
+                    params = None
+                    result = None
+                    if isinstance(content, list) and content:
+                        first = content[0] if isinstance(content[0], dict) else None
+                        if isinstance(first, dict):
+                            params = first.get("parameters", None)
+                            result = first.get("result", None)
+                    if params:
+                        lines.append("    计算参数:")
+                        lines.append(f"    {params}")
+                    lines.append("    计算结果:")
+                    lines.append(f"    {result}")
+
+                # (C) 表格：非前缀类时，用 m_type==table 给出前几行
+                elif m_type == "table":
+                    preview = ""
+                    if isinstance(content, pd.DataFrame) and not content.empty:
+                        df_preview = content.head(3).copy()
+                        MAX_CELL_CHARS = 200
+                        SUFFIX = "…[内容过长，已截断]"
+                        for col in df_preview.columns:
+                            df_preview[col] = df_preview[col].apply(
+                                lambda v: (
+                                    v[:MAX_CELL_CHARS] + SUFFIX
+                                    if isinstance(v, str) and len(v) > MAX_CELL_CHARS
+                                    else v
+                                )
+                            )
+
+                        preview = df_preview.to_csv(index=False)
+
+                    lines.append("    前3行预览:")
+                    lines.append(preview)
+
+                lines.append("")  # 空行分隔
+            lines.append("如果以上无合适材料，请重新获取线上数据。")
+            res = "\n".join(lines)
+        else:
+            res = f"对于{query}，本地尚未保存相关材料。请调用合适的工具获取线上数据。"
+        return ToolResponse(
+            content=[
+                TextBlock(
+                    type="text",
+                    text=res,
+                ),
+            ],
+        )
+
+    return retrieve_local_material
