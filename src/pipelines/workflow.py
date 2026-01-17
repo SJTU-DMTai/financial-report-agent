@@ -203,15 +203,15 @@ async def run_workflow(task_desc: str):
             print(f"\n====== 开始写作章节 {section_id} ======\n")
             await dfs_report(subsection)
             for segment in subsection.segments:
-                await writer.memory.clear()
                 for i in range(len(segment.evidences)):
                     searcher_input = Msg(
                         name="user",
                         content=(
                             f"任务：{task_desc}\n"
                             f"当前需要你撰写要点：{segment.topic}\n"
-                            f"论据所需材料：\n{segment.evidences[i]}\n\n"
-                            f"请你调用工具搜索，尽量根据多个信息源交叉验证后给出搜索结果。"
+                            + (f"当前已搜索到的论据：\n{'\n'.join(segment.evidences[:i])}" if i > 0 else "")
+                            + f"你还需要搜索的材料：\n{segment.evidences[i]}\n\n"
+                              f"请你调用工具搜索，尽量根据多个信息源交叉验证后给出精简完整的搜索结果。"
                         ),
                         role="user",
                     )
@@ -219,7 +219,9 @@ async def run_workflow(task_desc: str):
                     msg = msg.get_text_content()
                     print(f"[Searcher] After searching {segment.evidences[i]}...")
                     print(msg)
-                    segment.evidences[i] = msg
+                    await searcher.memory.clear()
+                    if msg is not None:
+                        segment.evidences[i] = msg
                 writer_input = Msg(
                     name="user",
                     content=(
@@ -236,6 +238,7 @@ async def run_workflow(task_desc: str):
 
                 print("[Writer 初稿输出]")
                 print(draft_msg.get_text_content())
+                await writer.memory.clear()
 
                 # max_verify_rounds = cfg.get_max_verify_rounds()
                 # # 进入 Verifier 审核 loop

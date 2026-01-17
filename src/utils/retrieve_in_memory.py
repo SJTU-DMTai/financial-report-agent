@@ -260,7 +260,7 @@ def retrieve_in_memory(
         return []
 
     # 层0：entity 过滤（同 code 优先，过滤为空则回退全量）
-    entity_terms = get_entity_info(long_term=long_term,text=query) or {}
+    entity_terms = get_entity_info(long_term=long_term, text=query) or {}
     code = entity_terms.get("code") or ""
     name = entity_terms.get("name") or ""
 

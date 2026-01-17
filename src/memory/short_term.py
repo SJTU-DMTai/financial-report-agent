@@ -235,12 +235,13 @@ class ShortTermMemoryStore:
     # -----------------------------------------
 
     def save_material(self, ref_id: str, 
-                    content: Union[str, pd.DataFrame, dict, list], 
-                    description: str = "", 
-                    source: str = "", 
-                    entity: Optional[Dict[str, str]] = None,
-                    time: Optional[Dict[str, str]] = None,
-                    forced_ext: str = None) -> None:
+        content: Union[str, pd.DataFrame, dict, list],
+        description: str = "",
+        source: str = "",
+        entity: Optional[Dict[str, str]] = None,
+        time: Optional[Dict[str, str]] = None,
+        forced_ext: str = None
+    ) -> None:
         self.ensure_dirs()
         
         # 简化判断逻辑
