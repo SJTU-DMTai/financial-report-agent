@@ -688,11 +688,14 @@ class MaterialTools:
         ref_id = f"{symbol}_{keyword}_news_daterange_{start_date}-{end_date}_num{latest_num}"
         start_date, end_date = pd.to_datetime(start_date, format="%Y%m%d"), pd.to_datetime(end_date, format="%Y%m%d")
 
-        entity = get_entity_info(long_term=self.long_term, text=symbol)
+        if symbol is None or symbol == "":
+            entity = None
+            description = f"股票新闻资讯 {keyword}"
+        else:
+            entity = get_entity_info(long_term=self.long_term, text=symbol)
+            keyword = entity['name'] + ((" " + keyword) if keyword else "")
+            description = (f"{entity['name']}（{entity['code']}）" if entity else "") + f"股票新闻资讯 {keyword}"
         try:
-            description = f"{entity['name']}（{entity['code']}）股票新闻资讯 {keyword}"
-            keyword = entity['name'] + ((keyword + " ") if keyword else "")
-
             dfs = []
             for page_idx in range(1, 25):
                 df = stock_news_em(keyword=keyword, page_idx=page_idx)
@@ -711,7 +714,7 @@ class MaterialTools:
             df,
             ref_id=ref_id,
             header=header,
-            extra_meta={"symbol": symbol},
+            extra_meta={"symbol": symbol} if symbol else {"keyword": keyword},
         )
 
     async def fetch_disclosure_material(
