@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import traceback
 from typing import Optional, Callable, Any, Dict, Union
 
 import os
@@ -262,10 +263,12 @@ def fmt_yyyymmdd(s: str) -> str:
         if len(s) == 8 and s.isdigit():
             return datetime.strptime(s, "%Y%m%d").strftime("%Y-%m-%d")
         return s  # 已是 YYYY-MM-DD 或其他格式则原样返回
+
 class MaterialTools:
     def __init__(self, short_term: Optional[ShortTermMemoryStore] = None, long_term: Optional[LongTermMemoryStore] = None) -> None:
         self.short_term = short_term
         self.long_term = long_term
+
     def read_material(
         self,
         ref_id: str,
@@ -329,6 +332,7 @@ class MaterialTools:
                     metadata={"ref_id": ref_id}
                 )
         except Exception as e:
+            print(traceback.print_exc())
             return ToolResponse(
             content=[TextBlock(type="text", text=f"[read_material]读取失败: {str(e)}")],
             metadata={"ref_id": ref_id}
@@ -474,7 +478,7 @@ class MaterialTools:
     ) -> ToolResponse:
         data = self.short_term.load_material(ref_id)  
         # if isinstance(data, list):
-        sliced = copy.deepcopy(data[:])
+        sliced = copy.deepcopy(data)
 
         if (ref_id.startswith("search_engine")):
             if isinstance(sliced, list):
@@ -681,31 +685,30 @@ class MaterialTools:
         cur_date = os.getenv('CUR_DATE') or datetime.now().strftime("%Y%m%d")
         end_date = min(end_date, cur_date) if end_date else cur_date
         assert pd.to_datetime(start_date, format="%Y%m%d") <= pd.to_datetime(end_date, format="%Y%m%d")
+        ref_id = f"{symbol}_{keyword}_news_daterange_{start_date}-{end_date}_num{latest_num}"
         start_date, end_date = pd.to_datetime(start_date, format="%Y%m%d"), pd.to_datetime(end_date, format="%Y%m%d")
 
-        dfs = []
-        for page_idx in range(1, 25):
-            df = stock_news_em(keyword=keyword, page_idx=page_idx)
-            dfs.append(df[(pd.to_datetime(df['发布时间']) >= start_date) & (pd.to_datetime(df['发布时间']) <= end_date)])
-            if sum([len(_df) for _df in dfs]) > latest_num:
-                break
+        entity = get_entity_info(long_term=self.long_term, text=symbol)
+        try:
+            description = f"{entity['name']}（{entity['code']}）股票新闻资讯 {keyword}"
+            keyword = entity['name'] + ((keyword + " ") if keyword else "")
+
+            dfs = []
+            for page_idx in range(1, 25):
+                df = stock_news_em(keyword=keyword, page_idx=page_idx)
+                dfs.append(df[(pd.to_datetime(df['发布时间']) >= start_date) & (pd.to_datetime(df['发布时间']) <= end_date)])
+                if sum([len(_df) for _df in dfs]) > latest_num:
+                    break
+        except Exception as e:
+            traceback.print_exc()
+            raise e
         df = pd.concat(dfs)
         df.sort_values("发布时间", inplace=True, ascending=False)
 
-        ref_id = f"{symbol}{('_' + keyword) if keyword else ''}_news_daterange_{df['发布时间'].min()}-{df['发布时间'].max()}"
-        entity = None
-        if keyword:
-            entity = get_entity_info(long_term=self.long_term, text=symbol)
-            description = f"{entity['name']}（{entity['code']}）股票新闻资讯 {keyword}"
-            new_df = stock_news_em(keyword=entity['name']+" "+keyword)
-            final_df=pd.concat([df, new_df], ignore_index=True)
-        else:
-            description = f"{keyword}新闻资讯"
-            final_df = df
-        self._save_df_to_material(df=final_df, ref_id=ref_id,source="AKshare API:eastmoney",entity=entity,description=description)
+        self._save_df_to_material(df=df, ref_id=ref_id,source="AKshare API:eastmoney",entity=entity,description=description)
         header = f"[fetch_stock_news_material] 股票新闻资讯（新闻内容大于156字的部分被省略，请根据url搜索）"
         return _build_tool_response_from_df(
-            final_df,
+            df,
             ref_id=ref_id,
             header=header,
             extra_meta={"symbol": symbol},
@@ -1317,6 +1320,7 @@ def stock_news_em(keyword: str = "603777", page_idx=1) -> pd.DataFrame:
         re.search(r'^\w+\((.*)\)$', data_text).group(1)
     )
     temp_df = pd.DataFrame(data_json["result"]["cmsArticleWebOld"])
+    assert len(temp_df) > 0, "未获取到相关新闻，请调整关键词后重试。"
     temp_df["url"] = "http://finance.eastmoney.com/a/" + temp_df["code"] + ".html"
     temp_df.rename(
         columns={
