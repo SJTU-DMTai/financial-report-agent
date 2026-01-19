@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 import json
 import pickle
@@ -50,18 +51,19 @@ async def search_evidence(evidence, task_desc, segment_topic, searcher):
     print(f"[Searcher] Finished searching: {evidence[:20]}...")
     return msg.get_text_content()
 
-async def process_single_segment(segment, task_desc, searcher_factory, writer_factory, semaphore):
+async def process_single_segment(segment, task_desc, agent_factory, semaphore):
     """并发处理单个 Segment：包含搜索和写作"""
     global CURRENT_RUNNING_TASKS
     async with semaphore:
         CURRENT_RUNNING_TASKS += 1
         print(f"[{time.strftime('%H:%M:%S')}] [并发数: {CURRENT_RUNNING_TASKS}] ✍️ 开始写作: {segment.topic[:15]}...")
 
+        searcher, writer = agent_factory()
         for i, evidence in enumerate(segment.evidences):
-            segment.evidences[i] = await search_evidence(evidence, task_desc, segment.topic, searcher_factory())
+            segment.evidences[i] = await search_evidence(evidence, task_desc, segment.topic, searcher)
+            await searcher.memory.clear()
 
         try:
-            writer = writer_factory()  # 创建独立 Writer
             writer_input = Msg(
                 name="user",
                 content=(
@@ -75,6 +77,9 @@ async def process_single_segment(segment, task_desc, searcher_factory, writer_fa
 
             draft_msg = await call_agent_with_retry(writer, writer_input)
             print(f"[Writer] Segment finished: {segment.topic}")
+            print("[Writer 初稿输出]")
+            print(draft_msg.get_text_content())
+            await writer.memory.clear()
 
             segment.content = draft_msg.get_text_content()
             segment.finished = True
@@ -82,7 +87,7 @@ async def process_single_segment(segment, task_desc, searcher_factory, writer_fa
             CURRENT_RUNNING_TASKS -= 1
             print(f"[{time.strftime('%H:%M:%S')}] [并发数: {CURRENT_RUNNING_TASKS}] ✅ 完成写作: {segment.topic[:15]}.")
 
-async def process_section_concurrently(section: Section, parent_id, task_desc, searcher_factory, writer_factory,
+async def process_section_concurrently(section: Section, parent_id, task_desc, agent_factory,
                                        semaphore, stock_symbol, output_pth, manuscript_root):
     """递归并发处理章节"""
 
@@ -93,7 +98,7 @@ async def process_section_concurrently(section: Section, parent_id, task_desc, s
             section_id = ((parent_id + ".") if parent_id else "") + str(subsection.section_id)
             # 递归调用
             sub_tasks.append(process_section_concurrently(
-                subsection, section_id, task_desc, searcher_factory, writer_factory, semaphore, stock_symbol,
+                subsection, section_id, task_desc, agent_factory, semaphore, stock_symbol,
                 output_pth, manuscript_root
             ))
 
@@ -103,7 +108,7 @@ async def process_section_concurrently(section: Section, parent_id, task_desc, s
         print(f"\n====== 启动章节 Segments 并发处理: {parent_id} ======\n")
         for segment in section.segments:
             seg_tasks.append(process_single_segment(
-                segment, task_desc, searcher_factory, writer_factory, semaphore
+                segment, task_desc, agent_factory, semaphore
             ))
 
     # 3. 等待所有 Segments 完成
@@ -120,8 +125,8 @@ async def process_section_concurrently(section: Section, parent_id, task_desc, s
                 f"[{time.strftime('%H:%M:%S')}] [并发数: {CURRENT_RUNNING_TASKS}] 🏷️ 生成标题: {section.title[:10]}...")
 
             try:
-                writer = writer_factory()
                 section_text = "\n".join([s.content for s in section.segments])
+                searcher, writer = agent_factory()
                 title_msg = await call_agent_with_retry(writer, Msg(
                     name="user",
                     content=(
@@ -176,37 +181,6 @@ async def run_workflow(task_desc: str):
     # ----- 2. 创建底层模型 -----
     model= create_chat_model()
     model_instruct = create_chat_model(reasoning=False)
-
-    # ----- 3. 创建 Searcher Agent -----
-    searcher_toolkit = build_searcher_toolkit(
-        short_term=short_term,
-        long_term=long_term,
-    )
-
-    searcher = create_searcher_agent(model=model, formatter=formatter, toolkit=searcher_toolkit)
-    # print("\n=== 打印 JSON Schema (get_json_schemas) ===")
-    # schemas = searcher_toolkit.get_json_schemas()
-    # print(schemas)
-
-
-    # ----- 4. 获取demonstration -----
-    # searcher_input = Msg(
-    #     name="User",
-    #     content=f"下面是某个任务描述：{task_desc}\n"
-    #             f"首先，你需要识别目标股票代码（如果任务描述中只谈及股票名称，你需要将之转换为股票代码）。"
-    #             f"请只输出纯数字的股票代码，不做其他输出。",
-    #     role="user",
-    # )
-    # while True:
-    #     try:
-    #         outline_msg = await call_agent_with_retry(searcher, searcher_input)
-    #         stock_symbol = re.search(r"[0-9]+", outline_msg.get_text_content()).group()
-    #         assert stock_symbol is not None
-    #         print("股票代码：", stock_symbol)
-    #         await searcher.memory.clear()
-    #         break
-    #     except AssertionError as e:
-    #         print(e)
 
     entity = get_entity_info(long_term, task_desc)
     if not entity or not entity.get("code"):
@@ -294,14 +268,6 @@ async def run_workflow(task_desc: str):
         outline = manuscript.read(read_subsections=True, with_reference=True, with_content=True, with_evidence=True, fold_other=False)
         print(outline)
 
-    # ----- 6. 调用 Writer：基于 outline.md 写 Manuscript 并导出 PDF -----
-    writer_toolkit = build_writer_toolkit(
-        short_term=short_term,
-        long_term=long_term,
-        searcher=searcher,
-    )
-    writer = create_writer_agent(model=model, formatter=formatter, toolkit=writer_toolkit)
-
     verifier_toolkit = build_verifier_toolkit(
         short_term=short_term,
         long_term=long_term,
@@ -311,16 +277,29 @@ async def run_workflow(task_desc: str):
     output_pth = PROJECT_ROOT / "data" / "output" / "reports"
 
     # 设置并发信号量
-    CONCURRENCY_LIMIT = 8
+    CONCURRENCY_LIMIT = int(os.getenv("N_THREAD", 16))
     semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
+
+    def create_searcher_writer():
+        searcher_toolkit = build_searcher_toolkit(
+            short_term=short_term,
+            long_term=long_term,
+        )
+        searcher = create_searcher_agent(model=model, formatter=formatter, toolkit=searcher_toolkit)
+        writer_toolkit = build_writer_toolkit(
+            short_term=short_term,
+            long_term=long_term,
+            searcher=searcher,
+        )
+        writer = create_writer_agent(model=model, formatter=formatter, toolkit=writer_toolkit)
+        return searcher, writer
 
     # 启动递归并发处理
     await process_section_concurrently(
         section=manuscript,
         parent_id=None,
         task_desc=task_desc,
-        searcher_factory=partial(create_searcher_agent, model=model, formatter=formatter, toolkit=searcher_toolkit),
-        writer_factory=partial(create_writer_agent, model=model, formatter=formatter, toolkit=writer_toolkit),
+        agent_factory=create_searcher_writer,
         semaphore=semaphore,
         stock_symbol=stock_symbol,
         output_pth=output_pth,
