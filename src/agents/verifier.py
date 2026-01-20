@@ -30,7 +30,7 @@ def create_verifier_agent(
         "reference": prompt_dict['verifier_reference_prompt'],
         "logic": prompt_dict['verifier_logic_prompt'],
         "quality": prompt_dict['verifier_quality_prompt'],
-        # "final": prompt_dict['verifier_final_check'],
+        "final": prompt_dict['verifier_final_check'],
     }
 
     sys_prompt = sys_prompt_map.get(verifier_type)
