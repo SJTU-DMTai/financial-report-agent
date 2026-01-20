@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from typing import Union
 
-DEMO_DIR = Path(os.getenv("DEMO_DIR", "data/reports/"))
+DEMO_DIR = Path(os.getenv("DEMO_DIR", "data/memory/short_term/demonstration/"))
 pdf_files = list(DEMO_DIR.glob("*.pdf")) + list(DEMO_DIR.glob("*.PDF"))
 STOCK_REPORT_PATHS = collections.defaultdict(list)
 for file in pdf_files:
