@@ -7,6 +7,7 @@ import re
 import sys
 from dataclasses import asdict
 from pathlib import Path
+from typing import List, Tuple, Dict
 
 from agentscope.agent import ReActAgent
 from agentscope.message import Msg
@@ -22,14 +23,14 @@ from src.agents.planner import create_planner_agent, build_planner_toolkit
 from src.agents.verifier import create_verifier_agent, build_verifier_toolkit, create_all_verifiers, create_final_verifier
 
 from src.utils.file_converter import md_to_pdf, pdf_to_markdown, section_to_markdown
-from src.utils.parse_verdict import parse_verifier_verdict
 from src.utils.call_agent_with_retry import call_agent_with_retry
 import config
 import asyncio
 
 from src.utils.file_converter import markdown_to_sections
 from src.utils.local_file import STOCK_REPORT_PATHS
-from src.evaluation.parse_verifier_verdict import parse_verdict, VERDICT_PARSERS
+from src.evaluation.parse_verifier_verdict import parse_verdict
+from src.evaluation.segment_scorer import SegmentScorer, SegmentScore
 
 
 async def run_workflow(task_desc: str) -> str:
@@ -57,6 +58,14 @@ async def run_workflow(task_desc: str) -> str:
     model= create_chat_model()
     model_instruct = create_chat_model(reasoning=False)
 
+    # ----- 初始化评估系统 -----
+    print("\n" + "="*60)
+    print("初始化评估系统")
+    print("="*60)
+    
+    segment_scorer = SegmentScorer(model, formatter)
+    print("评估系统初始化完成")
+
     # ----- 3. 创建 Searcher Agent -----
     searcher_toolkit = build_searcher_toolkit(
         short_term=short_term,
@@ -80,6 +89,10 @@ async def run_workflow(task_desc: str) -> str:
     while True:
         try:
             outline_msg = await call_agent_with_retry(searcher, searcher_input)
+            print(type(outline_msg))
+            print(outline_msg)
+            print(outline_msg.get_text_content())
+
             stock_symbol = re.search(r"[0-9]+", outline_msg.get_text_content()).group()
             assert stock_symbol is not None
             print("股票代码：", stock_symbol)
@@ -173,9 +186,9 @@ async def run_workflow(task_desc: str) -> str:
         outline = manuscript.read(read_subsections=True, with_reference=True, with_content=True, with_evidence=True, fold_other=False)
         print(outline)
 
-    # ----- 6. 创建所有Verifier -----
-    verifiers = create_all_verifiers(model, formatter, short_term)
-    final_verifier = create_final_verifier(model, formatter, short_term)
+    # # ----- 6. 创建所有Verifier -----
+    # verifiers = create_all_verifiers(model, formatter, short_term)
+    # final_verifier = create_final_verifier(model, formatter, short_term)
 
     # ----- 7. 调用 Writer：基于 outline.md 写 Manuscript 并导出 PDF -----
     writer_toolkit = build_writer_toolkit(
@@ -191,142 +204,22 @@ async def run_workflow(task_desc: str) -> str:
 
     output_pth = PROJECT_ROOT / "data" / "output" / "reports"
 
-    async def verify_segment_content(verifiers_dict, segment, task_desc, reference_text, materials_text):
-        """
-        对单个segment执行四个验证环节（numeric → reference → logic → quality），
-        遇到第一条不通过立即记录问题并返回，用于writer重写。
-        """
-        verification_results = {}
-        all_problems = []
-
-        # 按顺序执行四个验证
-        verifier_order = ["numeric", "reference", "logic", "quality"]
-
-        for verifier_name in verifier_order:
-            verifier = verifiers_dict[verifier_name]
-
-            # 构建不同验证器输入
-            verifier_content = f"任务：{task_desc}\n\n【写作要点】\n{segment.topic}\n\n"
-            if verifier_name in ["numeric", "reference"]:
-                verifier_content += f"【可用材料】\n{materials_text}\n\n"
-            if verifier_name in ["logic", "quality"]:
-                verifier_content += f"【写作要求】\n{segment.requirements}\n\n"
-            if verifier_name == "quality":
-                verifier_content += f"【参考文本】\n{reference_text}\n\n"
-            verifier_content += f"【待审核正文】\n{segment.content}\n\n"
-
-            # 不同验证器提示
-            verifier_prompts = {
-                "numeric": "请检查正文中所有数字、比例、估值、销量、财务数据、时间区间是否与材料一致。",
-                "reference": "请检查正文中所有material_id是否被引用，引用的内容是否与材料本身匹配。",
-                "logic": "请检查论点是否由论据支撑，是否存在跳跃、矛盾、自相矛盾的表述，语言是否清晰。",
-                "quality": "请对比当前文本与参考文本的写作质量，判断是否达到或超过参考水平。"
-            }
-            verifier_content += verifier_prompts[verifier_name]
-
-            verifier_input = Msg(name="user", content=verifier_content, role="user")
-            print(f"  → 执行 {verifier_name} 验证")
-
-            try:
-                response = await call_agent_with_retry(verifier, verifier_input)
-                result = parse_verdict(verifier_name, response.get_text_content())
-                verification_results[verifier_name] = result
-
-                if not result["passed"]:
-                    # 遇到 NO 立即返回结果，让writer修订
-                    all_problems.append({
-                        "verifier": verifier_name,
-                        "passed": False,
-                        "problems": result.get("problems", []),
-                        "scores": result.get("scores", {}),
-                        "raw_result": result
-                    })
-                    print(f" {verifier_name}验证失败，收集问题并返回")
-                    return False, verification_results, all_problems
-                else:
-                    print(f" {verifier_name}验证通过")
-
-            except Exception as e:
-                print(f"  {verifier_name}验证异常: {e}")
-                all_problems.append({
-                    "verifier": verifier_name,
-                    "passed": False,
-                    "problems": [f"验证异常: {e}"],
-                    "error": str(e)
-                })
-                return False, verification_results, all_problems
-
-            finally:
-                # 清空验证器内存
-                await verifier.memory.clear()
-
-        # 全部验证通过
-        return True, verification_results, all_problems
-
-    
-    def format_problems_for_rewrite(all_problems):
-        """格式化问题以便用于重写指令"""
-        if not all_problems:
-            return ""
-        
-        formatted = "【验证发现问题】\n\n"
-        
-        for problem_info in all_problems:
-            verifier_name = problem_info["verifier"]
-            problems = problem_info.get("problems", [])
-            
-            # 添加验证器类型说明
-            verifier_descriptions = {
-                "numeric": "数值一致性检查",
-                "reference": "引用正确性检查", 
-                "logic": "逻辑一致性检查",
-                "quality": "写作质量检查"
-            }
-            
-            description = verifier_descriptions.get(verifier_name, verifier_name)
-            formatted += f"{description}发现问题：\n"
-            
-            if problems:
-                if isinstance(problems, list):
-                    for i, problem in enumerate(problems[:3]):  # 只取前3个问题
-                        if isinstance(problem, dict):
-                            # 结构化问题
-                            desc = problem.get("description", "")
-                            location = problem.get("location", "")
-                            suggestion = problem.get("suggestion", "")
-                            expected = problem.get("expected", "")
-                            actual = problem.get("actual", "")
-                            
-                            formatted += f"  {i+1}. "
-                            if desc:
-                                formatted += f"问题: {desc}\n"
-                            if expected and actual:
-                                formatted += f"     预期: {expected}, 实际: {actual}\n"
-                            if location:
-                                formatted += f"     位置: {location}\n"
-                            if suggestion:
-                                formatted += f"     建议: {suggestion}\n"
-                        else:
-                            # 简单文本问题
-                            formatted += f"  {i+1}. {str(problem)}\n"
-                else:
-                    formatted += f"  {problems}\n"
-            else:
-                formatted += "  （无具体问题描述）\n"
-            
-            formatted += "\n"
-        
-        return formatted
+    # 存储所有segment的评分
+    all_segment_scores: List[SegmentScore] = []
+    segment_counter = 0
     
     async def dfs_report(section: Section, parent_id=None):
+        nonlocal segment_counter
         if section.subsections is None:
             return
         for subsection in section.subsections:
             section_id = ((parent_id + ".") if parent_id else "") + str(subsection.section_id)
             print(f"\n====== 开始写作章节 {section_id} ======\n")
             await dfs_report(subsection)
-            for segment in subsection.segments:
+            for segment_idx, segment in enumerate(subsection.segments):
                 await writer.memory.clear()
+                if segment.evidences is None:
+                    segment.evidences = []
                 for i in range(len(segment.evidences)):
                     searcher_input = Msg(
                         name="user",
@@ -338,11 +231,30 @@ async def run_workflow(task_desc: str) -> str:
                         ),
                         role="user",
                     )
-                    msg = await call_agent_with_retry(searcher, searcher_input)
-                    msg = msg.get_text_content()
-                    print(f"[Searcher] After searching {segment.evidences[i]}...")
-                    print(msg)
-                    segment.evidences[i] = msg
+                    # msg = await call_agent_with_retry(searcher, searcher_input)
+                    # msg = msg.get_text_content()
+                    # print(f"[Searcher] After searching {segment.evidences[i]}...")
+                    # print(msg)
+                    # segment.evidences[i] = msg
+                    try:
+                        msg = await call_agent_with_retry(searcher, searcher_input)
+                        # 确保返回的不是 None
+                        if msg is not None:
+                            msg_text = msg.get_text_content()
+                            if msg_text is not None:
+                                print(f"[Searcher] After searching {segment.evidences[i]}...")
+                                print(msg_text)
+                                segment.evidences[i] = msg_text
+                            else:
+                                print(f"[警告] 搜索 {segment.evidences[i]} 返回空结果")
+                                segment.evidences[i] = "(搜索无结果)"
+                        else:
+                            print(f"[警告] 搜索 {segment.evidences[i]} 返回 None")
+                            segment.evidences[i] = "(搜索失败)"
+                    except Exception as e:
+                        print(f"[错误] 搜索 {segment.evidences[i]} 时出错: {e}")
+                        segment.evidences[i] = f"(搜索错误: {str(e)})"
+                # 写作
                 writer_input = Msg(
                     name="user",
                     content=(
@@ -353,57 +265,47 @@ async def run_workflow(task_desc: str) -> str:
                     ),
                     role="user",
                 )
+
                 # draft_msg = await writer(writer_input)
                 draft_msg = await call_agent_with_retry(writer, writer_input)
+
                 print("[Writer 初稿输出]")
                 print(draft_msg.get_text_content())
                 segment.content = draft_msg.get_text_content()
-                # 清空writer内存，准备验证
+                segment.finished = True
+
                 await writer.memory.clear()
 
-                max_verify_rounds = cfg.get_max_verify_rounds()
-                materials_text = "\n".join(segment.evidences)
+                # ----- 9. 评估当前segment -----
+                segment_counter += 1
+                segment_id = f"{section_id}.{segment_counter}"
+                
+                print(f"\n{'='*40}")
+                print(f"评估segment {segment_id}")
+                print(f"{'='*40}")
 
-                for round_idx in range(1, max_verify_rounds + 1):
-
-                    print(f"\n--- Verifier 审核（Segment 级）轮次 {round_idx} ---\n")
-
-                    # 执行验证，收集所有问题
-                    passed, verification_results, all_problems = await verify_segment_content(
-                        verifiers, segment, task_desc, segment.reference, materials_text
-                    )
-                    if passed:
-                        segment.finished = True
-                        break
-                    else:
-                        # 构建重写指令
-                        if round_idx < max_verify_rounds:
-                            rewrite_prompt = "以下是针对【当前这个段落】的审核意见。\n\n"
-                            rewrite_prompt += f"【原段落写作要点】\n{segment.topic}\n\n"
-                            rewrite_prompt += f"【写作要求】\n{segment.requirements}\n\n"
-                            rewrite_prompt += f"【参考范例】\n{segment.reference}\n\n"
-                            rewrite_prompt += f"【可用材料】\n{materials_text}\n\n"
-                            
-                            # 添加格式化的问题详情
-                            rewrite_prompt += format_problems_for_rewrite(all_problems)
-                            
-                            rewrite_prompt += "\n请你根据上述所有问题修改段落内容，确保解决所有验证问题。\n"
-                            rewrite_prompt += "请只重写这一段正文，不要提及其他段落，不要总结章节，不要引入新的论点或结论。\n\n"
-                            rewrite_prompt += "请直接输出修订后的段落正文。"
-                            
-                            writer_fix_input = Msg(name="user", content=rewrite_prompt, role="user")
-                            draft_msg = await call_agent_with_retry(writer, writer_fix_input)
-                            segment.content = draft_msg.get_text_content()
-                            print("[Writer 修订输出]")
-                            print(segment.content)
-
-                            # 清空writer内存，准备下一轮验证
-                            await writer.memory.clear()
-
-                        else:
-                            print(f"[达到最大验证轮次 {max_verify_rounds}] Segment 最终未通过验证")
-                            segment.finished = False
-                            break
+                try:
+                    # 对segment进行评分
+                    segment_score = await segment_scorer.score_segment(segment, segment_id)
+                    
+                    # 记录评分
+                    all_segment_scores.append(segment_score)
+                    
+                    # 打印评分结果
+                    print(f"评分结果:")
+                    print(f"  全面性: {segment_score.comprehensiveness:.1f}")
+                    print(f"  洞察力: {segment_score.insight:.1f}")
+                    print(f"  指令遵循: {segment_score.instruction_following:.1f}")
+                    print(f"  可读性: {segment_score.readability:.1f}")
+                    print(f"  充分性: {segment_score.sufficiency:.1f}")
+                    
+                    # 保存评分到segment
+                    if not hasattr(segment, 'scores'):
+                        segment.scores = {}
+                    segment.scores = segment_score.to_dict()
+                    
+                except Exception as e:
+                    print(f"评估segment失败: {e}")
                 
                 # 保存进度
                 try:
@@ -435,6 +337,50 @@ async def run_workflow(task_desc: str) -> str:
                         print(f"生成章节标题失败: {e}")
 
     await dfs_report(manuscript)
+
+     # ----- 计算并输出最终评分结果 -----
+    print("\n" + "="*60)
+    print("最终评分统计")
+    print("="*60)
+    
+    if all_segment_scores:
+        # 计算五个维度的平均分
+        avg_comprehensiveness, avg_insight, avg_instruction_following, avg_readability, avg_sufficiency = \
+            segment_scorer.calculate_average_scores(all_segment_scores)
+        
+        print(f"评估完成，共评估 {len(all_segment_scores)} 个segment")
+        print(f"\n五个维度的平均分数:")
+        print(f"  全面性: {avg_comprehensiveness:.2f}")
+        print(f"  洞察力: {avg_insight:.2f}")
+        print(f"  指令遵循: {avg_instruction_following:.2f}")
+        print(f"  可读性: {avg_readability:.2f}")
+        print(f"  充分性: {avg_sufficiency:.2f}")
+        
+        # 保存详细评分结果
+        scoring_results = {
+            "task_desc": task_desc,
+            "segment_count": len(all_segment_scores),
+            "average_scores": {
+                "comprehensiveness": avg_comprehensiveness,
+                "insight": avg_insight,
+                "instruction_following": avg_instruction_following,
+                "readability": avg_readability,
+                "sufficiency": avg_sufficiency
+            },
+            "segment_scores": [score.to_dict() for score in all_segment_scores]
+        }
+        
+        # 创建评估目录
+        eval_dir = short_term_dir / "evaluation"
+        eval_dir.mkdir(parents=True, exist_ok=True)
+        
+        results_file = eval_dir / "scoring_results.json"
+        results_file.write_text(json.dumps(scoring_results, ensure_ascii=False, indent=2))
+        
+        # 保存到短期记忆
+        short_term.store("content_scoring_results", scoring_results)
+        
+        print(f"\n详细评分结果已保存到: {results_file}")
 
     markdown_text = section_to_markdown(manuscript)
     (short_term_dir / "manuscript.md").write_text(markdown_text, encoding="utf-8")

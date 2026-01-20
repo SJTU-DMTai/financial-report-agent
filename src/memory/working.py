@@ -39,7 +39,7 @@ class Segment:
                 ctx += f"\t+ **内容**\n\t{self.content}\n\n"
             elif self.template is not None:
                 ctx += f"\t+ **示例**\n\t{self.template}\n\n"
-
+    
         if with_requirements and self.requirements is not None:
             requirements = "\n".join(
                 ("\t\t" if r.strip()[:2] in ["- ", "* "] else "") + r
@@ -48,10 +48,25 @@ class Segment:
             ctx += f"\t+ **写作要求**\n{requirements}\n\n"
 
         if with_evidence and self.evidences is not None:
+            # 修复：过滤掉 None 值
+            processed_evidences = []
+            for e in self.evidences:
+                if e is None:
+                    processed_evidences.append("(空)")
+                else:
+                    # 确保是字符串并处理换行
+                    processed_evidences.append(str(e).replace("\n\n", "\n"))
+            
             evidence_block = "\n".join(
-                "\t\t- " + e.replace("\n\n", "\n") for e in self.evidences
+                "\t\t- " + e for e in processed_evidences
             )
             ctx += f"\t+ **论据材料**\n{evidence_block}\n\n"
+
+        # if with_evidence and self.evidences is not None:
+        #     evidence_block = "\n".join(
+        #         "\t\t- " + e.replace("\n\n", "\n") for e in self.evidences
+        #     )
+        #     ctx += f"\t+ **论据材料**\n{evidence_block}\n\n"
 
         return ctx
 
