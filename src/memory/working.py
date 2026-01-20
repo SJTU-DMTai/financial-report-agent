@@ -18,15 +18,8 @@ class Segment:
     template: str = None
     evidences: List[str] = None
 
-    def __str__(
-        self,
-        with_requirements=True,
-        with_reference=True,
-        with_content=True,
-        with_evidence=True,
-    ):
+    def __str__(self, with_requirements=True, with_reference=True, with_content=True, with_evidence=True):
         ctx = ""
-
         if with_reference and self.reference is not None:
             ref_text = "\n".join(
                 ["\t\t> " + l for l in self.reference.splitlines()]
@@ -47,7 +40,6 @@ class Segment:
                 ]
             )
             ctx += f"\t+ **写作要求**\n{requirements}\n\n"
-
         if with_evidence and self.evidences is not None:
             evidence_text = "\n".join(
                 "\t\t- " + e.replace("\n\n", "\n")

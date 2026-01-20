@@ -7,6 +7,7 @@ import re
 import sys
 from dataclasses import asdict
 from pathlib import Path
+from typing import List, Tuple, Dict
 
 from agentscope.agent import ReActAgent
 from agentscope.message import Msg
@@ -19,10 +20,10 @@ from src.memory.long_term import LongTermMemoryStore
 from src.agents.searcher import create_searcher_agent, build_searcher_toolkit
 from src.agents.writer import create_writer_agent, build_writer_toolkit
 from src.agents.planner import create_planner_agent, build_planner_toolkit
-from src.agents.verifier import create_verifier_agent, build_verifier_toolkit
+# from src.agents.verifier import create_verifier_agent, build_verifier_toolkit
+from src.agents.verifier import create_verifier_agent, build_verifier_toolkit, create_all_verifiers, create_final_verifier
 
 from src.utils.file_converter import md_to_pdf, pdf_to_markdown, section_to_markdown
-from src.utils.parse_verdict import parse_verifier_verdict
 from src.utils.call_agent_with_retry import call_agent_with_retry
 from src.utils.get_entity_info import get_entity_info
 from src.utils.file_converter import markdown_to_sections
@@ -30,6 +31,10 @@ from src.utils.local_file import STOCK_REPORT_PATHS
 import config
 import asyncio
 
+from src.utils.file_converter import markdown_to_sections
+from src.utils.local_file import STOCK_REPORT_PATHS
+from src.evaluation.parse_verifier_verdict import parse_verdict
+from src.evaluation.segment_scorer import SegmentScorer, SegmentScore
 
 
 async def run_workflow(task_desc: str):
@@ -49,7 +54,7 @@ async def run_workflow(task_desc: str):
         base_dir=short_term_dir,
     )
     long_term_dir = PROJECT_ROOT / "data" / "memory" / "long_term"
-    
+
     long_term = LongTermMemoryStore(
         base_dir=long_term_dir,
     )
@@ -62,6 +67,14 @@ async def run_workflow(task_desc: str):
     # ----- 2. 创建底层模型 -----
     model= create_chat_model()
     model_instruct = create_chat_model(reasoning=False)
+
+    # ----- 初始化评估系统 -----
+    print("\n" + "="*60)
+    print("初始化评估系统")
+    print("="*60)
+
+    segment_scorer = SegmentScorer(model, formatter)
+    print("评估系统初始化完成")
 
     # ----- 3. 创建 Searcher Agent -----
     searcher_toolkit = build_searcher_toolkit(
@@ -195,14 +208,22 @@ async def run_workflow(task_desc: str):
     verifier = create_verifier_agent(model=model, formatter=formatter, toolkit=verifier_toolkit)
 
     output_pth = PROJECT_ROOT / "data" / "output" / "reports"
+
+    # 存储所有segment的评分
+    all_segment_scores: List[SegmentScore] = []
+    segment_counter = 0
+
     async def dfs_report(section: Section, parent_id=None):
+        nonlocal segment_counter
         if section.subsections is None:
             return
         for subsection in section.subsections:
             section_id = ((parent_id + ".") if parent_id else "") + str(subsection.section_id)
             print(f"\n====== 开始写作章节 {section_id} ======\n")
             await dfs_report(subsection)
-            for segment in subsection.segments:
+            for segment_idx, segment in enumerate(subsection.segments):
+                if segment.evidences is None:
+                    segment.evidences = []
                 for i in range(len(segment.evidences)):
                     searcher_input = Msg(
                         name="user",
@@ -239,57 +260,42 @@ async def run_workflow(task_desc: str):
                 print("[Writer 初稿输出]")
                 print(draft_msg.get_text_content())
                 await writer.memory.clear()
-
-                # max_verify_rounds = cfg.get_max_verify_rounds()
-                # # 进入 Verifier 审核 loop
-                # await verifier.memory.clear()
-                # for round_idx in range(1, max_verify_rounds + 1):
-                #
-                #     print(f"\n--- Verifier 审核轮次 {round_idx}：章节 {section_id} ---\n")
-                #     await asyncio.sleep(5)
-                #     verifier_input = Msg(
-                #         name="user",
-                #         content=(
-                #             f"任务：{task_desc}\n"
-                #             f"当前正在撰写的要点：{segment.summary}\n"
-                #             f"【写作要求】\n{segment.requirements}\n"
-                #             f"【参考范例】\n{segment.reference}\n\n"
-                #             "请调用材料读取工具，不遗漏任何参考材料进行严格地审核，并给出结构化输出的结论。"
-                #         ),
-                #         role="user",
-                #     )
-                #
-                #     # verify_msg = await verifier(verifier_input)
-                #     verify_msg = await call_agent_with_retry(verifier, verifier_input)
-                #     verdict_text = verify_msg.get_text_content()
-                #     print("[Verifier 审核结果]")
-                #     print(verdict_text)
-                #
-                #     passed, problems, reason = parse_verifier_verdict(verdict_text)
-                #
-                #     if passed:
-                #         print(f"[审核通过] 章节 {section_id} 审核通过。进入下一章节。")
-                #         break
-                #     # 如果没通过，把 Verifier 的结构化结论反馈给 Writer，让其在同一个 section 上重写
-                #     problems_text = problems if problems else verdict_text
-                #
-                #     writer_fix_input = Msg(
-                #         name="user",
-                #         content=(
-                #             "我给出了一些审核意见。"
-                #             f"未通过原因：{reason}\n"
-                #             f"问题如下：{problems_text}\n\n"
-                #             "请根据这些问题逐条修改本章节内容，返回更正后的新版本。正文以外的思考过程等不要出现在答案中。"
-                #         ),
-                #         role="user",
-                #     )
-                #     # draft_msg = await writer(writer_fix_input)
-                #     draft_msg = await call_agent_with_retry(writer, writer_fix_input)
-                #
-                #     print("[Writer 根据审核意见修改后的输出]")
-                #     print(draft_msg.get_text_content())
                 segment.content = draft_msg.get_text_content()
                 segment.finished = True
+
+                await writer.memory.clear()
+
+                # ----- 9. 评估当前segment -----
+                segment_counter += 1
+                segment_id = f"{section_id}.{segment_counter}"
+
+                print(f"\n{'='*40}")
+                print(f"评估segment {segment_id}")
+                print(f"{'='*40}")
+
+                try:
+                    # 对segment进行评分
+                    segment_score = await segment_scorer.score_segment(segment, segment_id)
+
+                    # 记录评分
+                    all_segment_scores.append(segment_score)
+
+                    # 打印评分结果
+                    print(f"评分结果:")
+                    print(f"  全面性: {segment_score.comprehensiveness:.1f}")
+                    print(f"  洞察力: {segment_score.insight:.1f}")
+                    print(f"  指令遵循: {segment_score.instruction_following:.1f}")
+                    print(f"  可读性: {segment_score.readability:.1f}")
+                    print(f"  充分性: {segment_score.sufficiency:.1f}")
+
+                    # 保存评分到segment
+                    if not hasattr(segment, 'scores'):
+                        segment.scores = {}
+                    segment.scores = segment_score.to_dict()
+
+                except Exception as e:
+                    print(f"评估segment失败: {e}")
+
             section_text = "\n".join([s.content for s in subsection.segments])
             draft_msg = await call_agent_with_retry(writer, Msg(
                 name="user",
@@ -308,6 +314,51 @@ async def run_workflow(task_desc: str):
 
     await dfs_report(manuscript)
 
+     # ----- 计算并输出最终评分结果 -----
+    print("\n" + "="*60)
+    print("最终评分统计")
+    print("="*60)
+
+    if all_segment_scores:
+        # 计算五个维度的平均分
+        avg_comprehensiveness, avg_insight, avg_instruction_following, avg_readability, avg_sufficiency = \
+            segment_scorer.calculate_average_scores(all_segment_scores)
+
+        print(f"评估完成，共评估 {len(all_segment_scores)} 个segment")
+        print(f"\n五个维度的平均分数:")
+        print(f"  全面性: {avg_comprehensiveness:.2f}")
+        print(f"  洞察力: {avg_insight:.2f}")
+        print(f"  指令遵循: {avg_instruction_following:.2f}")
+        print(f"  可读性: {avg_readability:.2f}")
+        print(f"  充分性: {avg_sufficiency:.2f}")
+
+        # 保存详细评分结果
+        scoring_results = {
+            "task_desc": task_desc,
+            "segment_count": len(all_segment_scores),
+            "average_scores": {
+                "comprehensiveness": avg_comprehensiveness,
+                "insight": avg_insight,
+                "instruction_following": avg_instruction_following,
+                "readability": avg_readability,
+                "sufficiency": avg_sufficiency
+            },
+            "segment_scores": [score.to_dict() for score in all_segment_scores]
+        }
+
+        # 创建评估目录
+        eval_dir = short_term_dir / "evaluation"
+        eval_dir.mkdir(parents=True, exist_ok=True)
+
+        results_file = eval_dir / "scoring_results.json"
+        results_file.write_text(json.dumps(scoring_results, ensure_ascii=False, indent=2))
+
+        # 保存到短期记忆
+        short_term.store("content_scoring_results", scoring_results)
+
+        print(f"\n详细评分结果已保存到: {results_file}")
+
     markdown_text = section_to_markdown(manuscript)
     (short_term_dir / "manuscript.md").write_text(markdown_text, encoding="utf-8")
     # md_to_pdf(markdown_text, short_term=short_term)
+
