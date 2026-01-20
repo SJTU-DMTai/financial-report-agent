@@ -129,13 +129,13 @@ async def process_section_concurrently(section: Section, parent_id, task_desc, a
                 model_instruct = create_chat_model(reasoning=False)
                 formatter = create_agent_formatter()
                 title_msg = await formatter.format([
-                    Msg("system", "请你根据当前任务撰写的内容起一个新标题。你的回答不要包含其他无关内容，只输出标题。", "system"),
+                    Msg("system", "请你根据当前任务撰写的内容起一个新标题。除思考(think)部分以外，你最终输出的回答不要包含其他无关内容和注释，只输出标题。你的回答限十字以内。", "system"),
                     Msg("user",
                         f"{section_text}\n\n"
-                        f"参考范例的标题为{section.title}，提供的内容可以重新起一个标题：", "user", )
+                        f"参考范例的标题为{section.title}，请根据提供的内容重新起一个标题。你的回答限十字以内。", "user", )
                 ])
                 title_msg = await model_instruct(title_msg)
-                section.title = title_msg.content.strip("#").strip()
+                section.title = Msg("assistant", title_msg.content, "assistant").get_text_content().strip("#").strip()
                 print(f"[Title Update] {section.title}")
             finally:
                 CURRENT_RUNNING_TASKS -= 1
