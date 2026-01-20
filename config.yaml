@@ -106,6 +106,12 @@ models:
     model_name: qwen-flash
     stream: false
 
+  doubao_ark:
+    provider: ark
+    model_name: ep-20250904234628-hj9k8
+    base_url_env: https://ark-ap-southeast.byteintl.net/api/v3
+    stream: false
+
 # font:
 #   chinese: /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc
 font:
@@ -122,7 +128,7 @@ verify_config:
   max_verify_rounds: 2
 
 wkhtmltopdf_path:
-  path: E:/wkhtmltopdf/bin/wkhtmltopdf.exe
+  path: /usr/local/bin/wkhtmltopdf
 
 planner:
   use_demonstration: True
