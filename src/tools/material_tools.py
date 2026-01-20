@@ -272,8 +272,6 @@ class MaterialTools:
     def read_material(
         self,
         ref_id: str,
-        start_index: int | None = None,
-        end_index: int | None = None,
         query_key: str | None = None,
         context_lines: int = 50,
     ) -> ToolResponse:
@@ -287,12 +285,6 @@ class MaterialTools:
 
         Args:
             ref_id (str): Material 的唯一标识 ID。
-            start_index (int | None): 
-                - 对于表格：起始行号（包含）。
-                - 如果为空表示从第0行开始。
-            end_index (int | None): 
-                - 对于表格：结束行号（不包含）。
-                - 如果为空表示到最后一条结束。
             query_key (str | None):
                 - 对于 JSON list：可选，用于对每个条目提取该字段。
                 - 对于表格：可选，用于筛选特定列（如 "Date,Close"）。
@@ -301,11 +293,6 @@ class MaterialTools:
                 - 关键词搜索时的上下文行数（关键词前后各显示该行数）。
                 - 默认为50行。只在使用keyword参数时有效。
         """
-        if start_index is not None:
-            start_index = int(start_index)
-        if end_index is not None:
-            end_index = int(end_index)
-
         meta = self.short_term.get_material_meta(ref_id) 
 
         if not meta:
@@ -317,13 +304,13 @@ class MaterialTools:
         try:
             # ...existing code...
             if meta.m_type == MaterialType.TABLE:
-                return self._read_table_impl(ref_id, start_index, end_index, query_key)
+                return self._read_table_impl(ref_id, query_key)
             elif meta.m_type == MaterialType.TEXT:
                 # 如果提供了关键词，使用关键词搜索
                 if query_key:
                     return self._read_with_keyword(ref_id, query_key, context_lines, meta)
                 else:
-                    return self._read_text_impl(ref_id, start_index, end_index)
+                    return self._read_text_impl(ref_id)
             elif meta.m_type == MaterialType.JSON:
                 return self._read_json_impl(ref_id, query_key)
             else:  
@@ -408,7 +395,7 @@ class MaterialTools:
                 metadata={"ref_id": ref_id, "error": str(e)}
             )
 
-    def _read_table_impl(self, ref_id, start, end, cols):
+    def _read_table_impl(self, ref_id, cols):
         df = self.short_term.load_material(ref_id) 
         
         # 1. 列筛选 (Horizontal Slicing)
@@ -421,14 +408,8 @@ class MaterialTools:
 
         # 2. 行筛选 (Vertical Slicing)
         total_rows = len(df)
-        start = start if start is not None else 0
-        end = end if end is not None else total_rows
         
-        # 边界保护
-        if start < 0: start = 0
-        if end > total_rows: end = total_rows
-        
-        sliced_df = df.iloc[start:end].copy()
+        sliced_df = df.copy()
 
         if ("_disclosure_" in ref_id) and ("公告" in sliced_df.columns):
             MAX_TOTAL_CHARS = 20000
@@ -462,7 +443,7 @@ class MaterialTools:
         # preview_str = sliced_df.to_markdown(index=False, disable_numparse=True)
         preview_str = sliced_df.to_csv(index=False)
         text = (f"[read_material] ID: {ref_id}\n"
-                f"完整 material 共 {total_rows} 行。已读取范围: 行 [{start}, {end})。\n"
+                f"完整 material 共 {total_rows} 行。\n"
                 f"内容:\n{preview_str}")
                 
         return ToolResponse(
@@ -470,6 +451,24 @@ class MaterialTools:
             metadata={"ref_id": ref_id, "type": "table", "rows": len(sliced_df)}
         )
 
+    def _read_text_impl(self, ref_id):
+        # 适用于 .txt, .md
+        content = self.short_term.load_material(ref_id) # 返回 str
+        lines = content.split('\n')
+        total_lines = len(lines)
+
+        # 截取
+        sliced_lines = lines
+        preview_str = "\n".join(sliced_lines)
+
+        text = (f"[read_material] ID: {ref_id}\n"
+                f"完整 material 共 {total_lines} 行。\n"
+                f"内容:\n{preview_str}")
+
+        return ToolResponse(
+            content=[TextBlock(type="text", text=text)],
+            metadata={"ref_id": ref_id, "type": "text", "lines": len(sliced_lines)}
+        )
 
     def _read_json_impl(
         self,
@@ -695,16 +694,12 @@ class MaterialTools:
             entity = get_entity_info(long_term=self.long_term, text=symbol)
             keyword = entity['name'] + ((" " + keyword) if keyword else "")
             description = (f"{entity['name']}（{entity['code']}）" if entity else "") + f"股票新闻资讯 {keyword}"
-        try:
-            dfs = []
-            for page_idx in range(1, 25):
-                df = stock_news_em(keyword=keyword, page_idx=page_idx)
-                dfs.append(df[(pd.to_datetime(df['发布时间']) >= start_date) & (pd.to_datetime(df['发布时间']) <= end_date)])
-                if sum([len(_df) for _df in dfs]) > latest_num:
-                    break
-        except Exception as e:
-            traceback.print_exc()
-            raise e
+        dfs = []
+        for page_idx in range(1, 25):
+            df = stock_news_em(keyword=keyword, page_idx=page_idx)
+            dfs.append(df[(pd.to_datetime(df['发布时间']) >= start_date) & (pd.to_datetime(df['发布时间']) <= end_date)])
+            if sum([len(_df) for _df in dfs]) > latest_num:
+                break
         df = pd.concat(dfs)
         df.sort_values("发布时间", inplace=True, ascending=False)
 
