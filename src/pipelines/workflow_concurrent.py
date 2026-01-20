@@ -56,7 +56,7 @@ async def process_single_segment(segment, task_desc, agent_factory, semaphore):
     global CURRENT_RUNNING_TASKS
     async with semaphore:
         CURRENT_RUNNING_TASKS += 1
-        print(f"[{time.strftime('%H:%M:%S')}] [并发数: {CURRENT_RUNNING_TASKS}] ✍️ 开始写作: {segment.topic[:15]}...")
+        print(f"[{time.strftime('%H:%M:%S')}] [并发数: {CURRENT_RUNNING_TASKS}] ✍️ 开始写作: {segment.topic[:15]}...", flush=True)
 
         searcher, writer = agent_factory()
         for i, evidence in enumerate(segment.evidences):
@@ -78,14 +78,14 @@ async def process_single_segment(segment, task_desc, agent_factory, semaphore):
             draft_msg = await call_agent_with_retry(writer, writer_input)
             print(f"[Writer] Segment finished: {segment.topic}")
             print("[Writer 初稿输出]")
-            print(draft_msg.get_text_content())
+            print(draft_msg.get_text_content(), flush=True)
             await writer.memory.clear()
 
             segment.content = draft_msg.get_text_content()
             segment.finished = True
         finally:
             CURRENT_RUNNING_TASKS -= 1
-            print(f"[{time.strftime('%H:%M:%S')}] [并发数: {CURRENT_RUNNING_TASKS}] ✅ 完成写作: {segment.topic[:15]}.")
+            print(f"[{time.strftime('%H:%M:%S')}] [并发数: {CURRENT_RUNNING_TASKS}] ✅ 完成写作: {segment.topic[:15]}.", flush=True)
 
 async def process_section_concurrently(section: Section, parent_id, task_desc, agent_factory,
                                        semaphore, stock_symbol, output_pth, manuscript_root):
@@ -122,22 +122,20 @@ async def process_section_concurrently(section: Section, parent_id, task_desc, a
             global CURRENT_RUNNING_TASKS  # 引入全局变量
             CURRENT_RUNNING_TASKS += 1
             print(
-                f"[{time.strftime('%H:%M:%S')}] [并发数: {CURRENT_RUNNING_TASKS}] 🏷️ 生成标题: {section.title[:10]}...")
+                f"[{time.strftime('%H:%M:%S')}] [并发数: {CURRENT_RUNNING_TASKS}] 🏷️ 生成标题: {section.title[:10]}...", flush=True)
 
             try:
                 section_text = "\n".join([s.content for s in section.segments])
-                searcher, writer = agent_factory()
-                title_msg = await call_agent_with_retry(writer, Msg(
-                    name="user",
-                    content=(
-                        "以下是所有要点整理后的本章节内容：\n\n"
+                model_instruct = create_chat_model(reasoning=False)
+                formatter = create_agent_formatter()
+                title_msg = await formatter.format([
+                    Msg("system", "请你根据当前任务撰写的内容起一个新标题。你的回答不要包含其他无关内容，只输出标题。", "system"),
+                    Msg("user",
                         f"{section_text}\n\n"
-                        f"参考范例的标题为{section.title}\n\n"
-                        f"请你根据当前任务撰写的内容起一个新标题。"
-                    ),
-                    role="user",
-                ))
-                section.title = title_msg.get_text_content()
+                        f"参考范例的标题为{section.title}，提供的内容可以重新起一个标题：", "user", )
+                ])
+                title_msg = await model_instruct(title_msg)
+                section.title = title_msg.content.strip("#").strip()
                 print(f"[Title Update] {section.title}")
             finally:
                 CURRENT_RUNNING_TASKS -= 1
@@ -148,7 +146,7 @@ async def process_section_concurrently(section: Section, parent_id, task_desc, a
 
     # 6. 保存中间结果 (可选，防止崩溃全丢)
     # 注意：并发写入文件可能冲突，这里简单处理，实际生产建议用单独的 save 协程或锁
-    # (output_pth / f"{stock_symbol}.json").write_text(manuscript_root.to_json(ensure_ascii=False))
+    (output_pth / f"{stock_symbol}.json").write_text(manuscript_root.to_json(ensure_ascii=False))
 
 
 async def run_workflow(task_desc: str):
@@ -277,7 +275,7 @@ async def run_workflow(task_desc: str):
     output_pth = PROJECT_ROOT / "data" / "output" / "reports"
 
     # 设置并发信号量
-    CONCURRENCY_LIMIT = int(os.getenv("N_THREAD", 16))
+    CONCURRENCY_LIMIT = int(os.getenv("N_THREAD", 32))
     semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
 
     def create_searcher_writer():
@@ -421,4 +419,4 @@ async def run_workflow(task_desc: str):
 
     markdown_text = section_to_markdown(manuscript)
     (short_term_dir / "manuscript.md").write_text(markdown_text, encoding="utf-8")
-    # md_to_pdf(markdown_text, short_term=short_term)
+    md_to_pdf(markdown_text, short_term=short_term)
