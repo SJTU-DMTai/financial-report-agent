@@ -345,7 +345,9 @@ class SearchTools:
             Args:
                 query (str): 检索需求的自然语言描述。
             """
-            final_prompt = get_retrieve_fn(self.short_term, self.long_term)(query).content
+            retrieve_fn = get_retrieve_fn(self.short_term, self.long_term)
+            final_prompt = await retrieve_fn(query)
+            final_prompt = final_prompt.content
             msg = Msg(
                 name="user",
                 content=final_prompt,
@@ -374,8 +376,8 @@ class SearchTools:
                 content=page_text,
         )
 
-def get_retrieve_fn(short_term, long_term) -> ToolResponse:
-    async def retrieve_local_material(query):
+def get_retrieve_fn(short_term, long_term) -> Callable[str]:
+    async def retrieve_local_material(query: str) -> ToolResponse:
         """
         在已保存的本地材料中按关键词搜索和query相关的材料，返回部分预览内容。
         Args:
