@@ -250,10 +250,10 @@ def _build_appendix_md(citations: List[Dict]) -> str:
 
     1. <a id="ref-1"></a>**REF_ID**（引用字段/行：detail）
 
-        - 文件名：`xxx`
-        - 类型：`yyy`
-        - 描述：`zzz`
-        - 来源：`...`
+        - 文件名：xxx
+        - 类型：yyy
+        - 描述：zzz
+        - 来源：...
     """
     if not citations:
         return ""
@@ -295,17 +295,17 @@ def _build_appendix_md(citations: List[Dict]) -> str:
             esc_m_type = html.escape(str(meta.m_type.value)) if getattr(meta, "m_type", None) else ""
 
             if esc_filename:
-                lines.append(f"    - 文件名：`{esc_filename}`")
+                lines.append(f"    - 文件名：{esc_filename}")
             if esc_m_type:
-                lines.append(f"    - 类型：`{esc_m_type}`")
+                lines.append(f"    - 类型：{esc_m_type}")
 
             if getattr(meta, "description", None):
                 esc_desc = html.escape(str(meta.description))
-                lines.append(f"    - 描述：`{esc_desc}`")
+                lines.append(f"    - 描述：{esc_desc}")
 
             if getattr(meta, "source", None):
                 esc_source = html.escape(str(meta.source))
-                lines.append(f"    - 来源：`{esc_source}`")
+                lines.append(f"    - 来源：{esc_source}")
         else:
             lines.append("    - *警告：未在 registry 中找到该 ref_id 对应的元数据*")
 
@@ -507,11 +507,11 @@ def md_to_pdf(
     # ==== header/footer HTML 写入临时文件 ====
 
 
-    c_base  = pal["base"]["base"]
-    c_dark1 = pal["base"]["dark1"]
-    c_dark2 = pal["base"]["dark2"]
-    c_light1 = pal["base"]["light1"]
-    c_light2 = pal["base"]["light2"]
+    c_base  = pal["theme"]["base"]
+    c_dark1 = pal["theme"]["dark1"]
+    c_dark2 = pal["theme"]["dark2"]
+    c_light1 = pal["theme"]["light1"]
+    c_light2 = pal["theme"]["light2"]
 
     header_title = _safe_trim_title(main_title, max_len=50)
     header_html = _build_header_html(header_title, rule_color=c_dark1, subtle_text=c_dark2, font_face_css=font_face_css, font_family=body_family)

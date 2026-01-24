@@ -840,7 +840,7 @@ class MaterialTools:
             )
 
         
-        # df = df.head(10) # 避免获取的公告数量过多取前10条，后续可以改成按照某些条件排序取前10条
+        # 避免获取的公告数量过多取其中10条，后续可以改成按照某些条件排序取前10条
         if df is not None and len(df) > 10:
             df = df.sample(n=10)
 
@@ -858,7 +858,11 @@ class MaterialTools:
 
             if text:  # 只保存有内容的公告
                 # 为每个公告创建唯一的 ref_id
-                disclosure_ref_id = f"{symbol}_disclosure_{announce_date}"
+                announce_date_str = str(announce_date)
+                date_only = announce_date_str.split()[0]
+                date_only = date_only.replace(".", "-").replace("/", "-")
+                disclosure_ref_id = f"{symbol}_disclosure_{date_only}_{idx}" # 避免不合法文件名
+
 
                 # 创建详细的描述，包含工具名、源URL等信息
                 description_parts = [
@@ -882,7 +886,7 @@ class MaterialTools:
                     ref_id=disclosure_ref_id,
                     content=text,
                     description=description,
-                    source="AKshare API - stock_zh_a_disclosure_report_cninfo",
+                    source="AKshare API:CNINFO",
                     entity=entity,
                     time={"announce_date": str(announce_date)},
                 )

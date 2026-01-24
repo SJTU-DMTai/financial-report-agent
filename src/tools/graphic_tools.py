@@ -6,7 +6,7 @@ import re
 from agentscope.agent import ReActAgent
 from agentscope.message import Msg, TextBlock, ImageBlock, Base64Source
 from agentscope.tool import Toolkit, ToolResponse
-import seaborn
+import seaborn as sns
 import base64
 from io import BytesIO
 from typing import Any, Dict, List, Literal, Optional
@@ -16,6 +16,9 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
 import numpy as np
 import matplotlib.font_manager as fm
+from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.patches import Rectangle
+import matplotlib.colors as mcolors
 from agentscope.tool._coding._python import execute_python_code
 from ..memory.short_term import ShortTermMemoryStore
 from ..utils.generate_palette import generate_palette
@@ -28,10 +31,8 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 cfg = config.Config()
-
-
-
-FONT_PATH = cfg.get_font_path("chinese")
+style = cfg.get_pdf_style()
+FONT_PATH = style.get("body_font_path", "")
 font_prop: Optional[fm.FontProperties] = None
 if FONT_PATH:
     try:
@@ -54,6 +55,51 @@ else:
 
 class GraphicTools:
 
+    def _setup_report_style(self) -> None:
+        """统一全局视觉风格：研报风格、字体、网格、线宽、legend 等。"""
+        # seaborn 负责主题与默认观感
+        sns.set_theme(
+            context="notebook",          # 字号体系适中
+            style="whitegrid",           # 研报常见浅网格
+            font=matplotlib.rcParams.get("font.family", None),
+            rc={
+                "axes.unicode_minus": False,
+            },
+        )
+
+        try:
+            sns.set_palette(self.colors_primary)
+        except Exception:
+            pass
+        matplotlib.rcParams.update({
+            # 分辨率与导出
+            "figure.dpi": 120,
+            "savefig.dpi": 180,
+            "savefig.bbox": "tight",
+            "savefig.pad_inches": 0.08,
+
+            # 字体尺寸
+            "axes.titlesize": 13,
+            "axes.labelsize": 11,
+            "xtick.labelsize": 10,
+            "ytick.labelsize": 10,
+            "legend.fontsize": 10,
+
+            # 线条
+            "lines.linewidth": 2.2,
+            "lines.markersize": 5,
+            "lines.markeredgewidth": 0.6,
+
+            # 网格
+            "grid.alpha": 0.25,
+            "grid.linestyle": "-",
+            "grid.linewidth": 0.6,
+
+            # 坐标轴”
+            "axes.spines.top": False,
+            "axes.spines.right": False,
+        })
+
     def __init__(self, short_term: ShortTermMemoryStore) -> None:
         self.short_term = short_term
         self.tools = [
@@ -65,22 +111,59 @@ class GraphicTools:
         base_color = style["base_color"]
         self.pal = generate_palette(base_color)
 
-        # 预组织两个色序列：主色系（base）和邻近色系（analogous）
-        self._colors_base = [
-            self.pal["base"]["base"],
-            self.pal["base"]["dark1"],
-            self.pal["base"]["light1"],
-            self.pal["base"]["dark2"],
-            self.pal["base"]["light2"],
-        ]
-        self._colors_ana = [
-            self.pal["analogous"]["base"],
-            self.pal["analogous"]["dark1"],
-            self.pal["analogous"]["light1"],
-            self.pal["analogous"]["dark2"],
-            self.pal["analogous"]["light2"],
-        ]
+        self.theme = self.pal["theme"]  # dict
+        self.colors_primary = list(self.pal["categorical_primary"])
+        self.colors_secondary = list(self.pal["categorical_secondary"])
+        self._setup_report_style()
 
+    def _apply_gradient_background(
+        self,
+        ax,
+        top_left: str = "#EBE7E7",      # 左上深
+        bottom_right: str = "#FFFFFF",  # 右下白
+        steps: int = 24,                # 建议 16~40；越大越细腻但更耗时
+        alpha: float = 1.0,
+    ) -> None:
+        ax.patch.set_facecolor("none")
+        if getattr(ax, "_has_grad_bg", False):
+            return
+        ax._has_grad_bg = True
+
+        c0 = np.array(mcolors.to_rgb(bottom_right))  # 右下白（w=0）
+        c1 = np.array(mcolors.to_rgb(top_left))      # 左上深（w=1）
+
+        # 分成 steps x steps 小块，按 (x,y) 计算权重
+        dx = 1.0 / steps
+        dy = 1.0 / steps
+
+        for iy in range(steps):
+            # y 从下到上：取每块中心点的 y
+            y = (iy + 0.5) / steps
+            y0 = iy * dy
+
+            for ix in range(steps):
+                # x 从左到右：取每块中心点的 x
+                x = (ix + 0.5) / steps
+                x0 = ix * dx
+
+                # 45°对角线：左上深、右下白
+                w = (1.0 - x) * y  # 左上=1，右下=0
+                # 线性插值颜色
+                c = c0 * (1.0 - w) + c1 * w
+
+                rect = Rectangle(
+                    (x0, y0), dx, dy,
+                    transform=ax.transAxes,
+                    facecolor=c,
+                    edgecolor="none",
+                    alpha=alpha,
+                    zorder=-1000,
+                )
+                rect.set_in_layout(False)
+                ax.add_patch(rect)
+
+        ax.set_axisbelow(True)
+        
     def _finalize_figure(
         self,
         fig,
@@ -92,8 +175,8 @@ class GraphicTools:
 
         # 1) 标题过长自动换行
         title = ax.get_title()
-        if title and len(title) > 18:
-            ax.set_title(textwrap.fill(title, width=18))
+        if title and len(title) > 20:
+            ax.set_title(textwrap.fill(title, width=20))
 
         # 2) x 轴刻度：过密就稀疏+旋转
         if isinstance(x_values, list) and len(x_values) > 0:
@@ -121,31 +204,37 @@ class GraphicTools:
                         lab.set_rotation_mode("anchor")
 
         # 3) 图例
-        leg = ax.get_legend()
-        if leg is not None and len(leg.texts) > 3:
-            ax.legend(
-                loc="upper left",
-                bbox_to_anchor=(1.02, 1.0),
-                borderaxespad=0.0,
-                frameon=False,
-            )
+        handles, labels = ax.get_legend_handles_labels()
+        if labels:
+            # 清理可能已有 legend，避免叠加
+            try:
+                if ax.get_legend() is not None:
+                    ax.get_legend().remove()
+            except Exception:
+                pass
 
+            ax.legend(
+                handles, labels,
+                loc="upper left",
+                frameon=True,
+                framealpha=0.85,   # 半透明底避免挡数据
+                edgecolor="none",
+            )
         # 4) tight_layout设置
         try:
             fig.tight_layout(pad=1.2)
         except Exception:
             pass
 
-    def _pick_colors(self, n: int, scheme: str = "base") -> List[str]:
-        """返回长度为 n 的颜色列表（不够就循环）。scheme: base/analogous"""
-        src = self._colors_base if scheme == "base" else self._colors_ana
+    def _pick_colors(self, n: int, channel: str = "primary") -> List[str]:
+        src = self.colors_primary if channel == "primary" else self.colors_secondary
         if n <= 0:
             return []
         return [src[i % len(src)] for i in range(n)]
 
-    def _apply_color_cycle(self, ax, scheme: str = "base") -> None:
-        """设置 Matplotlib 的默认颜色轮换（让不显式传 color 的 plot 也统一风格）。"""
-        colors = self._colors_base if scheme == "base" else self._colors_ana
+
+    def _apply_color_cycle(self, ax, channel: str = "primary") -> None:
+        colors = self.colors_primary if channel == "primary" else self.colors_secondary
         ax.set_prop_cycle(cycler(color=colors))
 
 
@@ -167,23 +256,28 @@ class GraphicTools:
     ) -> None:
         """统一设置标题、轴标签、网格等基础样式。"""
         if title:
-            ax.set_title(title)
+            ax.set_title(title, pad=10)
         if x_label:
-            ax.set_xlabel(x_label)
+            ax.set_xlabel(x_label, labelpad=8)
         if y_label:
-            ax.set_ylabel(y_label)
+            ax.set_ylabel(y_label, labelpad=8)
+        self._apply_gradient_background(ax)
+        # 网格只保留 y 方向
+        ax.set_axisbelow(True)
+        ax.grid(True, axis="y")
+        ax.grid(False, axis="x")
+        sns.despine(ax=ax, top=True, right=True)
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=6))
 
-        ax.grid(True, linestyle="--", alpha=0.3)
-
-
-    def _fig_to_base64(self,fig) -> str:
-        """将 matplotlib Figure 转为 base64 字符串。"""
+    def _fig_to_base64(self, fig, extra_artists=None) -> str:
         buf = BytesIO()
-        fig.savefig(buf, format="png", bbox_inches="tight", dpi=150)
+        if extra_artists:
+            fig.savefig(buf, format="png", bbox_inches="tight", dpi=150,
+                        bbox_extra_artists=tuple(extra_artists))
+        else:
+            fig.savefig(buf, format="png", bbox_inches="tight", dpi=150)
         buf.seek(0)
-        img_bytes = buf.getvalue()
-        return base64.b64encode(img_bytes).decode("ascii")
-
+        return base64.b64encode(buf.getvalue()).decode("ascii")
 
     def _validate_series_xy(self,data: Dict[str, Any]) -> tuple[List[Any], List[Dict[str, Any]]]:
         """
@@ -215,21 +309,33 @@ class GraphicTools:
 
     def _plot_line(self, ax, data: Dict[str, Any]) -> None:
         x, series = self._validate_series_xy(data)
-        colors = self._pick_colors(len(series), scheme="base")
+        colors = self._pick_colors(len(series), channel="primary")
 
         for i, s in enumerate(series):
             y = s["values"]
             label = s.get("name")
-            ax.plot(x, y, marker="o", label=label, color=colors[i], linewidth=2)
+            ax.plot(
+                x, y,
+                marker="o",
+                label=label,
+                color=colors[i],
+                linewidth=2.2,
+                zorder=3,
+                markeredgecolor="white",
+                markeredgewidth=0.8,
+            )
+        try:
+            ax.margins(x=0.02)
+        except Exception:
+            pass
 
         if any(s.get("name") for s in series):
-            ax.legend()
+            ax.legend(frameon=False)
 
-
-    def _plot_bar(self,ax, data: Dict[str, Any]) -> None:
+    def _plot_bar(self, ax, data: Dict[str, Any]) -> None:
         x, series = self._validate_series_xy(data)
         n_series = len(series)
-        colors = self._pick_colors(n_series, scheme="base")
+        colors = self._pick_colors(len(series), channel="primary")
 
         index = np.arange(len(x))
         width = 0.8 / max(n_series, 1)
@@ -238,18 +344,26 @@ class GraphicTools:
             values = s["values"]
             label = s.get("name")
             offset = (i - (n_series - 1) / 2) * width
-            ax.bar(index + offset, values, width=width, label=label, color=colors[i])
+            ax.bar(
+                index + offset, values,
+                width=width,
+                label=label,
+                color=colors[i],
+                alpha=0.92,
+                edgecolor="white",
+                linewidth=0.7,
+                zorder=2,
+            )
 
         ax.set_xticks(index)
         ax.set_xticklabels(x)
 
         if any(s.get("name") for s in series):
-            ax.legend()
+            ax.legend(frameon=False)
 
-
-    def _plot_stacked_bar(self,ax, data: Dict[str, Any]) -> None:
+    def _plot_stacked_bar(self, ax, data: Dict[str, Any]) -> None:
         x, series = self._validate_series_xy(data)
-        colors = self._pick_colors(len(series), scheme="base")
+        colors = self._pick_colors(len(series), channel="primary")
 
         index = np.arange(len(x))
         bottom = np.zeros(len(x))
@@ -257,15 +371,23 @@ class GraphicTools:
         for i, s in enumerate(series):
             values = np.array(s["values"], dtype=float)
             label = s.get("name")
-            ax.bar(index, values, bottom=bottom, label=label, color=colors[i])
+            ax.bar(
+                index, values,
+                bottom=bottom,
+                label=label,
+                color=colors[i],
+                alpha=0.95,
+                edgecolor="white",
+                linewidth=0.7,
+                zorder=2,
+            )
             bottom += values
 
         ax.set_xticks(index)
         ax.set_xticklabels(x)
 
         if any(s.get("name") for s in series):
-            ax.legend()
-
+            ax.legend(frameon=False)
 
     def _plot_bar_line(self, ax, data: Dict[str, Any]) -> None:
         """
@@ -297,11 +419,10 @@ class GraphicTools:
 
         n = len(x)
         index = np.arange(n)
-
-        # 柱：base 系
         n_bar = len(bar_series)
         width = 0.8 / max(n_bar, 1)
-        bar_colors = self._pick_colors(n_bar, scheme="base")
+        bar_colors = self._pick_colors(len(bar_series), channel="primary")
+        line_colors = self._pick_colors(len(line_series), channel="secondary")
 
         for i, s in enumerate(bar_series):
             values = s["values"]
@@ -312,24 +433,36 @@ class GraphicTools:
         ax.set_xticks(index)
         ax.set_xticklabels(x)
 
-        # 线：analogous 系
         ax2 = ax.twinx()
-        line_colors = self._pick_colors(len(line_series), scheme="analogous")
+        ax2.grid(False)
         for i, s in enumerate(line_series):
             values = s["values"]
             label = s.get("name")
             ax2.plot(index, values, marker="o", linestyle="-", label=label, color=line_colors[i], linewidth=2)
 
         # 合并图例
+        try:
+            ax2.spines["top"].set_visible(False)
+        except Exception:
+            pass
+
+        # 合并图例（图内）
         handles, labels = [], []
         for axis in (ax, ax2):
             h, lab = axis.get_legend_handles_labels()
             handles.extend(h)
             labels.extend(lab)
-        if labels:
-            ax.legend(handles, labels, loc="best")
 
-    def _plot_pie(self,ax, data: Dict[str, Any]) -> None:
+        if labels:
+            ax.legend(
+                handles, labels,
+                loc="upper left",
+                frameon=True,
+                framealpha=0.85,
+                edgecolor="none",
+            )
+
+    def _plot_pie(self,ax, data: Dict[str, Any]):
         """
         饼状图数据格式:
         {
@@ -343,26 +476,24 @@ class GraphicTools:
             raise ValueError("pie 图数据格式应为: {'labels': [...], 'values': [...]}")
         if len(labels) != len(values):
             raise ValueError("pie 图中 labels 与 values 长度必须一致")
-        colors = self._pick_colors(len(values), scheme="base")
 
+        colors = self._pick_colors(len(labels), channel="primary")
+        gap = 0.03
+        explode = [gap] * len(values)
         wedges, _, _ = ax.pie(
             values,
-            labels=None,                 # 不直接画标签，避免重叠
+            labels=None,
             autopct="%.1f%%",
             startangle=90,
             counterclock=False,
             pctdistance=0.75,
             colors=colors,
+            explode=explode,
+            wedgeprops={"edgecolor": "white", "linewidth": 1.2},
+            textprops={"fontsize": 10},
         )
         ax.axis("equal")
-        ax.legend(
-            wedges,
-            [str(l) for l in labels],
-            loc="upper left",
-            bbox_to_anchor=(1.02, 1.0),
-            borderaxespad=0.0,
-            frameon=False,
-        )
+        return wedges, [str(l) for l in labels]
 
 
     def _plot_scatter(self, ax, data: Dict[str, Any]) -> None:
@@ -386,14 +517,14 @@ class GraphicTools:
 
         if isinstance(group, list) and len(group) == len(x):
             unique_groups = list(dict.fromkeys(group))
-            colors = self._pick_colors(len(unique_groups), scheme="base")
+            colors = self._pick_colors(len(unique_groups), channel="primary")
             for i, g in enumerate(unique_groups):
                 xs = [xi for xi, gi in zip(x, group) if gi == g]
                 ys = [yi for yi, gi in zip(y, group) if gi == g]
                 ax.scatter(xs, ys, label=str(g), alpha=0.85, color=colors[i])
             ax.legend()
         else:
-            ax.scatter(x, y, alpha=0.85, color=self.pal["base"]["base"])
+            ax.scatter(x, y, alpha=0.85, color=self.theme["base"])
 
 
     def _plot_regression(self, ax, data: Dict[str, Any]) -> None:
@@ -422,8 +553,9 @@ class GraphicTools:
         y_arr = np.array(y, dtype=float)
 
         # 颜色：点用 base 主色，线用邻近色
-        c_point = self.pal["base"]["base"]
-        c_line  = self.pal["analogous"]["base"]
+        c_point = self.theme["base"]
+        c_line = self.colors_secondary[0]
+
 
         # 散点
         ax.scatter(
@@ -551,6 +683,7 @@ class GraphicTools:
         if style:
             try:
                 plt.style.use(style)
+                self._setup_report_style()
                 if font_prop:
                     matplotlib.rcParams["font.family"] = font_prop.get_name()
                     matplotlib.rcParams["font.sans-serif"] = [font_prop.get_name()]
@@ -563,9 +696,9 @@ class GraphicTools:
             figsize = [8.0, 4.5]
 
         try:
-            # fig, ax = plt.subplots(figsize=(figsize[0], figsize[1]))
-            fig, ax = plt.subplots(figsize=(figsize[0], figsize[1]), constrained_layout=True)
-
+            fig, ax = plt.subplots(figsize=(figsize[0], figsize[1]))
+            # fig, ax = plt.subplots(figsize=(figsize[0], figsize[1]), constrained_layout=True)
+            pie_legend = None
             # 根据 chart_type 调用不同模板
             if chart_type == "line":
                 self._plot_line(ax, data)
@@ -574,7 +707,16 @@ class GraphicTools:
             elif chart_type == "bar_line":
                 self._plot_bar_line(ax, data)
             elif chart_type == "pie":
-                self._plot_pie(ax, data)
+                wedges, legend_labels = self._plot_pie(ax, data)
+                fig.subplots_adjust(right=0.8)
+
+                pie_legend = fig.legend(
+                    wedges,
+                    legend_labels,
+                    loc="center left",
+                    bbox_to_anchor=(0.80, 0.5),   # figure 坐标
+                    frameon=False,
+                )
             elif chart_type == "stacked_bar":
                 self._plot_stacked_bar(ax, data)
             elif chart_type == "scatter":
@@ -587,17 +729,15 @@ class GraphicTools:
                     "应为 'line' | 'bar' | 'bar_line' | 'pie' | "
                     "'stacked_bar' | 'scatter' | 'regression'"
                 )
-
-            # 对于非饼图，统一设置样式
             if chart_type != "pie":
                 self._apply_common_style(ax, title, x_label, y_label)
+                x_values = data.get("x") if isinstance(data, dict) else None
+                self._finalize_figure(fig, ax, x_values=x_values)
             else:
-                # 饼图通常标题单独居中
                 if title:
                     ax.set_title(title)
-            x_values = data.get("x") if isinstance(data, dict) else None
-            self._finalize_figure(fig, ax, x_values=x_values)
-            img_b64 = self._fig_to_base64(fig)
+
+            img_b64 = self._fig_to_base64(fig, extra_artists=[pie_legend] if pie_legend else None)
             plt.close(fig)
 
             chart_id = f"chart_{int(time.time() * 1000)}"
@@ -653,9 +793,7 @@ class GraphicTools:
         """
 
         font_path_literal = FONT_PATH or "" 
-        color_cycle = (
-        self._colors_base + self._colors_ana
-    )
+        color_cycle = self.colors_primary + self.colors_secondary
         # 在子进程中使用非交互式后端
         python_wrapper = f"""
 import io
@@ -666,6 +804,21 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import matplotlib.font_manager as fm
 
+
+# ===== 默认配色轮换=====
+try:
+    from cycler import cycler
+    _cycle = {repr(color_cycle)}
+    plt.rcParams["axes.prop_cycle"] = cycler(color=_cycle)
+except Exception:
+    pass
+    
+# ===== seaborn 主题 =====
+try:
+    sns.set_theme(context="notebook", style="whitegrid")
+    sns.set_palette(_cycle)
+except Exception:
+    pass
 # ===== 中文字体设置 =====
 FONT_PATH = r\"\"\"{font_path_literal}\"\"\"
 if FONT_PATH:
@@ -680,13 +833,6 @@ if FONT_PATH:
 else:
     matplotlib.rcParams["axes.unicode_minus"] = False
 
-# ===== 默认配色轮换=====
-try:
-    from cycler import cycler
-    _cycle = {repr(color_cycle)}
-    plt.rcParams["axes.prop_cycle"] = cycler(color=_cycle)
-except Exception:
-    pass
 # ==== 绘图代码开始 ====
 {code}
 # ==== 绘图代码结束 ====
