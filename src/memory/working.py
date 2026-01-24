@@ -57,6 +57,7 @@ class Section:
     title: str
     segments: List[Segment]
     subsections: List[Section]
+    content: str = None
 
     def read(self, with_requirements=True, with_reference=False, with_content=False, with_evidence=False,
              fold_other=True, fold_all=False, read_subsections=False) -> str:
@@ -64,12 +65,15 @@ class Section:
         unfinished = [i for i, s in enumerate(self.segments) if not s.finished]
         # if len(unfinished) == 0:
         #     return "All finished."
-        for i, s in enumerate(self.segments):
-            ctx += f"* [{'x' if s.finished else ' '}] {s.topic}\n"
-            # if fold_all or i != unfinished[0] and fold_other:
-            #     continue
-            ctx += s.__str__(with_requirements=with_requirements, with_reference=with_reference,
-                             with_content=with_content, with_evidence=with_evidence)
+        if self.content is not None:
+            ctx += self.content + '\n\n'
+        else:
+            for i, s in enumerate(self.segments):
+                ctx += f"* [{'x' if s.finished else ' '}] {s.topic}\n"
+                # if fold_all or i != unfinished[0] and fold_other:
+                #     continue
+                ctx += s.__str__(with_requirements=with_requirements, with_reference=with_reference,
+                                 with_content=with_content, with_evidence=with_evidence)
         if read_subsections:
             for sec in self.subsections:
                 ctx += sec.read(with_requirements=with_requirements, with_evidence=with_evidence,

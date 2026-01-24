@@ -117,28 +117,37 @@ async def process_section_concurrently(section: Section, parent_id, task_desc, a
 
         # 4. 生成标题 (Segments 完成后才能做总结)
         # 这里需要一个临时的 writer 来做总结
-        async with semaphore:
+        global CURRENT_RUNNING_TASKS  # 引入全局变量
+        CURRENT_RUNNING_TASKS += 1
+        print(
+            f"[{time.strftime('%H:%M:%S')}] [并发数: {CURRENT_RUNNING_TASKS}] 🏷️ 生成标题: {section.title[:10]}...", flush=True)
 
-            global CURRENT_RUNNING_TASKS  # 引入全局变量
-            CURRENT_RUNNING_TASKS += 1
-            print(
-                f"[{time.strftime('%H:%M:%S')}] [并发数: {CURRENT_RUNNING_TASKS}] 🏷️ 生成标题: {section.title[:10]}...", flush=True)
-
+        section_text = "\n".join([s.content for s in section.segments])
+        model_instruct = create_chat_model(reasoning=False)
+        formatter = create_agent_formatter()
+        msg = await formatter.format([
+            Msg("system",
+                "你是撰写金融研报的专家。我将提供某一章节初稿，请你删去无意义的部分，输出润色后的内容，不要篡改关键信息。",
+                "system"),
+            Msg("user",
+                f"金融研报某一章节初稿如下：\n\n{section_text}\n\n"
+                f"该章节是参考了小标题为{section.title}的某个范例撰写的，请你根据初稿重新起一个标题，用<title>和</title>包裹住，限十字以内。"
+                f"并在初稿基础上稍作润色，更新后的内容用<content>和</content>包裹住。", "user", )
+        ])
+        for _ in range(5):
             try:
-                section_text = "\n".join([s.content for s in section.segments])
-                model_instruct = create_chat_model(reasoning=False)
-                formatter = create_agent_formatter()
-                title_msg = await formatter.format([
-                    Msg("system", "请你根据当前任务撰写的内容起一个新标题。除思考(think)部分以外，你最终输出的回答不要包含其他无关内容和注释，只输出标题。你的回答限十字以内。", "system"),
-                    Msg("user",
-                        f"{section_text}\n\n"
-                        f"参考范例的标题为{section.title}，请根据提供的内容重新起一个标题。你的回答限十字以内。", "user", )
-                ])
-                title_msg = await model_instruct(title_msg)
-                section.title = Msg("assistant", title_msg.content, "assistant").get_text_content().strip("#").strip()
-                print(f"[Title Update] {section.title}")
-            finally:
-                CURRENT_RUNNING_TASKS -= 1
+                res = await model_instruct(msg)
+                res = Msg("assistant", res.content, "assistant").get_text_content()
+                title = re.search("<title>(.+)</title>", res).group(1).strip("#").strip()
+                content = re.search("<content>(.+)</content>", res).group(1)
+                section.title = title
+                section.content = content
+                print(f"[Final section] {section.title}")
+                print(section.content)
+                break
+            except Exception as e:
+                print(e)
+        CURRENT_RUNNING_TASKS -= 1
 
     # 5. 等待子章节递归完成 (如果需要严格的层级顺序保存，可以调整 await 位置)
     if sub_tasks:
