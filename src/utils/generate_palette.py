@@ -1,12 +1,9 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
+
 import colorsys
-from typing import Dict, Tuple
+from typing import Dict, Tuple, List
 
-
-# =====================
-# 根据一个主要颜色，生成PDF配色、图表配色
-# =====================
 
 def _clamp(x: float) -> float:
     return max(0.0, min(1.0, x))
@@ -45,57 +42,65 @@ def lighten(hex_color: str, t: float) -> str:
         b + (1 - b) * t,
     ))
 
+_CATEGORICAL_PRIMARY: List[str] = [
+    "#1B3C53",
+    "#456882",
+    "#77A6D8",
+    "#86C2D5",
+    "#76B7B2",
+    "#B4EDD5",
+    "#FFEAC0",
+    "#D2C1B6",
+    "#AFAFAC",
+    "#A78F7F",
+]
 
-def rotate_hue(hex_color: str, degrees: float) -> str:
-    r, g, b = hex_to_rgb01(hex_color)
-    h, l, s = colorsys.rgb_to_hls(r, g, b)
-    h = (h + degrees / 360.0) % 1.0
-    return rgb01_to_hex(colorsys.hls_to_rgb(h, l, s))
+_CATEGORICAL_SECONDARY: List[str] = [
+    "#ECC16A",
+    "#FFF0C4",
+    "#CC6846",
+    "#AF3B20", 
+    "#831007", 
+    "#490B06", 
+]
+
+
+
+def _repeat_to_n(palette: List[str], n: int) -> List[str]:
+    if n <= 0:
+        return []
+    return [palette[i % len(palette)] for i in range(n)]
 
 
 def generate_palette(
     base_hex: str,
     *,
-    analogous_deg: float = 30.0,
+    series_n: int = 12,
     dark1_mul: float = 0.80,
     dark2_mul: float = 0.62,
     light1_t: float = 0.28,
     light2_t: float = 0.52,
-) -> Dict[str, Dict[str, str]]:
+) -> Dict[str, object]:
     """
     返回结构：
     {
-        "base": {
-            "base": "...",
-            "dark1": "...",
-            "dark2": "...",
-            "light1": "...",
-            "light2": "..."
-        },
-        "analogous": {
-            "base": "...",
-            "dark1": "...",
-            "dark2": "...",
-            "light1": "...",
-            "light2": "..."
-        }
+      "theme": { "base","dark1","dark2","light1","light2" },
+      "categorical_primary": [ ... ],
+      "categorical_secondary": [ ... ],
     }
     """
-
     base = base_hex.upper()
-    ana = rotate_hue(base, analogous_deg)
 
-    def scale(c: str) -> Dict[str, str]:
-        return {
-            "base": c,
-            "dark1": adjust_lightness(c, dark1_mul),
-            "dark2": adjust_lightness(c, dark2_mul),
-            "light1": lighten(c, light1_t),
-            "light2": lighten(c, light2_t),
-        }
-
-    return {
-        "base": scale(base),
-        "analogous": scale(ana),
+    theme = {
+        "base": base,
+        "dark1": adjust_lightness(base, dark1_mul),
+        "dark2": adjust_lightness(base, dark2_mul),
+        "light1": lighten(base, light1_t),
+        "light2": lighten(base, light2_t),
     }
 
+    return {
+        "theme": theme,
+        "categorical_primary": _repeat_to_n(_CATEGORICAL_PRIMARY, series_n),
+        "categorical_secondary": _repeat_to_n(_CATEGORICAL_SECONDARY, series_n),
+    }

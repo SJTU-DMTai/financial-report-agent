@@ -39,7 +39,7 @@ class SegmentScore:
 
 class SegmentScorer:
     """
-    改进版 SegmentScorer：
+    SegmentScorer：
     1. 为每个维度创建专用的评分prompt（而不是用生成标准的prompt）
     2. 保持简单性和鲁棒性
     3. 每个维度单独评分，但使用正确的评分prompt

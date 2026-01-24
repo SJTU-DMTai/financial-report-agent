@@ -341,7 +341,7 @@ class SearchTools:
     def searcher_tool(self, searcher: ReActAgent) -> Callable[[str], ToolResponse]:
         """把 Searcher agent 封装成 agent 可见的工具函数。"""
         async def search_with_searcher(query: str) -> ToolResponse:
-            """使用指定的 Searcher 工具 基于 query 执行一次检索并返回总结结果。同时将获取的结果保存为Material。
+            """使用指定的 Searcher 工具基于 query 执行一次检索并返回总结结果。同时将获取的结果保存为Material。
             Args:
                 query (str): 检索需求的自然语言描述。
             """
@@ -372,8 +372,13 @@ class SearchTools:
         """
         bytes = SearchTools._fetch_page_html(url)
         page_text, img_urls = SearchTools._extract_text_and_images(bytes, url)
+
+        page_text = page_text or ""
+
         return ToolResponse(
-                content=page_text,
+            content=[
+                TextBlock(type="text", text=page_text),
+            ],
         )
 
 def get_retrieve_fn(short_term, long_term) -> Callable[str]:
@@ -462,10 +467,10 @@ def get_retrieve_fn(short_term, long_term) -> Callable[str]:
                     lines.append(preview)
 
                 lines.append("")  # 空行分隔
-            lines.append("如果以上无合适材料，请重新获取线上数据。")
+            lines.append("如果以上无合适材料，请重新调用工具获取数据。")
             res = "\n".join(lines)
         else:
-            res = f"对于{query}，本地尚未保存相关材料。请调用合适的工具获取线上数据。"
+            res = f"对于{query}，本地尚未保存相关材料。请调用合适的工具获取数据。"
         return ToolResponse(
             content=[
                 TextBlock(

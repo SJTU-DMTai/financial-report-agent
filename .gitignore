@@ -12,6 +12,8 @@ data/output/reports/*
 data/reports/*
 .idea/
 cache.db
+.vscode/ 
+config.local.yaml
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

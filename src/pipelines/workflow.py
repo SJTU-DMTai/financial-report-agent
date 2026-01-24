@@ -353,12 +353,9 @@ async def run_workflow(task_desc: str):
         results_file = eval_dir / "scoring_results.json"
         results_file.write_text(json.dumps(scoring_results, ensure_ascii=False, indent=2))
 
-        # 保存到短期记忆
-        short_term.store("content_scoring_results", scoring_results)
 
         print(f"\n详细评分结果已保存到: {results_file}")
 
     markdown_text = section_to_markdown(manuscript)
     (short_term_dir / "manuscript.md").write_text(markdown_text, encoding="utf-8")
     # md_to_pdf(markdown_text, short_term=short_term)
-

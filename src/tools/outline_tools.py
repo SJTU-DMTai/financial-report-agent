@@ -55,42 +55,4 @@ class OutlineTools:
         return ToolResponse(
             content=[TextBlock(type="text", text=demonstration)],
         )
-    
-
-    # def save_outline_to_experience(
-    #     self,
-    #     task_id: str,
-    #     short_term: ShortTermMemoryStore,
-    #     outline_store: OutlineExperienceStore,
-    #     ) -> ToolResponse:
-    #     """把当前 outline 保存到长期记忆中。"""
-    #     content = short_term.load_outline()
-    #     outline_store.save_outline(
-    #         task_id=task_id,
-    #         outline_content=content,
-    #         meta={"task_id": task_id},
-    #     )
-    #     return ToolResponse(
-    #         content=[TextBlock(type="text", text="[save_outline_to_experience] 已保存")],
-    #     )
-
-
-    # def retrieve_outline_experience(
-    #     self,
-    #     keyword: str,
-    #     outline_store: OutlineExperienceStore,
-    # ) -> ToolResponse:
-    #     """根据关键词粗略检索历史 outline 经验。
-
-    #     简化实现：这里只返回「有哪些历史任务文件名」，真实场景可以做向量检索。
-    #     """
-    #     paths = outline_store.list_all()
-    #     text = (
-    #         "[retrieve_outline_experience] 可用 outline:\n"
-    #         + "\n".join(p.name for p in paths if keyword.lower() in p.stem.lower())
-    #     )
-    #     return ToolResponse(
-    #         content=[TextBlock(type="text", text=text)],
-    #         metadata={"candidates": [str(p) for p in paths]},
-    #     )
 
