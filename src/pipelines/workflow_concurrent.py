@@ -240,7 +240,8 @@ async def run_workflow(task_desc: str):
                 for i, segment in enumerate(segments.split("<SEP>")):
                     print(segment, flush=True)
                     msg = await call_chatbot_with_retry(
-                        model_instruct, formatter, prompt_dict["plan_outline"],
+                        model_instruct, formatter,
+                        prompt_dict["plan_outline"],
                         f"当前任务：{task_desc}\n\n为实现当前任务，我找到了某机构在{demo_date}撰写的一份研报，名为{demo_name}。"
                         f"下文将附上从中摘出的一段参考片段，请你考虑时间差和公司异同，撰写一份用于当前新任务的撰写模版和要求。\n\n"
                         f"参考片段如下：\n\n{segment}",
