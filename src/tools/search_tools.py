@@ -23,7 +23,7 @@ import time as time_module
 from trafilatura import extract
 from htmldate import find_date
 from urllib.parse import urlparse
-from ..utils.call_agent_with_retry import call_agent_with_retry
+from ..utils.call_with_retry import call_agent_with_retry
 from ..utils.get_entity_info import get_entity_info
 from ..utils.retrieve_in_memory import retrieve_in_memory
 class SearchTools:

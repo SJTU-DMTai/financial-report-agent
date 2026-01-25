@@ -12,7 +12,7 @@ from ..agents.verifier import create_verifier_agent, build_verifier_toolkit
 from ..memory.short_term import ShortTermMemoryStore, MaterialType
 from ..memory.long_term import LongTermMemoryStore
 from ..utils.instance import create_chat_model, create_agent_formatter
-from ..utils.call_agent_with_retry import call_agent_with_retry
+from ..utils.call_with_retry import call_agent_with_retry
 from ..prompt import prompt_dict
 from agentscope.message import Msg
 from urllib.parse import urlparse
