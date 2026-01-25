@@ -7,6 +7,7 @@ from agentscope.formatter import OpenAIChatFormatter
 from agentscope._utils._common import _save_base64_data
 from agentscope.message import Msg, AudioBlock, ImageBlock, TextBlock
 
+
 class PatchedOpenAIChatFormatter(OpenAIChatFormatter):
     """
     在原有 OpenAIChatFormatter 基础上，对 tool_result 里的
@@ -14,6 +15,19 @@ class PatchedOpenAIChatFormatter(OpenAIChatFormatter):
     只保留 text/image/audio/video，其它跳过。
     防止出现thinking block报错
     """
+    def format(
+        self,
+        msgs: list[Msg],
+        **kwargs: Any,
+    ) -> list[dict[str, Any]]:
+        msgs = msgs.copy()
+        for i in range(len(msgs)):
+            for block in msgs[i].get_content_blocks():
+                if block.get("type") == 'thinking':
+                    block.update(type="text")
+                    block.update(text=block.pop("thinking"))
+        return super().format(msgs, **kwargs)
+
     @staticmethod
     def convert_tool_result_to_string(
     output: str | List[TextBlock | ImageBlock | AudioBlock],

@@ -1,7 +1,49 @@
 # -*- coding: utf-8 -*-
 import asyncio
-from typing import Iterable, Type
+from typing import Iterable, Type, Callable
 import traceback
+
+from agentscope.formatter import FormatterBase
+from agentscope.message import Msg
+from agentscope.model import ChatModelBase
+
+class EnvMsg(Exception):
+    def __init__(self, *args):
+        super().__init__(*args)
+
+async def call_chatbot_with_retry(
+        model: ChatModelBase, formatter: FormatterBase,
+        sys_prompt: str, user_prompt: str,
+        hook: Callable | None = None, max_retries=5,
+        handle_hook_exceptions: Iterable[Type[BaseException]] = EnvMsg,
+) -> str:
+    """
+    调用 ChatModel 进行评估。
+    """
+    messages = [
+        Msg("system", sys_prompt, "system"),
+        Msg("user", user_prompt, "user"),
+    ]
+    res = None
+    for _ in range(max_retries):
+        try:
+            _messages = await formatter.format(messages)
+            response = await model(_messages)
+            res = Msg(role='assistant', content=response, name='assistant').get_text_content()
+        except Exception as e:
+            print(f"[调用 ChatModel 失败] 第 {_} 次尝试异常：{type(e).__name__}: {e}，")
+        if hook is not None:
+            try:
+                return hook(res)
+            except handle_hook_exceptions as e:
+                messages.append(Msg("assistant", res, "assistant"))
+                messages.append(Msg("user", f"异常：{type(e).__name__}: {e}", "user"))
+            except Exception as e:
+                print(f"[调用 ChatModel 失败] 第 {_} 次尝试异常：{type(e).__name__}: {e}，")
+        else:
+            return res
+    raise
+
 async def call_agent_with_retry(
     agent,
     msg,

@@ -15,7 +15,7 @@ from agentscope.model import (
     OpenAIChatModel
 )
 
-from src.utils.patched_openaichatformatter import PatchedOpenAIChatFormatter
+from src.utils.format import PatchedOpenAIChatFormatter
 import config
 
 cfg = config.Config()
@@ -51,8 +51,8 @@ def create_chat_model(reasoning=True):
             api_key=os.environ.get("API_KEY"),
             stream=stream,
         )
-    
-    elif provider == "xiaomi":
+
+    elif provider in ["xiaomi", "ark"]:
         return OpenAIChatModel(
             model_name=model_name,
             api_key=os.environ.get("API_KEY"),
@@ -86,6 +86,8 @@ def create_agent_formatter():
     if provider in ("openrouter", "xiaomi"):
         return OpenAIChatFormatter()
     elif provider == "modelscope":
+        return PatchedOpenAIChatFormatter()
+    elif provider == "ark":
         return PatchedOpenAIChatFormatter()
     elif provider == "dashscope":
         return DashScopeChatFormatter()
