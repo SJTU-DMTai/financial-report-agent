@@ -12,10 +12,10 @@ class EnvMsg(Exception):
         super().__init__(*args)
 
 async def call_chatbot_with_retry(
-        model: ChatModelBase, formatter: FormatterBase,
-        sys_prompt: str, user_prompt: str,
-        hook: Callable | None = None, max_retries=5,
-        handle_hook_exceptions: Iterable[Type[BaseException]] = EnvMsg,
+    model: ChatModelBase, formatter: FormatterBase,
+    sys_prompt: str, user_prompt: str,
+    hook: Callable | None = None, max_retries=5,
+    handle_hook_exceptions: Iterable[Type[BaseException]] = EnvMsg,
 ):
     """
     调用 ChatModel 进行评估。
@@ -29,9 +29,10 @@ async def call_chatbot_with_retry(
         try:
             _messages = await formatter.format(messages)
             response = await model(_messages)
-            res = Msg(role='assistant', content=response, name='assistant').get_text_content()
+            res = Msg(role='assistant', content=response.content, name='assistant').get_text_content()
         except Exception as e:
             print(f"[调用 ChatModel 失败] 第 {_} 次尝试异常：{type(e).__name__}: {e}，")
+            continue
         if hook is not None:
             try:
                 return hook(res)
@@ -42,7 +43,7 @@ async def call_chatbot_with_retry(
                 print(f"[调用 ChatModel 失败] 第 {_} 次尝试异常：{type(e).__name__}: {e}，")
         else:
             return res
-    raise
+    raise RuntimeError("调用 ChatModel 多次失败，放弃重试。")
 
 async def call_agent_with_retry(
     agent,
@@ -66,9 +67,9 @@ async def call_agent_with_retry(
     for attempt in range(1, max_retries + 1):
         try:
             return await agent(msg)
-        except non_retry_exceptions:
+        except non_retry_exceptions as e:
             # 这些异常直接抛出去，不做重试
-            raise
+            raise e
         except Exception as e:
             print(agent.memory.content, flush=True)
             await agent.memory.clear()
