@@ -16,7 +16,7 @@ async def call_chatbot_with_retry(
         sys_prompt: str, user_prompt: str,
         hook: Callable | None = None, max_retries=5,
         handle_hook_exceptions: Iterable[Type[BaseException]] = EnvMsg,
-) -> str:
+):
     """
     调用 ChatModel 进行评估。
     """
