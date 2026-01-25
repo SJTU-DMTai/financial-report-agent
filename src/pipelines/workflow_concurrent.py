@@ -15,6 +15,7 @@ from pathlib import Path
 from agentscope.agent import ReActAgent
 from agentscope.message import Msg
 
+from evaluation.eval_content import evaluate_segment
 from src.memory.working import Section, Segment
 from src.prompt import prompt_dict
 from src.utils.instance import create_chat_model, create_agent_formatter
@@ -27,12 +28,14 @@ from src.agents.verifier import create_verifier_agent, build_verifier_toolkit
 
 from src.utils.file_converter import md_to_pdf, pdf_to_markdown, section_to_markdown
 from src.utils.parse_verdict import parse_verifier_verdict
-from src.utils.call_agent_with_retry import call_agent_with_retry
+from src.utils.call_with_retry import call_agent_with_retry
 from src.utils.get_entity_info import get_entity_info
 from src.utils.file_converter import markdown_to_sections
 from src.utils.local_file import STOCK_REPORT_PATHS
 import config
 import asyncio
+
+from utils.call_with_retry import call_chatbot_with_retry
 
 CURRENT_RUNNING_TASKS = 0
 
@@ -76,12 +79,26 @@ async def process_single_segment(segment, task_desc, agent_factory, semaphore):
             )
 
             draft_msg = await call_agent_with_retry(writer, writer_input)
+            segment.content = draft_msg.get_text_content()
             print(f"[Writer] Segment finished: {segment.topic}")
             print("[Writer 初稿输出]")
-            print(draft_msg.get_text_content(), flush=True)
-            await writer.memory.clear()
+            print(segment.content, flush=True)
 
-            segment.content = draft_msg.get_text_content()
+            for _ in range(5):
+                segment_score, suggestions = await evaluate_segment(create_chat_model(reasoning=False), 
+                                                                    create_agent_formatter(), 
+                                                                    segment)
+                if suggestions is None:
+                    break
+                else:
+                    writer_input = Msg(
+                        name="user", content=f"经评估：\n{suggestions}\n请你继续修改。", role="user",
+                    )
+                    draft_msg = await call_agent_with_retry(writer, writer_input)
+                    segment.content = draft_msg.get_text_content()
+                    print(f"[Writer] Segment finished: {segment.topic}")
+                    print(segment.content, flush=True)
+            await writer.memory.clear()
             segment.finished = True
         finally:
             CURRENT_RUNNING_TASKS -= 1
@@ -125,28 +142,22 @@ async def process_section_concurrently(section: Section, parent_id, task_desc, a
         section_text = "\n".join([s.content for s in section.segments])
         model_instruct = create_chat_model(reasoning=False)
         formatter = create_agent_formatter()
-        msg = await formatter.format([
-            Msg("system",
-                "你是撰写金融研报的专家。我将提供某一章节初稿，请你删去无意义的部分，输出润色后的内容，不要篡改关键信息。",
-                "system"),
-            Msg("user",
-                f"金融研报某一章节初稿如下：\n\n{section_text}\n\n"
-                f"该章节是参考了小标题为{section.title}的某个范例撰写的，请你根据初稿重新起一个标题，用<title>和</title>包裹住，限十字以内。"
-                f"并在初稿基础上稍作润色，更新后的内容用<content>和</content>包裹住。", "user", )
-        ])
-        for _ in range(5):
-            try:
-                res = await model_instruct(msg)
-                res = Msg("assistant", res.content, "assistant").get_text_content()
-                title = re.search("<title>(.+)</title>", res).group(1).strip("#").strip()
-                content = re.search("<content>(.+)</content>", res).group(1)
-                section.title = title
-                section.content = content
-                print(f"[Final section] {section.title}")
-                print(section.content)
-                break
-            except Exception as e:
-                print(e)
+        def _parse_res(text):
+            title = re.search("<title>(.+)</title>", text).group(1).strip("#").strip()
+            content = re.search("<content>(.+)</content>", text).group(1)
+            return title, content
+        title, content = await call_chatbot_with_retry(
+            model_instruct, formatter,
+            "你是撰写金融研报的专家。我将提供某一章节初稿，请你删去无意义的部分，输出润色后的内容，不要篡改关键信息。",
+            f"金融研报某一章节初稿如下：\n\n{section_text}\n\n"
+            f"该章节是参考了小标题为{section.title}的某个范例撰写的，请你根据初稿重新起一个标题，用<title>和</title>包裹住，限十字以内。"
+            f"并在初稿基础上稍作润色，更新后的内容用<content>和</content>包裹住。",
+            _parse_res
+        )
+        section.title = title
+        section.content = content
+        print(f"[Final section] {section.title}")
+        print(section.content)
         CURRENT_RUNNING_TASKS -= 1
 
     # 5. 等待子章节递归完成 (如果需要严格的层级顺序保存，可以调整 await 位置)
@@ -221,46 +232,22 @@ async def run_workflow(task_desc: str):
             print(f"\n====== 开始总结章节 {section_id} ======\n")
             await dfs_outline(subsection)
             if subsection.segments:
-                decomposer_input = await formatter.format([
-                    Msg("system", prompt_dict["decompose"],"system"),
-                    Msg("user", subsection.segments[0].reference.replace("<SEP>", ""), "user", )
-                ])
-                for i in range(10):
-                    try:
-                        decomposed_content = await model_instruct(decomposer_input)
-                        break
-                    except Exception as e:
-                        print(e)
-                segments = Msg("assistant", decomposed_content.content, "assistant").get_text_content().split("<SEP>")
+                segments = await call_chatbot_with_retry(
+                    model_instruct, formatter,
+                    prompt_dict["decompose"], subsection.segments[0].reference.replace("<SEP>", ""),
+                )
                 subsection.segments = []
-                for i, segment in enumerate(segments):
-                    planner_input = [
-                        Msg("system", prompt_dict["plan_outline"],"system"),
-                        Msg(
-                            name="user",
-                            content=f"当前任务：{task_desc}\n\n为实现当前任务，我找到了某机构在{demo_date}撰写的一份研报，名为{demo_name}。"
-                                    f"下文将附上从中摘出的一段参考片段，请你考虑时间差和公司异同，撰写一份用于当前新任务的撰写模版和要求。\n\n"
-                                    f"参考片段如下：\n\n{segment}",
-                            role="user",
-                        )
-                    ]
-                    # outline_msg = await planner(planner_input)
+                for i, segment in enumerate(segments.split("<SEP>")):
                     print(segment, flush=True)
-                    for i in range(10):
-                        try:
-                            _input = await formatter.format(planner_input)
-                            outline_msg = await model(_input)
-                            # print(outline_msg.get_text_content())
-                            outline_msg = Msg("assistant", outline_msg.content, "assistant")
-                            subsection.segments.append(subsection.parse(outline_msg.get_text_content()))
-                            subsection.segments[-1].reference = segment
-                            break
-                        except AssertionError as e:
-                            print(e)
-                            planner_input += [
-                                outline_msg,
-                                Msg("user", str(e), "user")
-                            ]
+                    msg = await call_chatbot_with_retry(
+                        model_instruct, formatter, prompt_dict["plan_outline"],
+                        f"当前任务：{task_desc}\n\n为实现当前任务，我找到了某机构在{demo_date}撰写的一份研报，名为{demo_name}。"
+                        f"下文将附上从中摘出的一段参考片段，请你考虑时间差和公司异同，撰写一份用于当前新任务的撰写模版和要求。\n\n"
+                        f"参考片段如下：\n\n{segment}",
+                        subsection.parse, handle_hook_exceptions=(AssertionError,)
+                    )
+                    subsection.segments.append(msg)
+                    subsection.segments[-1].reference = segment
             print(subsection.read(True, True, True, True, False, False))
 
     outline_json_pth = short_term_dir / "outline.json"
@@ -312,119 +299,6 @@ async def run_workflow(task_desc: str):
         output_pth=output_pth,
         manuscript_root=manuscript # 用于在深层递归中保存完整的 json
     )
-
-    async def dfs_report(section: Section, parent_id=None):
-        if section.subsections is None:
-            return
-        for subsection in section.subsections:
-            section_id = ((parent_id + ".") if parent_id else "") + str(subsection.section_id)
-            print(f"\n====== 开始写作章节 {section_id} ======\n")
-            await dfs_report(subsection)
-            for segment in subsection.segments:
-                for i in range(len(segment.evidences)):
-                    searcher_input = Msg(
-                        name="user",
-                        content=(
-                            f"任务：{task_desc}\n"
-                            f"当前需要你撰写要点：{segment.topic}\n"
-                            + (f"当前已搜索到的论据：\n{'\n'.join(segment.evidences[:i])}" if i > 0 else "")
-                            + f"你还需要搜索的材料：\n{segment.evidences[i]}\n\n"
-                              f"请你调用工具搜索，尽量根据多个信息源交叉验证后给出精简完整的搜索结果。"
-                        ),
-                        role="user",
-                    )
-                    msg = await call_agent_with_retry(searcher, searcher_input)
-                    msg = msg.get_text_content()
-                    print(f"[Searcher] After searching {segment.evidences[i]}...")
-                    print(msg)
-                    await searcher.memory.clear()
-                    if msg is not None:
-                        segment.evidences[i] = msg
-                writer_input = Msg(
-                    name="user",
-                    content=(
-                        f"任务：{task_desc}\n"
-                        f"当前步骤需要你撰写要点：\n{segment.topic}\n"
-                        f"参考示例、写作要求和相关材料如下：\n\n{str(segment)}\n\n"
-                        f"请你开始搜索和撰写。"
-                    ),
-                    role="user",
-                )
-
-                # draft_msg = await writer(writer_input)
-                draft_msg = await call_agent_with_retry(writer, writer_input)
-
-                print("[Writer 初稿输出]")
-                print(draft_msg.get_text_content())
-                await writer.memory.clear()
-
-                # max_verify_rounds = cfg.get_max_verify_rounds()
-                # # 进入 Verifier 审核 loop
-                # await verifier.memory.clear()
-                # for round_idx in range(1, max_verify_rounds + 1):
-                #
-                #     print(f"\n--- Verifier 审核轮次 {round_idx}：章节 {section_id} ---\n")
-                #     await asyncio.sleep(5)
-                #     verifier_input = Msg(
-                #         name="user",
-                #         content=(
-                #             f"任务：{task_desc}\n"
-                #             f"当前正在撰写的要点：{segment.summary}\n"
-                #             f"【写作要求】\n{segment.requirements}\n"
-                #             f"【参考范例】\n{segment.reference}\n\n"
-                #             "请调用材料读取工具，不遗漏任何参考材料进行严格地审核，并给出结构化输出的结论。"
-                #         ),
-                #         role="user",
-                #     )
-                #
-                #     # verify_msg = await verifier(verifier_input)
-                #     verify_msg = await call_agent_with_retry(verifier, verifier_input)
-                #     verdict_text = verify_msg.get_text_content()
-                #     print("[Verifier 审核结果]")
-                #     print(verdict_text)
-                #
-                #     passed, problems, reason = parse_verifier_verdict(verdict_text)
-                #
-                #     if passed:
-                #         print(f"[审核通过] 章节 {section_id} 审核通过。进入下一章节。")
-                #         break
-                #     # 如果没通过，把 Verifier 的结构化结论反馈给 Writer，让其在同一个 section 上重写
-                #     problems_text = problems if problems else verdict_text
-                #
-                #     writer_fix_input = Msg(
-                #         name="user",
-                #         content=(
-                #             "我给出了一些审核意见。"
-                #             f"未通过原因：{reason}\n"
-                #             f"问题如下：{problems_text}\n\n"
-                #             "请根据这些问题逐条修改本章节内容，返回更正后的新版本。正文以外的思考过程等不要出现在答案中。"
-                #         ),
-                #         role="user",
-                #     )
-                #     # draft_msg = await writer(writer_fix_input)
-                #     draft_msg = await call_agent_with_retry(writer, writer_fix_input)
-                #
-                #     print("[Writer 根据审核意见修改后的输出]")
-                #     print(draft_msg.get_text_content())
-                segment.content = draft_msg.get_text_content()
-                segment.finished = True
-            section_text = "\n".join([s.content for s in subsection.segments])
-            draft_msg = await call_agent_with_retry(writer, Msg(
-                name="user",
-                content=(
-                    "以下是所有要点整理后的本章节内容：\n\n"
-                    f"{section_text}\n\n"
-                    f"参考范例的标题为{subsection.title}\n\n"
-                    f"请你根据当前任务撰写的内容起一个新标题。"
-                ),
-                role="user",
-            ))
-            segment.title = draft_msg.get_text_content()
-            print(segment.title)
-
-            (output_pth / f"{stock_symbol}.json").write_text(manuscript.to_json(ensure_ascii=False))
-
-    # await dfs_report(manuscript)
 
     markdown_text = section_to_markdown(manuscript)
     (short_term_dir / "manuscript.md").write_text(markdown_text, encoding="utf-8")
