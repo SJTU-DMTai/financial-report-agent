@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import traceback
-from typing import Optional, Callable, Any, Dict, Union
+from typing import Optional, Callable, Any, Dict, Union, List, Tuple
 
 import os
 import io
@@ -21,6 +21,10 @@ from ..memory.long_term import LongTermMemoryStore
 from ..utils.get_entity_info import get_entity_info
 import json
 import copy
+from urllib.parse import urljoin
+import requests
+from bs4 import BeautifulSoup
+from trafilatura import extract
 
 
 def grep_file_with_context(
@@ -129,19 +133,16 @@ def print_grep_results(
 
         # Before context
         if result['before']:
-            output.append("--- BEFORE ---\n")
             for line_num, line_text in result['before']:
                 prefix = f"{line_num:5d}: " if show_line_numbers else ""
                 output.append(f"{prefix}{line_text}\n")
 
         # Matched line
-        output.append(">>> MATCHED <<<\n")
         prefix = f"{result['line_num']:5d}: " if show_line_numbers else ""
         output.append(f"{prefix}{result['matched_line']}\n")
 
         # After context
         if result['after']:
-            output.append("--- AFTER ---\n")
             for line_num, line_text in result['after']:
                 prefix = f"{line_num:5d}: " if show_line_numbers else ""
                 output.append(f"{prefix}{line_text}\n")
@@ -656,62 +657,6 @@ class MaterialTools:
             },
         )
 
-    # ===================== 金融新闻 =====================
-    async def fetch_stock_news_material(
-        self,
-        symbol: str,
-        start_date: str,
-        end_date: str | None = None,
-        keyword: str = "",
-        latest_num: int = 100,
-    ) -> ToolResponse:
-        """获取指定个股的新闻资讯数据，并保存表格结果到Material当中，返回Material标识ref_id。
-        相关的最新新闻资讯（默认为限定时间范围内最近约 100 条），包括新闻标题、内容摘要、发布时间、来源和链接等，
-        适用场景：为个股研报生成“新闻动态”“舆情分析”等部分提供原始素材；需要快速获取近期与某股票相关的新闻列表。
-
-        Args:
-            symbol (str):
-                沪深京 A 股股票代码（不带市场标识），例如 "000001"；为空字符串时不做股票过滤。
-            keyword (str):
-                新闻检索关键词，例如 "新能源 储能 政策"；为空字符串时不做关键词过滤。
-            start_date (str):
-                过滤限定日期之后的新闻，格式为 "YYYYMMDD"，例如 "20230101"。必需参数。
-            end_date (str | None):
-                过滤限定日期之前的新闻，格式为 "YYYYMMDD"，例如 "20231231"。如果为 None，则使用当前日期。
-            latest_num (int):
-                限定时间范围内最近的新闻条数，默认50
-        """
-        cur_date = os.getenv('CUR_DATE') or datetime.now().strftime("%Y%m%d")
-        end_date = min(end_date, cur_date) if end_date else cur_date
-        assert pd.to_datetime(start_date, format="%Y%m%d") <= pd.to_datetime(end_date, format="%Y%m%d")
-        ref_id = f"{symbol}_{keyword}_news_daterange_{start_date}-{end_date}_num{latest_num}"
-        start_date, end_date = pd.to_datetime(start_date, format="%Y%m%d"), pd.to_datetime(end_date, format="%Y%m%d")
-
-        if symbol is None or symbol == "":
-            entity = None
-            description = f"股票新闻资讯 {keyword}"
-        else:
-            entity = get_entity_info(long_term=self.long_term, text=symbol)
-            keyword = entity['name'] + ((" " + keyword) if keyword else "")
-            description = (f"{entity['name']}（{entity['code']}）" if entity else "") + f"股票新闻资讯 {keyword}"
-        dfs = []
-        for page_idx in range(1, 25):
-            df = stock_news_em(keyword=keyword, page_idx=page_idx)
-            dfs.append(df[(pd.to_datetime(df['发布时间']) >= start_date) & (pd.to_datetime(df['发布时间']) <= end_date)])
-            if sum([len(_df) for _df in dfs]) > latest_num:
-                break
-        df = pd.concat(dfs)
-        df.sort_values("发布时间", inplace=True, ascending=False)
-
-        self._save_df_to_material(df=df, ref_id=ref_id,source="AKshare API:eastmoney",entity=entity,description=description)
-        header = f"[fetch_stock_news_material] 股票新闻资讯（新闻内容大于156字的部分被省略，请根据url搜索）"
-        return _build_tool_response_from_df(
-            df,
-            ref_id=ref_id,
-            header=header,
-            extra_meta={"symbol": symbol} if symbol else {"keyword": keyword},
-        )
-
     async def fetch_disclosure_material(
         self,
         symbol: str,
@@ -824,9 +769,10 @@ class MaterialTools:
             )
         except Exception as e:
         # 捕获 akshare 在内部筛选、字段缺失等造成的异常
+            traceback.print_exc()
             df = None
             text = (
-                f"[fetch_disclosure_material] Error: {e}"
+                f"[fetch_disclosure_material] Error: {e}\n"
                 f"建议修改或放宽搜索条件（symbol={symbol}, market={market}, keyword={keyword}, "
                 f"category={category}, start_date={start_date}, end_date={end_date}）"
             )
@@ -858,7 +804,7 @@ class MaterialTools:
 
             if text:  # 只保存有内容的公告
                 # 为每个公告创建唯一的 ref_id
-                announce_date_str = str(announce_date)
+                announce_date_str = pd.to_datetime(announce_date).strftime("%Y-%m-%d")
                 date_only = announce_date_str.split()[0]
                 date_only = date_only.replace(".", "-").replace("/", "-")
                 disclosure_ref_id = f"{symbol}_disclosure_{date_only}_{idx}" # 避免不合法文件名
@@ -893,9 +839,10 @@ class MaterialTools:
                 disclosure_ref_ids.append(disclosure_ref_id)
 
         # 3. 将 ref_ids 列表添加到 dataframe 中
-        df["disclosure_ref_id"] = [disclosure_ref_ids[i] if i < len(disclosure_ref_ids) else "" for i in range(len(df))]
+        df["ref_id"] = [disclosure_ref_ids[i] if i < len(disclosure_ref_ids) else "" for i in range(len(df))]
         if "公告链接" in df.columns:
             df = df.drop(columns=["公告链接"])
+        df = df[['ref_id', '公告标题']].set_index("ref_id")
 
         # 保存包含 ref_ids 的元数据表格
         ref_id = f"{symbol}_disclosure_{category or 'all'}_{base_timestamp}"
@@ -904,10 +851,11 @@ class MaterialTools:
         if parts:
             description += " " + " ".join(parts)
         description = description + "信息披露公告"
-        self._save_df_to_material(df=df, ref_id=ref_id, source="AKshare API:CNINFO", entity=entity, description=description)
+        # self._save_df_to_material(df=df, ref_id=ref_id, source="AKshare API:CNINFO", entity=entity, description=description)
         header = (
             f"[fetch_disclosure_material] 信息披露公告（symbol={symbol}, market={market}, "
-            f"category={category or '全部'}, {start_date}~{end_date}）"
+            f"category={category or '全部'}, {start_date}~{end_date}）。"
+            f"各disclosure按ref_id单独保存到了本地，请根据需要使用retrieve_local_material或read_material工具读取。"
         )
         return _build_tool_response_from_df(
             df,
@@ -1294,6 +1242,135 @@ class MaterialTools:
             extra_meta={"symbol": symbol},
         )
 
+    # ===================== 金融新闻 =====================
+    async def fetch_stock_news_material(
+        self,
+        symbol: str,
+        start_date: str,
+        end_date: str | None = None,
+        keyword: str = "",
+        latest_num: int = 100,
+    ) -> ToolResponse:
+        """获取指定个股的新闻资讯数据，并保存表格结果到Material当中，返回Material标识ref_id。
+        相关的最新新闻资讯（默认为限定时间范围内最近约 100 条），包括新闻标题、内容摘要、发布时间、来源和链接等，
+        适用场景：为个股研报生成“新闻动态”“舆情分析”等部分提供原始素材；需要快速获取近期与某股票相关的新闻列表。
+
+        Args:
+            symbol (str):
+                沪深京 A 股股票代码（不带市场标识），例如 "000001"；为空字符串时不做股票过滤。
+            keyword (str):
+                新闻检索关键词，例如 "新能源 储能 政策"；为空字符串时不做关键词过滤。
+            start_date (str):
+                过滤限定日期之后的新闻，格式为 "YYYYMMDD"，例如 "20230101"。必需参数。
+            end_date (str | None):
+                过滤限定日期之前的新闻，格式为 "YYYYMMDD"，例如 "20231231"。如果为 None，则使用当前日期。
+            latest_num (int):
+                限定时间范围内最近的新闻条数，默认50
+        """
+        cur_date = os.getenv('CUR_DATE') or datetime.now().strftime("%Y%m%d")
+        end_date = min(end_date, cur_date) if end_date else cur_date
+        assert pd.to_datetime(start_date, format="%Y%m%d") <= pd.to_datetime(end_date, format="%Y%m%d")
+        ref_id = f"{symbol}_{keyword}_news_daterange_{start_date}-{end_date}_num{latest_num}"
+        start_date, end_date = pd.to_datetime(start_date, format="%Y%m%d"), pd.to_datetime(end_date, format="%Y%m%d")
+
+        if symbol is None or symbol == "":
+            entity = None
+            description = f"股票新闻资讯 {keyword}"
+        else:
+            entity = get_entity_info(long_term=self.long_term, text=symbol)
+            keyword = entity['name'] + ((" " + keyword) if keyword else "")
+            description = (f"{entity['name']}（{entity['code']}）" if entity else "") + f"股票新闻资讯 {keyword}"
+        dfs = []
+        for page_idx in range(1, 25):
+            df = stock_news_em(keyword=keyword, page_idx=page_idx)
+            dfs.append(df[(pd.to_datetime(df['发布时间']) >= start_date) & (pd.to_datetime(df['发布时间']) <= end_date)])
+            if sum([len(_df) for _df in dfs]) > latest_num:
+                break
+        df = pd.concat(dfs)
+        df.sort_values("发布时间", inplace=True, ascending=False)
+
+        # self._save_df_to_material(df=df, ref_id=ref_id,source="AKshare API:eastmoney",entity=entity,description=description)
+        header = f"[fetch_stock_news_material] 股票新闻资讯（新闻内容大于156字的部分被省略，请根据url搜索）"
+        return _build_tool_response_from_df(
+            df,
+            ref_id=ref_id,
+            header=header,
+            extra_meta={"symbol": symbol} if symbol else {"keyword": keyword},
+        )
+
+    async def fetch_url_page_text(self, url: str, symbol: Optional[str] = None) -> ToolResponse:
+        """返回url对应网页的文本结果，如果不为空则保存到本地。
+        Args:
+            url (str):
+                网页地址。
+            symbol (Optional[str]):
+                新闻对应股票代码或名称。如果无法判断，则不提供。
+        """
+        bytes = _fetch_page_html(url)
+        page_text, img_urls = _extract_text_and_images(bytes, url)
+        page_text = page_text or ""
+        if page_text:
+            # 保存公告文本为单独的文件
+            entity = get_entity_info(long_term=self.long_term, text=symbol or page_text)
+            self.short_term.save_material(
+                ref_id=url.replace(".html", "").replace("http://", "").replace("https://", ""),
+                content=page_text,
+                description="金融新闻",
+                source="AKshare API:CNINFO",
+                entity=entity
+            )
+        return ToolResponse(
+            content=[
+                TextBlock(type="text", text=page_text),
+            ],
+        )
+
+def _fetch_page_html(url: str, timeout: int = 10) -> bytes:
+    """用 requests 获取网页 HTML 内容"""
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0 Safari/537.36"
+        )
+    }
+    resp = requests.get(url, headers=headers, timeout=timeout)
+    resp.raise_for_status()
+    ctype = resp.headers.get("Content-Type", "")
+    if "text/html" not in ctype and "application/xhtml+xml" not in ctype:
+        return b""
+    return resp.content   # 注意：这里返回的是 bytes
+
+def _extract_text_and_images(html: bytes, base_url: str) -> Tuple[str, List[str]]:
+    """文本使用 trafilatura 提取主内容；图片使用 BeautifulSoup 提取。"""
+    if not html:
+        return "", []
+
+    try:
+        text = extract(
+            html,
+            url=base_url,
+            output_format="txt",    # 返回纯文本
+            include_comments=False,
+            include_tables=True     # 如需保留表格内容
+        ) or ""
+    except Exception:
+        text = ""
+
+    img_urls: List[str] = []
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        for img in soup.find_all("img"):
+            src = img.get("src") or ""
+            if not src:
+                continue
+            full_url = urljoin(base_url, src)
+            img_urls.append(full_url)
+    except Exception:
+        pass
+
+
+    return text, img_urls
 
 def stock_news_em(keyword: str = "603777", page_idx=1) -> pd.DataFrame:
     """
@@ -1322,7 +1399,7 @@ def stock_news_em(keyword: str = "603777", page_idx=1) -> pd.DataFrame:
         re.search(r'^\w+\((.*)\)$', data_text).group(1)
     )
     temp_df = pd.DataFrame(data_json["result"]["cmsArticleWebOld"])
-    assert len(temp_df) > 0, "未获取到相关新闻，请调整关键词后重试。"
+    assert len(temp_df) > 0, "当前时间范围内不存在相关新闻，请调整时间区间或关键词后重试。"
     temp_df["url"] = "http://finance.eastmoney.com/a/" + temp_df["code"] + ".html"
     temp_df.rename(
         columns={
