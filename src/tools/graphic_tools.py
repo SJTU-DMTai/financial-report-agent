@@ -121,7 +121,7 @@ class GraphicTools:
         ax,
         top_left: str = "#EBE7E7",      # 左上深
         bottom_right: str = "#FFFFFF",  # 右下白
-        steps: int = 24,                # 建议 16~40；越大越细腻但更耗时
+        steps: int = 24,
         alpha: float = 1.0,
     ) -> None:
         ax.patch.set_facecolor("none")
@@ -696,6 +696,9 @@ class GraphicTools:
             figsize = [8.0, 4.5]
 
         try:
+
+            if data is None or not isinstance(data, dict) or len(data) == 0:
+                raise ValueError("data是需要绘制为图表的数据，不能为空")
             fig, ax = plt.subplots(figsize=(figsize[0], figsize[1]))
             # fig, ax = plt.subplots(figsize=(figsize[0], figsize[1]), constrained_layout=True)
             pie_legend = None

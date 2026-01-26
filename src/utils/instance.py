@@ -93,11 +93,39 @@ def create_agent_formatter():
         return DashScopeChatFormatter()
     else:
         raise ValueError(f"未知 provider: {provider}")   
+    
 
-# def single_agent_formatter() -> DashScopeChatFormatter:
-#     """单 Agent 对话用 formatter。"""
-#     return DashScopeChatFormatter()
+def create_vlm_model():
+    """
+    创建支持多模态(图片)的模型实例：
+    - 直接使用 model(messages=[...], temperature=0.0) 的调用方式
+    - 允许在配置里单独指定 vision_model_name；否则复用 model_name
+    """
+    m = cfg.get_vlm_cfg()
 
+    provider = m["provider"]
+    model_name = m["model_name"]
 
-# def multi_agent_formatter() -> DashScopeMultiAgentFormatter:
-#     return DashScopeMultiAgentFormatter()
+    base_url = m.get("base_url_env", "")
+    stream = m.get("stream", False)
+    temperature = m.get("vision_temperature", 0.1)
+
+    if provider == "openrouter":
+        return OpenAIChatModel(
+            model_name=model_name,
+            api_key=os.environ.get("API_KEY"),
+            stream=stream,
+            client_args={"base_url": base_url},
+            generate_kwargs={"temperature": temperature},
+        )
+    elif provider == "xiaomi":
+        return OpenAIChatModel(
+            model_name=model_name,
+            api_key=os.environ.get("API_KEY"),
+            stream=stream,
+            client_args={"base_url": base_url},
+            generate_kwargs={"temperature": temperature},
+        )
+
+    else:
+        raise ValueError(f"未知 provider: {provider}")
