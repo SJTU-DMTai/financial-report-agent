@@ -5,6 +5,8 @@ import json
 import pickle
 import re
 import sys
+import config
+import asyncio
 from dataclasses import asdict
 from pathlib import Path
 from typing import List, Tuple, Dict
@@ -14,7 +16,7 @@ from agentscope.message import Msg
 
 from src.memory.working import Section, Segment
 from src.prompt import prompt_dict
-from src.utils.instance import create_chat_model, create_agent_formatter
+from src.utils.instance import create_chat_model, create_agent_formatter, create_vlm_model
 from src.memory.short_term import ShortTermMemoryStore
 from src.memory.long_term import LongTermMemoryStore
 from src.agents.searcher import create_searcher_agent, build_searcher_toolkit
@@ -28,11 +30,7 @@ from src.utils.call_agent_with_retry import call_agent_with_retry
 from src.utils.get_entity_info import get_entity_info
 from src.utils.file_converter import markdown_to_sections
 from src.utils.local_file import STOCK_REPORT_PATHS
-import config
-import asyncio
-
-from src.utils.file_converter import markdown_to_sections
-from src.utils.local_file import STOCK_REPORT_PATHS
+from src.utils.image_analyze import inject_vlm_into_demo_markdown, load_images_from_md_dir
 from src.evaluation.parse_verifier_verdict import parse_verdict
 from src.evaluation.segment_scorer import SegmentScorer, SegmentScore
 
@@ -58,15 +56,13 @@ async def run_workflow(task_desc: str):
     long_term = LongTermMemoryStore(
         base_dir=long_term_dir,
     )
-
-
     planner_cfg = cfg.get_planner_cfg()
     use_demo = planner_cfg.get("use_demonstration", False)
-
 
     # ----- 2. 创建底层模型 -----
     model= create_chat_model()
     model_instruct = create_chat_model(reasoning=False)
+    vlm_model = create_vlm_model()
 
     # ----- 初始化评估系统 -----
     print("\n" + "="*60)
@@ -88,25 +84,6 @@ async def run_workflow(task_desc: str):
     # print(schemas)
 
 
-    # ----- 4. 获取demonstration -----
-    # searcher_input = Msg(
-    #     name="User",
-    #     content=f"下面是某个任务描述：{task_desc}\n"
-    #             f"首先，你需要识别目标股票代码（如果任务描述中只谈及股票名称，你需要将之转换为股票代码）。"
-    #             f"请只输出纯数字的股票代码，不做其他输出。",
-    #     role="user",
-    # )
-    # while True:
-    #     try:
-    #         outline_msg = await call_agent_with_retry(searcher, searcher_input)
-    #         stock_symbol = re.search(r"[0-9]+", outline_msg.get_text_content()).group()
-    #         assert stock_symbol is not None
-    #         print("股票代码：", stock_symbol)
-    #         await searcher.memory.clear()
-    #         break
-    #     except AssertionError as e:
-    #         print(e)
-
     entity = get_entity_info(long_term, task_desc)
     if not entity or not entity.get("code"):
         raise ValueError(f"无法从 task_desc 解析股票实体/代码：{task_desc}")
@@ -115,12 +92,24 @@ async def run_workflow(task_desc: str):
     print("股票代码：", stock_symbol)
 
 
-    # 解析demonstration report，第二遍解析同一个report可以注释掉
-    demo_pdf_path = STOCK_REPORT_PATHS[stock_symbol][-1]
-    demo_date, demo_name = demo_pdf_path.name.split(".")[0].split("_")[-2:]
+    # # 解析demonstration report，第二遍解析同一个report可以注释掉
+    # demo_pdf_path = STOCK_REPORT_PATHS[stock_symbol][-1]
+    # demo_date, demo_name = demo_pdf_path.name.split(".")[0].split("_")[-2:]
+
+    demo_pdf_path = Path(r"E:\code\vscode\financial-report-agent\tests\002847_2024-12-25_从渠道的角度解析公司增长潜力：多渠道驱动，增长势能强劲.pdf")
+
     demo_md_path = short_term_dir / f"demonstration" / (demo_pdf_path.name.split(".")[0] + ".md")
     if not demo_md_path.exists():
         final_text, images = pdf_to_markdown(demo_pdf_path, demo_md_path)
+    else:
+        images = load_images_from_md_dir(demo_md_path)
+
+    await inject_vlm_into_demo_markdown(
+        demo_md_path=demo_md_path,
+        images=images,
+        vlm_model=vlm_model,
+        image_prompt=prompt_dict["image_analyze"],
+    )
     manuscript: Section = markdown_to_sections(demo_md_path)
 
     # ----- 5. 调用 Planner：生成 / 修订 outline.md -----

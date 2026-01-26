@@ -734,15 +734,40 @@ def pdf_to_markdown(
     if isinstance(pdf_path, str):
         pdf_path = Path(pdf_path)
 
+    if isinstance(output_path, str):
+        output_path = Path(output_path)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    print(f"output_path: {output_path}")
+
     converter = PdfConverter(artifact_dict=create_model_dict())
     rendered = converter(str(pdf_path))
     text, metadata, images = text_from_rendered(rendered)
     final_text = clean_ocr_text(text, pdf_path.name.replace(".pdf", "").split("_")[-1])
-    if isinstance(output_path, Path):
-        output_path = Path(output_path)
-    if not output_path.parent.exists():
-        output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(final_text, encoding="utf-8")
+
+    for name, img in (images or {}).items():
+        try:
+            # name 形如 "_page_0_Picture_15.jpeg"
+            target = output_path.parent / name
+            if target.exists():
+                continue
+
+            # marker 返回 PIL.Image
+            im = img
+            if im.mode not in ("RGB", "L"):
+                im = im.convert("RGB")
+
+            suffix = target.suffix.lower()
+            if suffix in [".jpg", ".jpeg"]:
+                im.save(target, format="JPEG", quality=90, optimize=True)
+            elif suffix == ".png":
+                im.save(target, format="PNG", optimize=True)
+            else:
+                target = target.with_suffix(".png")
+                im.save(target, format="PNG", optimize=True)
+        except Exception:
+            pass
     return final_text, images
 
 def markdown_to_sections(markdown: Union[str, Path, List[str]]) -> Section:
