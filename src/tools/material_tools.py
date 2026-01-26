@@ -1298,7 +1298,7 @@ class MaterialTools:
             extra_meta={"symbol": symbol} if symbol else {"keyword": keyword},
         )
 
-    async def fetch_url_page_text(self, url: str, symbol: Optional[str] = None) -> ToolResponse:
+    async def fetch_url_page_text(self, url: str, symbol: str | None = None) -> ToolResponse:
         """返回url对应网页的文本结果，如果不为空则保存到本地。
         Args:
             url (str):
