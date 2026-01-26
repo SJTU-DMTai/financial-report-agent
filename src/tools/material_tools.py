@@ -1303,8 +1303,8 @@ class MaterialTools:
         Args:
             url (str):
                 网页地址。
-            symbol (Optional[str]):
-                新闻对应股票代码或名称。如果无法判断，则不提供。
+            symbol (str):
+                新闻对应股票代码或名称。如果无法判断，可以不提供。
         """
         bytes = _fetch_page_html(url)
         page_text, img_urls = _extract_text_and_images(bytes, url)
