@@ -40,6 +40,13 @@ class Config:
         models = self.data["models"]
         model_id = os.getenv('LLM_NAME', models["default"])
         return models[model_id]
+    
+    def get_vlm_cfg(self):
+        models = self.data["models"]
+        model_id = os.getenv("VLM_NAME") or models.get("vlm_default") or models.get("default")
+        if model_id is None:
+            raise KeyError("未配置 models.vlm_default/models.default，且未设置 VLM_NAME")
+        return models[model_id]
 
     def get_max_verify_rounds(self) -> int:
         verify_config = self.data["verify_config"]
