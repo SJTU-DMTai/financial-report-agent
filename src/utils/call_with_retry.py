@@ -20,6 +20,7 @@ async def call_chatbot_with_retry(
     """
     调用 ChatModel 进行评估。
     """
+    print("User: ", user_prompt, flush=True)
     messages = [
         Msg("system", sys_prompt, "system"),
         Msg("user", user_prompt, "user"),
@@ -31,18 +32,20 @@ async def call_chatbot_with_retry(
             response = await model(_messages)
             res = Msg(role='assistant', content=response.content, name='assistant').get_text_content()
         except Exception as e:
-            print(f"[调用 ChatModel 失败] 第 {_} 次尝试异常：{type(e).__name__}: {e}，")
+            print(f"[调用 ChatModel 失败] 第 {_} 次尝试异常：{type(e).__name__}: {e}，", flush=True)
             continue
         if hook is not None:
             try:
                 return hook(res)
             except handle_hook_exceptions as e:
+                print(res, f"\n[调用 ChatModel 失败] 第 {_} 次尝试异常：{type(e).__name__}: {e}，", flush=True)
                 messages.append(Msg("assistant", res, "assistant"))
                 messages.append(Msg("user", f"异常：{type(e).__name__}: {e}", "user"))
             except Exception as e:
-                print(f"[调用 ChatModel 失败] 第 {_} 次尝试异常：{type(e).__name__}: {e}，")
+                print(f"[调用 ChatModel 失败] 第 {_} 次尝试异常：{type(e).__name__}: {e}，", flush=True)
         else:
             return res
+    traceback.print_exc()
     raise RuntimeError("调用 ChatModel 多次失败，放弃重试。")
 
 async def call_agent_with_retry(

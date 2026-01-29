@@ -170,22 +170,24 @@ def _preview_df(df: pd.DataFrame, max_rows: int | None = None) -> tuple[str, int
 
 
 def _build_tool_response_from_df(
-        df: pd.DataFrame,
-        ref_id: str,
-        header: str,
-        preview_rows: int = 10,
-        extra_meta: Optional[Dict[str, Any]] = None,
+    df: pd.DataFrame,
+    ref_id: str,
+    header: str,
+    preview_rows: int = 10,
+    extra_meta: Optional[Dict[str, Any]] = None,
+    save: bool = True,
 ) -> ToolResponse:
     """统一构造 ToolResponse，包含预览文本和基础 metadata。"""
     preview_str, total_rows, used_rows, columns_names = _preview_df(df, preview_rows)  # 预览的时候返回前10行
     text = (
         f"{header} 共 {total_rows} 条记录，"
-        f"Material 已写入 ref_id='{ref_id}'（CSV 格式）。\n\n"
         f"以下为全部列名：\n"
         f"{columns_names}\n"
         f"以下为前 {used_rows} 行预览：\n"
-        f"{preview_str}"
+        f"{preview_str}\n"
     )
+    if save:
+        text += f"Material 已写入 ref_id='{ref_id}'，可以通过 read_material 读取全部内容。\n\n"
     meta: Dict[str, Any] = {"ref_id": ref_id, "row_count": total_rows}
     if extra_meta:
         meta.update(extra_meta)
@@ -525,7 +527,7 @@ class MaterialTools:
     ) -> int:
         """DataFrame/Dict 存入 short-term material（CSV/JSON），返回行数。"""
         if self.short_term is not None:
-            self.short_term.save_material(ref_id=ref_id, 
+            self.short_term.save_material(ref_id=ref_id,
                                           content=df, 
                                           description=description,
                                           source=source,
@@ -685,7 +687,7 @@ class MaterialTools:
             keyword (str):
                 公告搜索关键词，例如 "股权激励"、"增发"；为空字符串时不做关键词过滤。
             category (str):
-                公告类别，支持的取值包括（示例，默认 ""）：
+                公告类别，取值仅限于如下选择之一：
                 - "年报"、"半年报"、"一季报"、"三季报"、"业绩预告"、"权益分派"、
                 "董事会"、"监事会"、"股东大会"、"日常经营"、"公司治理"、"中介报告"、
                 "首发"、"增发"、"股权激励"、"配股"、"解禁"、"公司债"、"可转债"、
@@ -696,7 +698,6 @@ class MaterialTools:
         """
         cur_date = os.getenv('CUR_DATE') or datetime.now().strftime("%Y%m%d")
         end_date = min(end_date, cur_date) if end_date else cur_date
-        assert pd.to_datetime(start_date, format="%Y%m%d") <= pd.to_datetime(end_date, format="%Y%m%d")
 
 
             # 内部工具函数：从公告链接 + 公告时间 拼出 PDF URL
@@ -759,6 +760,11 @@ class MaterialTools:
                 return ""
 
         try:
+            assert pd.to_datetime(start_date, format="%Y%m%d") <= pd.to_datetime(end_date, format="%Y%m%d"), "start_date 晚于当前时间，请重新设置"
+            assert category in {'年报', '半年报', '一季报', '三季报', '业绩预告', '权益分派',
+    '董事会', '监事会', '股东大会', '日常经营', '公司治理', '中介报告',
+     '首发', '增发', '股权激励', '配股', '解禁', '公司债', '可转债', '其他融资',
+     '股权变动', '补充更正', '澄清致歉', '风险提示', '特别处理和退市', '退市整理期', '', None}, f'category 设置错误，不支持"{category}"'
             df = ak.stock_zh_a_disclosure_report_cninfo(
                 symbol=symbol,
                 market=market,
@@ -772,7 +778,7 @@ class MaterialTools:
             traceback.print_exc()
             df = None
             text = (
-                f"[fetch_disclosure_material] Error: {e}\n"
+                f"[fetch_disclosure_material] {type(e)}: {e}\n"
                 f"建议修改或放宽搜索条件（symbol={symbol}, market={market}, keyword={keyword}, "
                 f"category={category}, start_date={start_date}, end_date={end_date}）"
             )
@@ -869,6 +875,7 @@ class MaterialTools:
                 "start_date": start_date,
                 "end_date": end_date,
             },
+            save=False,
         )
 
     # ===================== 财务报表 =====================
@@ -1290,12 +1297,13 @@ class MaterialTools:
         df.sort_values("发布时间", inplace=True, ascending=False)
 
         # self._save_df_to_material(df=df, ref_id=ref_id,source="AKshare API:eastmoney",entity=entity,description=description)
-        header = f"[fetch_stock_news_material] 股票新闻资讯（新闻内容大于156字的部分被省略，请根据url搜索）"
+        header = f"[fetch_stock_news_material] 股票新闻资讯（新闻内容大于156字的部分被省略，如需全文请根据url搜索）"
         return _build_tool_response_from_df(
             df,
             ref_id=ref_id,
             header=header,
             extra_meta={"symbol": symbol} if symbol else {"keyword": keyword},
+            save=False
         )
 
     async def fetch_url_page_text(self, url: str, symbol: str | None = None) -> ToolResponse:
@@ -1313,7 +1321,10 @@ class MaterialTools:
             # 保存公告文本为单独的文件
             entity = get_entity_info(long_term=self.long_term, text=symbol or page_text)
             self.short_term.save_material(
-                ref_id=url.replace(".html", "").replace("http://", "").replace("https://", ""),
+                ref_id=str(entity['code']) + "_" +
+                       url.replace(".html", "")
+                       .replace("http://", "").replace("https://", "")
+                       .replace("/", "-"),
                 content=page_text,
                 description="金融新闻",
                 source="AKshare API:CNINFO",

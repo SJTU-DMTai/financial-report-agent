@@ -23,7 +23,7 @@ WRITING_DIMENSIONS = {
     "sufficiency": "所有论据的充分性和支撑力"
 }
 
-async def score_content(model: ChatModelBase, formatter: FormatterBase, content: str, topic: str) -> Dict[str, int]:
+async def get_content_score(model: ChatModelBase, formatter: FormatterBase, content: str, topic: str) -> Dict[str, int]:
     """
     评估给定的内容字符串。
 

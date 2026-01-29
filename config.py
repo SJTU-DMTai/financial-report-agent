@@ -3,6 +3,8 @@
 import os
 import yaml
 from pathlib import Path
+
+
 class Config:
     def __init__(self, path: str | None = None):
         """
@@ -14,10 +16,10 @@ class Config:
         if path is not None:
             config_path = Path(path)
         else:
-            if Path("config.local.yaml").exists():
-                config_path = Path("config.local.yaml")
-            elif Path("config.yaml").exists():
-                config_path = Path("config.yaml")
+            if (Path(__file__).resolve().parent / "config.local.yaml").exists():
+                config_path = Path(__file__).resolve().parent / "config.local.yaml"
+            elif (Path(__file__).resolve().parent / "config.yaml").exists():
+                config_path = Path(__file__).resolve().parent / "config.yaml"
             else:
                 raise FileNotFoundError(
                     "No config file found. Expected config.local.yaml or config.yaml"
