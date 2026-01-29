@@ -490,7 +490,10 @@ class GraphicTools:
             colors=colors,
             explode=explode,
             wedgeprops={"edgecolor": "white", "linewidth": 1.2},
-            textprops={"fontsize": 10},
+            textprops={
+                "fontsize": 10,
+                "bbox": dict(boxstyle="round,pad=0.22", fc="white", ec="none", alpha=0.65),
+            },
         )
         ax.axis("equal")
         return wedges, [str(l) for l in labels]
