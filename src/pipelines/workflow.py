@@ -24,7 +24,7 @@ from src.agents.planner import create_planner_agent, build_planner_toolkit
 from src.agents.verifier import create_verifier_agent, build_verifier_toolkit, create_all_verifiers, create_final_verifier
 
 from src.utils.file_converter import md_to_pdf, pdf_to_markdown, section_to_markdown
-from src.utils.call_agent_with_retry import call_agent_with_retry
+from src.utils.call_with_retry import call_agent_with_retry
 from src.utils.get_entity_info import get_entity_info
 from src.utils.file_converter import markdown_to_sections
 from src.utils.local_file import STOCK_REPORT_PATHS
@@ -34,7 +34,9 @@ import asyncio
 from src.utils.file_converter import markdown_to_sections
 from src.utils.local_file import STOCK_REPORT_PATHS
 from src.evaluation.parse_verifier_verdict import parse_verdict
-from src.evaluation.segment_scorer import SegmentScorer, SegmentScore
+from src.evaluation.segment_scorer import WritingScorer, WritingScore
+
+from utils.call_with_retry import call_chatbot_with_retry
 
 
 async def run_workflow(task_desc: str):
@@ -73,7 +75,7 @@ async def run_workflow(task_desc: str):
     print("初始化评估系统")
     print("="*60)
 
-    segment_scorer = SegmentScorer(model, formatter)
+    segment_scorer = WritingScorer(model, formatter)
     print("评估系统初始化完成")
 
     # ----- 3. 创建 Searcher Agent -----
@@ -139,19 +141,12 @@ async def run_workflow(task_desc: str):
             print(f"\n====== 开始总结章节 {section_id} ======\n")
             await dfs_outline(subsection)
             if subsection.segments:
-                decomposer_input = await formatter.format([
-                    Msg("system", prompt_dict["decompose"],"system"),
-                    Msg("user", subsection.segments[0].reference.replace("<SEP>", ""), "user", )
-                ])
-                for i in range(10):
-                    try:
-                        decomposed_content = await model_instruct(decomposer_input)
-                        break
-                    except Exception as e:
-                        print(e)
-                segments = Msg("assistant", decomposed_content.content, "assistant").get_text_content().split("<SEP>")
+                segments = await call_chatbot_with_retry(
+                    model_instruct, formatter,
+                    prompt_dict["decompose"], subsection.segments[0].reference.replace("<SEP>", ""),
+                )
                 subsection.segments = []
-                for i, segment in enumerate(segments):
+                for i, segment in enumerate(segments.split("<SEP>")):
                     planner_input = [
                         Msg("system", prompt_dict["plan_outline"],"system"),
                         Msg(
@@ -210,7 +205,7 @@ async def run_workflow(task_desc: str):
     output_pth = PROJECT_ROOT / "data" / "output" / "reports"
 
     # 存储所有segment的评分
-    all_segment_scores: List[SegmentScore] = []
+    all_segment_scores: List[WritingScore] = []
     segment_counter = 0
 
     async def dfs_report(section: Section, parent_id=None):
@@ -275,7 +270,7 @@ async def run_workflow(task_desc: str):
 
                 try:
                     # 对segment进行评分
-                    segment_score = await segment_scorer.score_segment(segment, segment_id)
+                    segment_score = await segment_scorer.evaluate_segment(segment, segment_id)
 
                     # 记录评分
                     all_segment_scores.append(segment_score)
