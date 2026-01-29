@@ -103,6 +103,6 @@ class Section:
         evidences = re.search(r"<evidence>(.+?)</evidence>", contents, re.DOTALL)
         if evidences is not None:
             evidences = evidences.group(1).replace("\n", "").replace(";", "；").split("；")
-            evidences = [e.strip() for e in evidences]
+            evidences = [e.strip() for e in evidences if e.strip() != ""]
         return Segment(template=res[0], requirements=res[1], topic=res[2], evidences=evidences)
 
