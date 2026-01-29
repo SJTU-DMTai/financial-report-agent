@@ -3,6 +3,7 @@
 # ========== 在导入任何模块之前设置环境变量 ==========
 import os
 import sys
+import warnings
 
 # 禁用所有进度条显示
 os.environ["TQDM_DISABLE"] = "1"  # 全局禁用 tqdm 进度条
@@ -648,7 +649,7 @@ def detect_section(line: str) -> Tuple[int, str, bool]:
     """
     Detect sections using multiple patterns.
     """
-    pattern1 = r'#+\s+<span id=.+></span>\s+([0-9一二三四五六七八九十IVX]+(?:\.\d+)*)[、.\s章节]?\s*(.+)'
+    pattern1 = r'#+\s+<span id=.+></span>\s+([0-9一二三四五六七八九十IVX]+(?:\.\d+)*)[、.\s章节]?\s+'
     match = re.match(pattern1, line)
     if match:
         section_num = match.group(1)
@@ -665,9 +666,23 @@ def detect_section(line: str) -> Tuple[int, str, bool]:
         title = match.group(1).strip()
         level = line.split(" ")[0].count("#")
         return level, title, True
+
+
+    pattern3 = r'#+\s+([0-9一二三四五六七八九十IVX]+(?:\.\d+)*)[、.\s章节]?\s+'
+    match = re.match(pattern3, line)
+    if match:
+        section_num = match.group(1)
+        title = match.group(2).strip()
+        level = min(section_num.count('.') + 2, 6)
+        title = f"{section_num} {title}"
+        if section_num.count('.') == 0:
+            title += "."
+        return level, title, True
+
     return 0, "", False
 
 def clean_ocr_text(text, pdf_name):
+    print(text)
     processed_lines = []
 
     has_section_number = False
@@ -763,6 +778,9 @@ def markdown_to_sections(markdown: Union[str, Path, List[str]]) -> Section:
     root = Section(section_id=0, title=title, segments=[],
                    subsections=[], level=1)
     _parse_lines_as_section(markdown[i+1:], root)
+    if root.subsections is None or len(root.subsections) == 0:
+        warnings.warn(f"未检测到subsections")
+        return root
     if '摘要' in root.subsections[0].title:
         root.title += "\n".join([e.reference for e in root.segments if e.reference])
         root.segments = []

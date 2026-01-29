@@ -9,6 +9,7 @@ import pickle
 import re
 import sys
 from dataclasses import asdict
+from datetime import datetime
 from functools import partial
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from agentscope.agent import ReActAgent
 from agentscope.message import Msg
 
 from evaluation.eval_content import evaluate_segment
+from pipelines.planning import process_pdf_to_outline
 from src.memory.working import Section, Segment
 from src.prompt import prompt_dict
 from src.utils.instance import create_chat_model, create_agent_formatter
@@ -35,7 +37,8 @@ from src.utils.local_file import STOCK_REPORT_PATHS
 import config
 import asyncio
 
-from utils.call_with_retry import call_chatbot_with_retry
+from src.utils.call_with_retry import call_chatbot_with_retry
+from src.utils.instance import llm_reasoning, llm_instruct, formatter, cfg
 
 CURRENT_RUNNING_TASKS = 0
 
@@ -88,6 +91,7 @@ async def process_single_segment(segment, task_desc, agent_factory, semaphore):
                 segment_score, suggestions = await evaluate_segment(create_chat_model(reasoning=False), 
                                                                     create_agent_formatter(), 
                                                                     segment)
+                print("修改建议:", suggestions, flush=True)
                 if suggestions is None:
                     break
                 else:
@@ -140,19 +144,22 @@ async def process_section_concurrently(section: Section, parent_id, task_desc, a
             f"[{time.strftime('%H:%M:%S')}] [并发数: {CURRENT_RUNNING_TASKS}] 🏷️ 生成标题: {section.title[:10]}...", flush=True)
 
         section_text = "\n".join([s.content for s in section.segments])
-        model_instruct = create_chat_model(reasoning=False)
+        llm_instruct = create_chat_model(reasoning=False)
         formatter = create_agent_formatter()
         def _parse_res(text):
-            title = re.search("<title>(.+)</title>", text).group(1).strip("#").strip()
-            content = re.search("<content>(.+)</content>", text).group(1)
+            title = re.search("<title>(.+)</title>", text, re.DOTALL)
+            content = re.search("<content>(.+)</content>", text, re.DOTALL)
+            assert title is not None and content is not None, "输出格式不对，答案没有被合适的标签包裹住。"
+            title = title.group(1).strip().strip("#").strip()
+            content = content.group(1).strip()
             return title, content
         title, content = await call_chatbot_with_retry(
-            model_instruct, formatter,
+            llm_instruct, formatter,
             "你是撰写金融研报的专家。我将提供某一章节初稿，请你删去无意义的部分，输出润色后的内容，不要篡改关键信息。",
             f"金融研报某一章节初稿如下：\n\n{section_text}\n\n"
             f"该章节是参考了小标题为{section.title}的某个范例撰写的，请你根据初稿重新起一个标题，用<title>和</title>包裹住，限十字以内。"
             f"并在初稿基础上稍作润色，更新后的内容用<content>和</content>包裹住。",
-            _parse_res
+            _parse_res, handle_hook_exceptions=(AssertionError, )
         )
         section.title = title
         section.content = content
@@ -172,10 +179,6 @@ async def process_section_concurrently(section: Section, parent_id, task_desc, a
 async def run_workflow(task_desc: str):
     """围绕一个 task description 执行完整的研报生成流程。
     """
-
-    cfg = config.Config()
-    formatter = create_agent_formatter()
-
     # ----- 1. 准备 memory store -----
 
     PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -195,11 +198,6 @@ async def run_workflow(task_desc: str):
     planner_cfg = cfg.get_planner_cfg()
     use_demo = planner_cfg.get("use_demonstration", False)
 
-
-    # ----- 2. 创建底层模型 -----
-    model= create_chat_model()
-    model_instruct = create_chat_model(reasoning=False)
-
     entity = get_entity_info(long_term, task_desc)
     if not entity or not entity.get("code"):
         raise ValueError(f"无法从 task_desc 解析股票实体/代码：{task_desc}")
@@ -210,64 +208,15 @@ async def run_workflow(task_desc: str):
 
     # 解析demonstration report，第二遍解析同一个report可以注释掉
     demo_pdf_path = STOCK_REPORT_PATHS[stock_symbol][-1]
-    demo_date, demo_name = demo_pdf_path.name.split(".")[0].split("_")[-2:]
-    demo_md_path = short_term_dir / f"demonstration" / (demo_pdf_path.name.split(".")[0] + ".md")
-    if not demo_md_path.exists():
-        final_text, images = pdf_to_markdown(demo_pdf_path, demo_md_path)
-    manuscript: Section = markdown_to_sections(demo_md_path)
-
-    # ----- 5. 调用 Planner：生成 / 修订 outline.md -----
-    # planner_toolkit = build_planner_toolkit(
-    #     short_term=short_term,
-    #     searcher=searcher,
-    # )
-
-    # planner = create_planner_agent(model=model, formatter=formatter, toolkit=None)
-
-    async def dfs_outline(section: Section, parent_id=None):
-        if section.subsections is None:
-            return
-        for subsection in section.subsections:
-            section_id = ((parent_id + ".") if parent_id else "") + str(subsection.section_id)
-            print(f"\n====== 开始总结章节 {section_id} ======\n")
-            await dfs_outline(subsection)
-            if subsection.segments:
-                segments = await call_chatbot_with_retry(
-                    model_instruct, formatter,
-                    prompt_dict["decompose"], subsection.segments[0].reference.replace("<SEP>", ""),
-                )
-                subsection.segments = []
-                for i, segment in enumerate(segments.split("<SEP>")):
-                    print(segment, flush=True)
-                    msg = await call_chatbot_with_retry(
-                        model_instruct, formatter,
-                        prompt_dict["plan_outline"],
-                        f"当前任务：{task_desc}\n\n为实现当前任务，我找到了某机构在{demo_date}撰写的一份研报，名为{demo_name}。"
-                        f"下文将附上从中摘出的一段参考片段，请你考虑时间差和公司异同，撰写一份用于当前新任务的撰写模版和要求。\n\n"
-                        f"参考片段如下：\n\n{segment}",
-                        subsection.parse, handle_hook_exceptions=(AssertionError,)
-                    )
-                    subsection.segments.append(msg)
-                    subsection.segments[-1].reference = segment
-            print(subsection.read(True, True, True, True, False, False))
-
-    outline_json_pth = short_term_dir / "outline.json"
-    if not outline_json_pth.exists():
-        await dfs_outline(manuscript)
-        outline = manuscript.read(read_subsections=True, with_reference=True, with_content=True, with_evidence=True, fold_other=False)
-        print(outline)
-        outline_json_pth.write_text(manuscript.to_json(ensure_ascii=False))
-    else:
-        # outline = outline_md_pth.read_text()
-        manuscript = Section.from_json(outline_json_pth.read_text())
-        outline = manuscript.read(read_subsections=True, with_reference=True, with_content=True, with_evidence=True, fold_other=False)
-        print(outline)
+    manuscript = await process_pdf_to_outline(demo_pdf_path, long_term_dir / "demonstration",
+                                              llm_reasoning, llm_instruct, formatter,
+                                              cur_date=os.getenv("CUR_DATE", datetime.today().strftime("%Y%m%d")))
 
     verifier_toolkit = build_verifier_toolkit(
         short_term=short_term,
         long_term=long_term,
     )
-    verifier = create_verifier_agent(model=model, formatter=formatter, toolkit=verifier_toolkit)
+    verifier = create_verifier_agent(model=llm_reasoning, formatter=formatter, toolkit=verifier_toolkit)
 
     output_pth = PROJECT_ROOT / "data" / "output" / "reports"
 
@@ -280,13 +229,13 @@ async def run_workflow(task_desc: str):
             short_term=short_term,
             long_term=long_term,
         )
-        searcher = create_searcher_agent(model=model, formatter=formatter, toolkit=searcher_toolkit)
+        searcher = create_searcher_agent(model=llm_reasoning, formatter=formatter, toolkit=searcher_toolkit)
         writer_toolkit = build_writer_toolkit(
             short_term=short_term,
             long_term=long_term,
             searcher=searcher,
         )
-        writer = create_writer_agent(model=model, formatter=formatter, toolkit=writer_toolkit)
+        writer = create_writer_agent(model=llm_reasoning, formatter=formatter, toolkit=writer_toolkit)
         return searcher, writer
 
     # 启动递归并发处理

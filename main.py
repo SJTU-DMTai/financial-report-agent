@@ -6,8 +6,6 @@ from src.pipelines.workflow_concurrent import run_workflow
 import sys
 import io
 
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='gb2312', errors='replace')
-
 async def main() -> None:
     # task_desc = "生成2025Q2（即2025年4月到2025年6月） 贵州茅台（股票代码600519）的深度研究报告，重点分析利润结构、估值变化与渠道改革影响。"
     # task_desc = "生成2025Q3（即2025年7月到2025年9月） 宁德时代（股票代码为300750）的深度研究报告，重点分析商业模式、现金流质量与创新驱动因素。"

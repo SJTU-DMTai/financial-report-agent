@@ -20,7 +20,6 @@ import config
 
 cfg = config.Config()
 
-
 def create_chat_model(reasoning=True):
     """统一创建一个聊天模型实例。
     """
@@ -94,10 +93,7 @@ def create_agent_formatter():
     else:
         raise ValueError(f"未知 provider: {provider}")   
 
-# def single_agent_formatter() -> DashScopeChatFormatter:
-#     """单 Agent 对话用 formatter。"""
-#     return DashScopeChatFormatter()
 
-
-# def multi_agent_formatter() -> DashScopeMultiAgentFormatter:
-#     return DashScopeMultiAgentFormatter()
+llm_reasoning = create_chat_model()
+llm_instruct = create_chat_model(reasoning=False)
+formatter = create_agent_formatter()
