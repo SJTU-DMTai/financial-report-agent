@@ -92,12 +92,9 @@ async def run_workflow(task_desc: str):
     print("股票代码：", stock_symbol)
 
 
-    # # 解析demonstration report，第二遍解析同一个report可以注释掉
-    # demo_pdf_path = STOCK_REPORT_PATHS[stock_symbol][-1]
-    # demo_date, demo_name = demo_pdf_path.name.split(".")[0].split("_")[-2:]
-
-    demo_pdf_path = Path(r"E:\code\vscode\financial-report-agent\tests\002847_2024-12-25_从渠道的角度解析公司增长潜力：多渠道驱动，增长势能强劲.pdf")
-
+    # 解析demonstration report，第二遍解析同一个report可以注释掉
+    demo_pdf_path = STOCK_REPORT_PATHS[stock_symbol][-1]
+    demo_date, demo_name = demo_pdf_path.name.split(".")[0].split("_")[-2:]
     demo_md_path = short_term_dir / f"demonstration" / (demo_pdf_path.name.split(".")[0] + ".md")
     if not demo_md_path.exists():
         final_text, images = pdf_to_markdown(demo_pdf_path, demo_md_path)
@@ -214,14 +211,15 @@ async def run_workflow(task_desc: str):
                 if segment.evidences is None:
                     segment.evidences = []
                 for i in range(len(segment.evidences)):
+                    searched_content = "当前已搜索到的论据：\n" + "\n".join(segment.evidences[:i]) + "\n"
                     searcher_input = Msg(
                         name="user",
                         content=(
                             f"任务：{task_desc}\n"
                             f"当前需要你撰写要点：{segment.topic}\n"
-                            + (f"当前已搜索到的论据：\n{'\n'.join(segment.evidences[:i])}" if i > 0 else "")
-                            + f"你还需要搜索的材料：\n{segment.evidences[i]}\n\n"
-                              f"请你调用工具搜索，尽量根据多个信息源交叉验证后给出精简完整的搜索结果。"
+                            f"{searched_content}"
+                            f"你还需要搜索的材料：\n{segment.evidences[i]}\n\n"
+                            f"请你调用工具搜索，尽量根据多个信息源交叉验证后给出精简完整的搜索结果。"
                         ),
                         role="user",
                     )
@@ -296,8 +294,8 @@ async def run_workflow(task_desc: str):
                 ),
                 role="user",
             ))
-            segment.title = draft_msg.get_text_content()
-            print(segment.title)
+            subsection.title = draft_msg.get_text_content()
+            print(subsection.title)
 
             (output_pth / f"{stock_symbol}.json").write_text(manuscript.to_json(ensure_ascii=False))
 
