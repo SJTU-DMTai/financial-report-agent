@@ -5,11 +5,6 @@ import os
 import sys
 import warnings
 
-# 禁用所有进度条显示
-os.environ["TQDM_DISABLE"] = "1"  # 全局禁用 tqdm 进度条
-os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"  # 禁用 huggingface 进度条
-os.environ["TRANSFORMERS_VERBOSITY"] = "error"  # 减少 transformers 输出
-
 # Windows 特定编码修复
 if sys.platform == 'win32':
     try:
@@ -643,53 +638,61 @@ def md_to_pdf(
     return text
 
 
-
-
-def detect_section(line: str) -> Tuple[int, str, bool]:
+def detect_section(line: str, has_section_number: bool = False, has_chinese_h2: bool = False) -> Tuple[int, str, bool, bool]:
     """
     Detect sections using multiple patterns.
     """
-    pattern1 = r'#+\s+<span id=.+></span>\s+([0-9一二三四五六七八九十IVX]+(?:\.\d+)*)[、.\s章节]?\s+'
+    line = line.replace(" .", ".").replace("*", "").replace("、", "、 ").strip()
+    pattern1 = r'[#-]+\s+<span id=.+></span>\s*([0-9一二三四五六七八九十IVX]+(?:\.\d+)*)[、.\s章节]?\s*(.+)'
     match = re.match(pattern1, line)
     if match:
         section_num = match.group(1)
         title = match.group(2).strip()
-        level = min(section_num.count('.') + 2, 6)
-        title = f"{section_num} {title}"
-        if section_num.count('.') == 0:
-            title += "."
-        return level, title, True
+        cnt_dot = section_num.strip('.').count('.')
+        level = 3 if cnt_dot == 0 and has_chinese_h2 else min(cnt_dot + 2, 6)
+        title = f"{section_num}{'.' if section_num.strip('、').count('.') == 0 else ''} {title}"
+        return level, title, True, has_chinese_h2 or re.search(r'[一二三四五六七八九十]', section_num) is not None
 
     pattern2 = r'#+\s+<span id=.+></span>\s*(.+)$'
     match = re.match(pattern2, line)
-    if match and re.search(r"[图表][\s*]+\d", line) is None:
+    if match and re.search(r"[图表][\s*]?\d", line) is None:
         title = match.group(1).strip()
         level = line.split(" ")[0].count("#")
-        return level, title, True
+        return level, title, True, has_chinese_h2
 
 
-    pattern3 = r'#+\s+([0-9一二三四五六七八九十IVX]+(?:\.\d+)*)[、.\s章节]?\s+'
+    pattern3 = r'#+\s+([0-9一二三四五六七八九十IVX]+(?:\.\d+)*)[、.\s章节]?\s+(.+)'
     match = re.match(pattern3, line)
     if match:
         section_num = match.group(1)
         title = match.group(2).strip()
-        level = min(section_num.count('.') + 2, 6)
-        title = f"{section_num} {title}"
-        if section_num.count('.') == 0:
-            title += "."
-        return level, title, True
+        cnt_dot = section_num.strip('.').count('.')
+        level = 3 if cnt_dot == 0 and has_chinese_h2 else min(cnt_dot + 2, 6)
+        title = f"{section_num}{'.' if section_num.strip('、').count('.') == 0 else ''} {title}"
+        return level, title, True, has_chinese_h2 or re.search(r'[一二三四五六七八九十]', section_num) is not None
 
-    return 0, "", False
+    pattern3 = r'#+\s+([0-9一二三四五六七八九十IVX]+(?:\.\d+)*)、?(.+)'
+    match = re.match(pattern3, line)
+    if match:
+        section_num = match.group(1)
+        title = match.group(2).strip()
+        cnt_dot = section_num.strip('.').count('.')
+        level = 3 if cnt_dot == 0 and has_chinese_h2 else min(cnt_dot + 2, 6)
+        title = f"{section_num}{'.' if section_num.strip('、').count('.') == 0 else ''} {title}"
+        return level, title, True, has_chinese_h2 or re.search(r'[一二三四五六七八九十]', section_num) is not None
+
+    return 0, "", has_section_number, has_chinese_h2
 
 def clean_ocr_text(text, pdf_name):
-    print(text)
     processed_lines = []
 
     has_section_number = False
+    has_chinese_h2 = False
     skip_toc = False
     title = None
+    pattern_special = r'[#-]+\s+<span id=.+></span>\s*([0-9一二三四五六七八九十IVX]+(?:\.\d+)*)[、.\s章节]?\s*(.+)'
 
-    for line in text.split('\n\n'):
+    for line in text.splitlines():
         line = line.strip()
         if len(line) == 0:
             continue
@@ -707,22 +710,23 @@ def clean_ocr_text(text, pdf_name):
                 processed_lines.append("## " + match.group(1) + " （摘要）")
             else:
                 # Check if this is a TOC section (目录)
-                if '目录' in line and line.startswith('#'):
+                if re.search(r'目\s*录', line) is not None and line.startswith('#') or '<span id=' in line:
                     skip_toc = True
                     continue
 
                 # Skip TOC content (until we find a numbered section or new header)
                 if skip_toc:
-                    if line.startswith('#'):
-                        level, title, has_section_number = detect_section(line)
+                    if line.startswith('#') or has_section_number and re.match(pattern_special, line):
+                        level, title, has_section_number, has_chinese_h2 = detect_section(line, has_section_number, has_chinese_h2)
                         if level:
+                            print(level, title)
                             skip_toc = False
                     else:
                         continue
 
                 # Detect if line starts with markdown header
-                if re.search(r"^#+ ", line):
-                    level, title, has_section_number = detect_section(line)
+                if re.search(r"^#+ ", line) or has_section_number and re.match(pattern_special, line):
+                    level, title, has_section_number, has_chinese_h2 = detect_section(line, has_section_number, has_chinese_h2)
                     if level:
                         # Use level based on section number
                         processed_lines.append('#' * max(2, min(level, 6)) + ' ' + title)
@@ -741,7 +745,7 @@ def clean_ocr_text(text, pdf_name):
     return '\n\n'.join(processed_lines)
 
 def pdf_to_markdown(
-    pdf_path: Union[str, Path], output_path: Union[str, Path]
+    pdf_path: Union[str, Path]
 ):
     """
     将 demonstration report PDF 转换为结构化 Markdown，提取图片和表格并以特定格式嵌入。
@@ -749,40 +753,10 @@ def pdf_to_markdown(
     if isinstance(pdf_path, str):
         pdf_path = Path(pdf_path)
 
-    if isinstance(output_path, str):
-        output_path = Path(output_path)
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    print(f"output_path: {output_path}")
-
     converter = PdfConverter(artifact_dict=create_model_dict())
     rendered = converter(str(pdf_path))
     text, metadata, images = text_from_rendered(rendered)
     final_text = clean_ocr_text(text, pdf_path.name.replace(".pdf", "").split("_")[-1])
-    output_path.write_text(final_text, encoding="utf-8")
-
-    for name, img in (images or {}).items():
-        try:
-            # name 形如 "_page_0_Picture_15.jpeg"
-            target = output_path.parent / name
-            if target.exists():
-                continue
-
-            # marker 返回 PIL.Image
-            im = img
-            if im.mode not in ("RGB", "L"):
-                im = im.convert("RGB")
-
-            suffix = target.suffix.lower()
-            if suffix in [".jpg", ".jpeg"]:
-                im.save(target, format="JPEG", quality=90, optimize=True)
-            elif suffix == ".png":
-                im.save(target, format="PNG", optimize=True)
-            else:
-                target = target.with_suffix(".png")
-                im.save(target, format="PNG", optimize=True)
-        except Exception:
-            pass
     return final_text, images
 
 def markdown_to_sections(markdown: Union[str, Path, List[str]]) -> Section:
@@ -791,9 +765,9 @@ def markdown_to_sections(markdown: Union[str, Path, List[str]]) -> Section:
     非标题内容作为 Element 的 reference 存储
     """
     if isinstance(markdown, Path):
-        markdown = markdown.read_text(encoding="utf-8").split("\n\n")
+        markdown = markdown.read_text(encoding="utf-8").splitlines()
     elif isinstance(markdown, str):
-        markdown = markdown.split("\n\n")
+        markdown = markdown.splitlines()
     title = None
     for i, line in enumerate(markdown):
         if line.startswith("# "):
