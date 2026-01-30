@@ -10,9 +10,10 @@ from agentscope.model import ChatModelBase
 
 from src.memory.working import Section
 from src.prompt import prompt_dict
-from utils.call_with_retry import call_chatbot_with_retry
-from utils.file_converter import pdf_to_markdown, markdown_to_sections
-from utils.instance import create_agent_formatter
+from src.utils.call_with_retry import call_chatbot_with_retry
+from src.utils.file_converter import pdf_to_markdown, markdown_to_sections
+from src.utils.image_analyze import inject_vlm_into_demo_markdown
+from src.utils.instance import create_agent_formatter, create_vlm_model
 
 CONCURRENCY_LIMIT = int(os.getenv("N_THREAD", 32))
 
@@ -41,8 +42,17 @@ async def process_pdf_to_outline(pdf_path: Path, save_dir: Path,
 
     print("    - 步骤 1/3: PDF -> Markdown...")
     md_path = save_dir / f"{pdf_path.stem}.md"
+    md_path.parent.mkdir(parents=True, exist_ok=True)
+    print(f"output_path: {md_path}")
     if not md_path.exists():
-        pdf_to_markdown(pdf_path, md_path)
+        md_text, images = pdf_to_markdown(pdf_path)
+        md_path.write_text(md_text, encoding="utf-8")
+        await inject_vlm_into_demo_markdown(
+            demo_md_path=md_path,
+            images=images,
+            vlm_model=create_vlm_model(),
+            image_prompt=prompt_dict["image_analyze"],
+        )
 
     print("    - 步骤 2/3: Markdown -> 初始章节结构...")
     manuscript: Section = markdown_to_sections(md_path)

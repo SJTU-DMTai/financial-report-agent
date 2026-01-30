@@ -184,6 +184,8 @@ async def inject_vlm_into_demo_markdown(
     - 重复出现（引用次数>1）的图片直接跳过
     - 过滤头像/图标/装饰图
     """
+    if isinstance(demo_md_path, str):
+        demo_md_path = Path(demo_md_path)
     md_text = demo_md_path.read_text(encoding="utf-8", errors="ignore")
     lines = md_text.splitlines()
 
