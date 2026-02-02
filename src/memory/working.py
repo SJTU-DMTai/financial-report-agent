@@ -91,18 +91,16 @@ class Section:
     def parse(contents: str) -> Segment:
         keys = ['requirement', 'template', 'evidence', 'topic']
         cnts = [contents.count(f"<{k}>") for k in keys]
-        cnts += [contents.count(f"</{k}>") for k in keys]
+        # cnts += [contents.count(f"</{k}>") for k in keys]
         for c1 in cnts:
             for c2 in cnts:
-                assert c1 == c2 > 0, "Incomplete answer. You must give <template>, </template>, <requirement>, </requirement>, <topic> and </topic> for each item. Please Retry."
+                assert c1 == c2 > 0, "Incomplete answer. You must give <evidence>, </evidence>, <template>, </template>, <requirement>, </requirement>, <topic> and </topic> for each item. Please Retry."
         contents = contents.replace("\r\n", "\n")
         print(contents, flush=True)
-        res = re.findall(r"<template>(.+?)</template>.*<requirement>(.+?)</requirement>.*<topic>(.+?)</topic>", contents, re.DOTALL)
-        assert len(res) > 0, "Format error. You did not give template, evidence, requirement, and topic in order. Please Retry."
-        res = [s.strip() for s in res[0]]
-        evidences = re.search(r"<evidence>(.+?)</evidence>", contents, re.DOTALL)
-        if evidences is not None:
-            evidences = evidences.group(1).replace("\n", "").replace(";", "；").split("；")
-            evidences = [e.strip() for e in evidences if e.strip() != ""]
-        return Segment(template=res[0], requirements=res[1], topic=res[2], evidences=evidences)
+        res = re.findall(r"<evidence>(.+?)(?:</evidence>)?<template>(.+?)(?:</template>)?.*<requirement>(.+?)(?:</requirement>)?.*<topic>(.+?)</topic>", contents, re.DOTALL)
+        assert len(res) > 0, "Format error. You did not correctly warp template, evidence, requirement, or topic with the corresponding blocks and put them in order. Please Retry."
+        evidences, template, requirements, topic = [s.strip() for s in res[0]]
+        evidences = evidences.replace("\n", "").replace(";", "；").split("；")
+        evidences = [e.strip() for e in evidences if e.strip() != ""]
+        return Segment(template=template, requirements=requirements, topic=topic, evidences=evidences)
 

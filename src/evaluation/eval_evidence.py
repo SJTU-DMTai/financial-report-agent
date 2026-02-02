@@ -126,7 +126,7 @@ async def find_best_matches(texts_to_match: List[str], source_texts: List[str]) 
     3.  你的输出必须是一个合法的JSON对象。对象的键（key）是“待匹配列表”中的项的ID（如 "R_1"），值（value）是你在“源列表”中找到的最佳匹配项的ID（如 "S_5"）。
 
     **重要规则:**
-    -   如果对于某个 "R_ID"，在 "S" 列表中找不到任何合适的匹配项，请在JSON对象中将其值设为 "not_found"。
+    -   如果对于某个 "R_ID"，在 "S" 列表中找不到任何合适的匹配项，请在JSON对象中将其值设为 "NONE"。
     -   你的回答中**绝对不能包含**除了这个JSON对象之外的任何其他文字、解释或注释。
 
 
@@ -141,7 +141,7 @@ async def find_best_matches(texts_to_match: List[str], source_texts: List[str]) 
         r_id = f"R_{i+1}"
         s_id = match_map_by_id.get(r_id)
 
-        if s_id and s_id != "not_found":
+        if s_id and s_id != "NONE":
             try:
                 s_idx = int(s_id.split('_')[1]) - 1
                 if 0 <= s_idx < len(source_texts):

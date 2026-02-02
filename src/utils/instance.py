@@ -52,13 +52,24 @@ def create_chat_model(reasoning=True):
             stream=stream,
         )
 
-    elif provider in ["xiaomi", "ark"]:
+    elif provider in ["xiaomi"]:
         return OpenAIChatModel(
             model_name=model_name,
             api_key=os.environ.get("API_KEY"),
             stream=stream,
             client_args={"base_url": base_url},
-            # generate_kwargs={"extra_body":{"enable_thinking": False}}
+            generate_kwargs={"extra_body":{"enable_thinking": reasoning}}
+        )
+
+    elif provider in ["ark"]:
+        return OpenAIChatModel(
+            model_name=model_name,
+            api_key=os.environ.get("API_KEY"),
+            stream=stream,
+            client_args={"base_url": base_url},
+            generate_kwargs={'extra_body': {"thinking":{"type": 'enabled' if reasoning else 'disabled'}},
+                             "temperature": temperature,
+                             'max_tokens': 16384},
         )
 
     else:
@@ -117,6 +128,13 @@ def create_vlm_model():
             stream=stream,
             client_args={"base_url": base_url},
             generate_kwargs={"temperature": temperature},
+        )
+    elif provider in ["ark"]:
+        return OpenAIChatModel(
+            model_name=model_name,
+            api_key="7e3cde63-e447-4a63-9445-69c8942fdfa9",
+            stream=stream,
+            client_args={"base_url": base_url},
         )
     elif provider == "xiaomi":
         return OpenAIChatModel(

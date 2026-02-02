@@ -233,8 +233,12 @@ async def inject_vlm_into_demo_markdown(
             continue
 
         # (4) 单次多模态调用并注入
-        vlm_text = await analyze_one_image_vlm(vlm_model, img, image_prompt)
+        vlm_text = await analyze_one_image_vlm(vlm_model, img, image_prompt +
+                                               f"\n\n注：该图片来自于名为“{demo_md_path.stem}”的研报，如果是无关插图，请直接输出“无关插图”并结束")
         if vlm_text:
+            if "无关插图" in vlm_text:
+                i += 1
+                continue
             out_lines.append(format_injected_block(vlm_text).rstrip("\n"))
             changed = True
 

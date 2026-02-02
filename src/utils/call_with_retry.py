@@ -20,7 +20,7 @@ async def call_chatbot_with_retry(
     """
     调用 ChatModel 进行评估。
     """
-    print("User: ", user_prompt, flush=True)
+    # print("User: ", user_prompt, flush=True)
     messages = [
         Msg("system", sys_prompt, "system"),
         Msg("user", user_prompt, "user"),
