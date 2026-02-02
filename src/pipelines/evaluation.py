@@ -277,7 +277,7 @@ async def benchmark_single_pair(
 
         print(f"[2/4] 处理新报告...")
         print(f"  -> {new_report_path.name}")
-        new_section = await process_pdf_to_outline(new_report_path, save_dir, llm_reasoning, llm_instruct, formatter)
+        new_section = await process_pdf_to_outline(new_report_path, new_report_path, llm_reasoning, llm_instruct, formatter)
 
         print(f"[3/4] 评估指标...")
         structure_metrics = await evaluate_structure(new_section)
@@ -361,7 +361,7 @@ async def run_benchmark(
     results = []
     successful = 0
     failed = 0
-    not_found = 0
+    NONE = 0
     failure_reasons = {}
 
     for idx, item in enumerate(benchmark_items, 1):
@@ -371,8 +371,8 @@ async def run_benchmark(
         ref_path = new_reports_dir.parent / item.reference
         if not ref_path.exists():
             print(f"  ✗ 参考报告不存在: {item.reference}")
-            not_found += 1
-            failure_reasons[f"reference_not_found_{item.stock_code}"] = item.reference
+            NONE += 1
+            failure_reasons[f"reference_NONE_{item.stock_code}"] = item.reference
             continue
 
         # 查找新报告
@@ -382,8 +382,8 @@ async def run_benchmark(
 
         if not matching_files:
             print(f"  ✗ 未找到新报告（搜索模式: {item.stock_code}_{item.date}_*.pdf）")
-            not_found += 1
-            failure_reasons[f"new_report_not_found_{item.stock_code}"] = f"{item.stock_code}_{item.date}_*.pdf"
+            NONE += 1
+            failure_reasons[f"new_report_NONE_{item.stock_code}"] = f"{item.stock_code}_{item.date}_*.pdf"
             continue
 
         if len(matching_files) > 1:
@@ -415,7 +415,7 @@ async def run_benchmark(
     print(f"总数:   {len(benchmark_items)}")
     print(f"成功:   {successful} ({successful/len(benchmark_items)*100:.1f}%)" if len(benchmark_items) > 0 else "成功:   0")
     print(f"失败:   {failed}")
-    print(f"找不到: {not_found}")
+    print(f"找不到: {NONE}")
 
     if failure_reasons:
         print(f"\n失败原因详情:")
@@ -426,7 +426,7 @@ async def run_benchmark(
         "total": len(benchmark_items),
         "successful": successful,
         "failed": failed,
-        "not_found": not_found,
+        "NONE": NONE,
         "results": [asdict(r) for r in results],
         "timestamp": datetime.now().isoformat(),
     }

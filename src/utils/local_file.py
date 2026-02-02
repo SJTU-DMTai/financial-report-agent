@@ -4,7 +4,8 @@ import os
 from pathlib import Path
 from typing import Union
 
-DEMO_DIR = Path(os.getenv("DEMO_DIR", "../pdf_filtered/"))
+PROJECT_ROOT = Path(__file__).parent.parent.parent
+DEMO_DIR = Path(os.getenv("DEMO_DIR", PROJECT_ROOT.parent / "pdf_filtered/"))
 pdf_files = list(DEMO_DIR.glob("*.pdf")) + list(DEMO_DIR.glob("*.PDF"))
 STOCK_REPORT_PATHS = collections.defaultdict(list)
 for file in pdf_files:

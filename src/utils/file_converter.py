@@ -5,6 +5,8 @@ import os
 import sys
 import warnings
 
+from utils.local_file import DEMO_DIR
+
 # Windows 特定编码修复
 if sys.platform == 'win32':
     try:
@@ -643,7 +645,7 @@ def detect_section(line: str, has_section_number: bool = False, has_chinese_h2: 
     Detect sections using multiple patterns.
     """
     line = line.replace(" .", ".").replace("*", "").replace("、", "、 ").strip()
-    pattern1 = r'[#-]+\s+<span id=.+></span>\s*([0-9一二三四五六七八九十IVX]+(?:\.\d+)*)[、.\s章节]?\s*(.+)'
+    pattern1 = r'[#-]+\s+<span id=.+></span>\s*([0-9一二三四五六七八九十IVX]+(?:\.\d+)*)[、\.\s章节]+\s*(.+)'
     match = re.match(pattern1, line)
     if match:
         section_num = match.group(1)
@@ -661,7 +663,7 @@ def detect_section(line: str, has_section_number: bool = False, has_chinese_h2: 
         return level, title, True, has_chinese_h2
 
 
-    pattern3 = r'#+\s+([0-9一二三四五六七八九十IVX]+(?:\.\d+)*)[、.\s章节]?\s+(.+)'
+    pattern3 = r'#+\s+([1-9一二三四五六七八九十IVX]+(?:\.\d+)*)[、\.\s章节]+\s*(.+)'
     match = re.match(pattern3, line)
     if match:
         section_num = match.group(1)
@@ -671,7 +673,7 @@ def detect_section(line: str, has_section_number: bool = False, has_chinese_h2: 
         title = f"{section_num}{'.' if section_num.strip('、').count('.') == 0 else ''} {title}"
         return level, title, True, has_chinese_h2 or re.search(r'[一二三四五六七八九十]', section_num) is not None
 
-    pattern3 = r'#+\s+([0-9一二三四五六七八九十IVX]+(?:\.\d+)*)、?(.+)'
+    pattern3 = r'#+\s+([1-9一二三四五六七八九十IVX]+(?:\.\d+)*)、?(.+)'
     match = re.match(pattern3, line)
     if match:
         section_num = match.group(1)
@@ -690,7 +692,7 @@ def clean_ocr_text(text, pdf_name):
     has_chinese_h2 = False
     skip_toc = False
     title = None
-    pattern_special = r'[#-]+\s+<span id=.+></span>\s*([0-9一二三四五六七八九十IVX]+(?:\.\d+)*)[、.\s章节]?\s*(.+)'
+    pattern_special = r'[#-]+\s+<span id=.+></span>\s*([0-9一二三四五六七八九十IVX]+(?:\.\d+)*)[、\.\s章节]+\s*(.+)'
 
     for line in text.splitlines():
         line = line.strip()
@@ -710,7 +712,7 @@ def clean_ocr_text(text, pdf_name):
                 processed_lines.append("## " + match.group(1) + " （摘要）")
             else:
                 # Check if this is a TOC section (目录)
-                if re.search(r'目\s*录', line) is not None and line.startswith('#') or '<span id=' in line:
+                if re.search(r'目\s*录', line) is not None and (line.startswith('#') or '<span id=' in line):
                     skip_toc = True
                     continue
 
@@ -842,8 +844,9 @@ def _parse_lines_as_section(lines: List[str], parent: Section) -> int:
                 i += consumed
         else:
             # 非标题行，积累到当前内容
-            current_content.append(line)
-            i += 1
+            if line.strip():
+                current_content.append(line)
+                i += 1
 
     # 处理末尾的内容
     if current_content:

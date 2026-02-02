@@ -40,12 +40,12 @@ async def process_pdf_to_outline(pdf_path: Path, save_dir: Path,
         llm_instruct = llm_reasoning
     demo_date, demo_name = pdf_path.name.split(".")[0].split("_")[-2:]
 
-    print("    - 步骤 1/3: PDF -> Markdown...")
+    print("    - 步骤 1/3: PDF -> Markdown...", flush=True)
     md_path = save_dir / f"{pdf_path.stem}.md"
     md_path.parent.mkdir(parents=True, exist_ok=True)
     print(f"output_path: {md_path}")
     if not md_path.exists():
-        md_text, images = pdf_to_markdown(pdf_path)
+        md_text, images = await pdf_to_markdown(pdf_path)
         md_path.write_text(md_text, encoding="utf-8")
         await inject_vlm_into_demo_markdown(
             demo_md_path=md_path,
@@ -68,7 +68,7 @@ async def process_pdf_to_outline(pdf_path: Path, save_dir: Path,
         if section.subsections:
             await asyncio.gather(*[process_subsection_with_limit(subsection) for subsection in section.subsections])
 
-        if section.segments:
+        if section.segments and len(section.segments) > 0 and section.segments[0].reference:
             decomposed_segments_text = await call_chatbot_with_retry(
                 llm_instruct, formatter,
                 prompt_dict["decompose"], section.segments[0].reference.replace("<SEP>", ""),

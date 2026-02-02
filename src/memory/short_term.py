@@ -63,28 +63,28 @@ class ShortTermMemoryStore:
         if not self.do_post_init:
             self._load_registry()
             return
-        # 转移之前的short_term memory，避免对当前任务造成干扰
-        history_root = self.base_dir / "history_short_term"
-        history_root.mkdir(parents=True, exist_ok=True)
-
-        batch_dir = history_root / datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        batch_dir.mkdir(parents=True, exist_ok=True)
-
-        targets = [
-            self.outline_path,
-            self.material_dir,
-            self.manuscript_dir,
-        ]
-
-        for target in targets:
-            if target.exists():
-                dest = batch_dir / target.name
-                if target.is_dir():
-                    shutil.copytree(target, dest)
-                    shutil.rmtree(target)
-                else:
-                    shutil.copy2(target, dest)
-                    target.unlink()
+        # # 转移之前的short_term memory，避免对当前任务造成干扰
+        # history_root = self.base_dir / "history_short_term"
+        # history_root.mkdir(parents=True, exist_ok=True)
+        #
+        # batch_dir = history_root / datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        # batch_dir.mkdir(parents=True, exist_ok=True)
+        #
+        # targets = [
+        #     self.outline_path,
+        #     self.material_dir,
+        #     self.manuscript_dir,
+        # ]
+        #
+        # for target in targets:
+        #     if target.exists():
+        #         dest = batch_dir / target.name
+        #         if target.is_dir():
+        #             shutil.copytree(target, dest)
+        #             shutil.rmtree(target)
+        #         else:
+        #             shutil.copy2(target, dest)
+        #             target.unlink()
 
         # 重建空目录结构，避免后续调用失败
         self.ensure_dirs()
