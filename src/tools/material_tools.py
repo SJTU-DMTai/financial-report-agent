@@ -14,17 +14,18 @@ import re
 from urllib.parse import urlparse, parse_qs
 import requests
 import fitz
+from htmldate import find_date
 from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse, Toolkit
 from ..memory.short_term import ShortTermMemoryStore, MaterialType
 from ..memory.long_term import LongTermMemoryStore
 from ..utils.get_entity_info import get_entity_info
+from ..utils.format import fmt_yyyymmdd
+from ..utils.web_scraping import fetch_page_html, extract_text_and_images
+from ..utils.format import fmt_yyyymmdd
 import json
 import copy
-from urllib.parse import urljoin
 import requests
-from bs4 import BeautifulSoup
-from trafilatura import extract
 
 
 def grep_file_with_context(
@@ -261,14 +262,9 @@ def add_exchange_prefix(symbol: str, type: str) -> str:
     else:
         raise ValueError("type 需为 'upper' 或 'lower'。")
 
-def fmt_yyyymmdd(s: str) -> str:
-        s = (s or "").strip()
-        if len(s) == 8 and s.isdigit():
-            return datetime.strptime(s, "%Y%m%d").strftime("%Y-%m-%d")
-        return s  # 已是 YYYY-MM-DD 或其他格式则原样返回
 
 class MaterialTools:
-    def __init__(self, short_term: Optional[ShortTermMemoryStore] = None, long_term: Optional[LongTermMemoryStore] = None) -> None:
+    def __init__(self, short_term: ShortTermMemoryStore, long_term: LongTermMemoryStore) -> None:
         self.short_term = short_term
         self.long_term = long_term
 
@@ -291,7 +287,7 @@ class MaterialTools:
             query_key (str | None):
                 - 对于 JSON list：可选，用于对每个条目提取该字段。
                 - 对于表格：可选，用于筛选特定列（如 "Date,Close"）。
-                - 对于文本：可选，用于在内容中搜索特定关键词，返回匹配结果及若干行上下文。不适用于表格和JSON
+                - 对于文本：可选，用于在内容中搜索特定关键词，返回匹配结果及若干行上下文。
             context_lines (int):
                 - 关键词搜索时的上下文行数（关键词前后各显示该行数）。
                 - 默认为50行。只在使用keyword参数时有效。
@@ -305,7 +301,6 @@ class MaterialTools:
             )
 
         try:
-            # ...existing code...
             if meta.m_type == MaterialType.TABLE:
                 return self._read_table_impl(ref_id, query_key)
             elif meta.m_type == MaterialType.TEXT:
@@ -329,212 +324,6 @@ class MaterialTools:
             )
 
 
-    # ========== 内部函数（不注册为 tool） ==========
-
-    def _read_with_keyword(self, ref_id: str, keyword: str, context_lines: int, meta) -> ToolResponse:
-        """
-        使用关键词搜索Material内容。
-        根据Material类型，使用grep工具进行搜索并返回结果。
-
-        Args:
-            ref_id: Material ID
-            keyword: 搜索关键词
-            context_lines: 上下文行数
-            meta: Material元数据
-
-        Returns:
-            ToolResponse with search results
-        """
-        try:
-            # 获取material文件路径
-            material_file = self.short_term.material_dir / meta.filename
-
-            if not material_file.exists():
-                return ToolResponse(
-                    content=[TextBlock(type="text", text=f"[read_material] Material文件不存在: {meta.filename}")],
-                    metadata={"ref_id": ref_id}
-                )
-
-            # 使用grep_file_with_context进行搜索
-            results = grep_file_with_context(
-                filepath=str(material_file),
-                keyword=keyword,
-                context_lines=context_lines,
-                case_sensitive=False,
-                regex=False
-            )
-
-            if not results:
-                return ToolResponse(
-                    content=[TextBlock(type="text", text=f"[read_material] 关键词'{keyword}'未在Material中找到任何匹配")],
-                    metadata={"ref_id": ref_id, "keyword": keyword, "matches": 0}
-                )
-
-            # 格式化搜索结果
-            formatted_results = print_grep_results(results, max_results=10, show_line_numbers=True)
-
-            text = (
-                f"[read_material] ID: {ref_id}\n"
-                f"关键词: '{keyword}'\n"
-                f"共找到 {len(results)} 个匹配\n"
-                f"带有{context_lines}的上下文如下: \n\n"
-                f"{formatted_results}"
-            )
-
-            return ToolResponse(
-                content=[TextBlock(type="text", text=text)],
-                metadata={
-                    "ref_id": ref_id,
-                    "keyword": keyword,
-                    "matches": len(results),
-                    "type": "keyword_search",
-                    "context_lines": context_lines
-                }
-            )
-
-        except Exception as e:
-            return ToolResponse(
-                content=[TextBlock(type="text", text=f"[read_material] 关键词搜索失败: {str(e)}")],
-                metadata={"ref_id": ref_id, "error": str(e)}
-            )
-
-    def _read_table_impl(self, ref_id, cols):
-        df = self.short_term.load_material(ref_id) 
-        
-        # 1. 列筛选 (Horizontal Slicing)
-        if cols:
-            col_list = [c.strip() for c in cols.split(",")]
-            # 容错处理：只保留存在的列
-            valid_cols = [c for c in col_list if c in df.columns]
-            if valid_cols:
-                df = df[valid_cols]
-
-        # 2. 行筛选 (Vertical Slicing)
-        total_rows = len(df)
-        
-        sliced_df = df.copy()
-
-        if ("_disclosure_" in ref_id) and ("公告" in sliced_df.columns):
-            MAX_TOTAL_CHARS = 20000
-            MIN_PER_CELL = 200
-            SUFFIX = "\n...... [内容过长，已截断，如需要完整阅读请对此条结果单独使用read_material工具]"
-
-            # 只统计当前页（切片范围内）“公告”列的字符数
-            ann_series = sliced_df["公告"]
-
-            # 只对 str 进行统计/截断；非字符串保持原样
-            valid_indices = []
-            total_len = 0
-
-            for idx, v in ann_series.items():
-                if isinstance(v, str) and v:
-                    l = len(v)
-                    valid_indices.append(idx)
-                    total_len += l
-            if total_len > MAX_TOTAL_CHARS and valid_indices:
-                n_items = len(valid_indices)
-                per_limit = max(MAX_TOTAL_CHARS // n_items, MIN_PER_CELL)
-
-
-                for idx in valid_indices:
-                    v = sliced_df.at[idx, "公告"]
-                    if isinstance(v, str) and v:
-                        if len(v) > per_limit:
-                            sliced_df.at[idx, "公告"] = v[:per_limit] + SUFFIX
-
-        
-        # preview_str = sliced_df.to_markdown(index=False, disable_numparse=True)
-        preview_str = sliced_df.to_csv(index=False)
-        text = (f"[read_material] ID: {ref_id}\n"
-                f"完整 material 共 {total_rows} 行。\n"
-                f"内容:\n{preview_str}")
-                
-        return ToolResponse(
-            content=[TextBlock(type="text", text=text)],
-            metadata={"ref_id": ref_id, "type": "table", "rows": len(sliced_df)}
-        )
-
-    def _read_text_impl(self, ref_id):
-        # 适用于 .txt, .md
-        content = self.short_term.load_material(ref_id) # 返回 str
-        lines = content.split('\n')
-        total_lines = len(lines)
-
-        # 截取
-        sliced_lines = lines
-        preview_str = "\n".join(sliced_lines)
-
-        text = (f"[read_material] ID: {ref_id}\n"
-                f"完整 material 共 {total_lines} 行。\n"
-                f"内容:\n{preview_str}")
-
-        return ToolResponse(
-            content=[TextBlock(type="text", text=text)],
-            metadata={"ref_id": ref_id, "type": "text", "lines": len(sliced_lines)}
-        )
-
-    def _read_json_impl(
-        self,
-        ref_id: str,
-        key_path: str | None,
-    ) -> ToolResponse:
-        data = self.short_term.load_material(ref_id)  
-        # if isinstance(data, list):
-        sliced = copy.deepcopy(data)
-
-        if (ref_id.startswith("search_engine")):
-            if isinstance(sliced, list):
-                for item in sliced:
-                    if isinstance(item, dict):
-                        # 删除 relevance 字段
-                        item.pop("relevance", None)
-
-
-        # 如果有 key_path，则提取每条对应字段，否则展示整个条目
-        if key_path:
-            def extract(obj, path):
-                cur = obj
-                for k in path.split("."):
-                    if isinstance(cur, dict) and k in cur:
-                        cur = cur[k]
-                    else:
-                        return None
-                return cur
-
-            sliced = [extract(item, key_path) for item in sliced]
-
-        # 序列化成 JSON 字符串
-        json_str = json.dumps(sliced, ensure_ascii=False, indent=2)
-
-        text = (
-            f"[read_material] ID: {ref_id}\n"
-            f"内容:\n{json_str}"
-        )
-
-        return ToolResponse(
-            content=[TextBlock(type="text", text=text)],
-            metadata={"ref_id": ref_id, "type": "json_list"}
-        )
-
-    def _save_df_to_material(
-            self,
-            df: pd.DataFrame,
-            ref_id: str,
-            description: str,
-            source: str,
-            entity:Dict[str,str] | None = None,
-            time:Dict[str,str] | None = None,
-    ) -> int:
-        """DataFrame/Dict 存入 short-term material（CSV/JSON），返回行数。"""
-        if self.short_term is not None:
-            self.short_term.save_material(ref_id=ref_id,
-                                          content=df, 
-                                          description=description,
-                                          source=source,
-                                        #   source="AKshare API",
-                                          entity=entity,
-                                          time=time)
-        return len(df)
 
     # ===================== 股价数据 =====================
 
@@ -659,224 +448,6 @@ class MaterialTools:
             },
         )
 
-    async def fetch_disclosure_material(
-        self,
-        symbol: str,
-        start_date: str,
-        end_date: str | None = None,
-        market: str = "沪深京",
-        keyword: str = "",
-        category: str = "",
-    ) -> ToolResponse:
-        """获取指定股票的信息披露公告，并保存表格结果到Material当中，返回Material标识ref_id。
-        抓取指定 symbol 在给定时间区间内的各类信息披露公告，
-        可按市场、公告类别和关键词进行过滤，并将结果保存为表格。
-        适用场景：生成研报中的“公司公告梳理”“信息披露情况”章节；快速定位某段时间内的年报、季报、重大事项、股权变动等公告列表。
-
-        Args:
-            symbol (str):
-                股票代码，例如 "000001"。
-            start_date (str):
-                公告起始日期，格式为 "YYYYMMDD"，例如 "20230618"。必需参数。
-            end_date (str | None):
-                公告结束日期，格式为 "YYYYMMDD"，例如 "20231219"。
-                如果为 None，则使用环境变量 CUR_DATE 或当前日期。
-            market (str):
-                市场类型，支持的取值包括：
-                - "沪深京"（默认）、"港股"、"三板"、"基金"、"债券"、"监管"、"预披露"。
-            keyword (str):
-                公告搜索关键词，例如 "股权激励"、"增发"；为空字符串时不做关键词过滤。
-            category (str):
-                公告类别，取值仅限于如下选择之一：
-                - "年报"、"半年报"、"一季报"、"三季报"、"业绩预告"、"权益分派"、
-                "董事会"、"监事会"、"股东大会"、"日常经营"、"公司治理"、"中介报告"、
-                "首发"、"增发"、"股权激励"、"配股"、"解禁"、"公司债"、"可转债"、
-                "其他融资"、"股权变动"、"补充更正"、"澄清致歉"、"风险提示"、
-                "特别处理和退市"、"退市整理期"。
-                - 为空字符串时：不按类别过滤，返回全部信息披露公告。
-
-        """
-        cur_date = os.getenv('CUR_DATE') or datetime.now().strftime("%Y%m%d")
-        end_date = min(end_date, cur_date) if end_date else cur_date
-
-
-            # 内部工具函数：从公告链接 + 公告时间 拼出 PDF URL
-        def _build_pdf_url(link: str, announce_date: str) -> str | None:
-            if not isinstance(link, str) or not link:
-                return None
-
-            announcement_id = None
-            try:
-                parsed = urlparse(link)
-                qs = parse_qs(parsed.query)
-                if "announcementId" in qs and qs["announcementId"]:
-                    announcement_id = qs["announcementId"][0]
-                else:
-                    # 兜底：用正则从 URL 中提取
-                    m = re.search(r"announcementId=(\d+)", link)
-                    if m:
-                        announcement_id = m.group(1)
-            except Exception:
-                pass
-
-            if not announcement_id:
-                return None
-
-            # 公告时间列一般形如 "2023-12-09" 或 "2023-12-09 00:00:00"
-            if not isinstance(announce_date, str):
-                announce_date = str(announce_date)
-            date_str = announce_date.split()[0]  # 去掉可能的时间部分
-            # 替换可能存在的分隔符为 "-"
-            date_str = (
-                date_str.replace(".", "-")
-                        .replace("/", "-")
-            )
-
-            return f"https://static.cninfo.com.cn/finalpage/{date_str}/{announcement_id}.PDF"
-
-        # 内部工具函数：下载 PDF 并用 PyMuPDF 抽取文本
-        def _fetch_pdf_text(pdf_url: str, referer: str | None = None) -> str:
-            if not pdf_url:
-                return ""
-            try:
-                headers = {
-                    "User-Agent": "Mozilla/5.0",
-                }
-                if referer:
-                    headers["Referer"] = referer
-
-                resp = requests.get(pdf_url, headers=headers, timeout=20)
-                resp.raise_for_status()
-
-                with fitz.open(stream=resp.content, filetype="pdf") as doc:
-                    texts: list[str] = []
-                    for page in doc:
-                        t = page.get_text().strip()
-                        if t:
-                            texts.append(t)
-                return "\n".join(texts)
-            except Exception:
-                # 出错就返回空字符串，避免整个流程中断；具体错误可按需改成日志记录
-                return ""
-
-        try:
-            assert pd.to_datetime(start_date) <= pd.to_datetime(end_date), "start_date 晚于当前时间，请重新设置"
-            assert category in {'年报', '半年报', '一季报', '三季报', '业绩预告', '权益分派',
-    '董事会', '监事会', '股东大会', '日常经营', '公司治理', '中介报告',
-     '首发', '增发', '股权激励', '配股', '解禁', '公司债', '可转债', '其他融资',
-     '股权变动', '补充更正', '澄清致歉', '风险提示', '特别处理和退市', '退市整理期', '', None}, f'category 设置错误，不支持"{category}"'
-            df = ak.stock_zh_a_disclosure_report_cninfo(
-                symbol=symbol,
-                market=market,
-                keyword=keyword,
-                category=category,
-                start_date=start_date,
-                end_date=end_date,
-            )
-        except Exception as e:
-        # 捕获 akshare 在内部筛选、字段缺失等造成的异常
-            traceback.print_exc()
-            df = None
-            text = (
-                f"[fetch_disclosure_material] {type(e)}: {e}\n"
-                f"建议修改或放宽搜索条件（symbol={symbol}, market={market}, keyword={keyword}, "
-                f"category={category}, start_date={start_date}, end_date={end_date}）"
-            )
-            return ToolResponse(
-                content=[
-                    TextBlock(
-                        type="text",
-                        text=text,
-                    ),
-                ],
-            )
-
-        
-        # 避免获取的公告数量过多取其中10条，后续可以改成按照某些条件排序取前10条
-        if df is not None and len(df) > 10:
-            df = df.sample(n=10)
-
-        # 2. 遍历 df 行，构造 PDF URL 并抽文本，为每个公告保存为独立文件
-        disclosure_ref_ids: list[str] = []
-        entity = get_entity_info(long_term=self.long_term, text=symbol)
-        base_timestamp = int(time_module.time())
-
-        for idx, row in df.iterrows():
-            link = row.get("公告链接")
-            announce_date = row.get("公告时间")
-            announce_title = row.get("公告标题", "未命名公告")
-            pdf_url = _build_pdf_url(link, announce_date)
-            text = _fetch_pdf_text(pdf_url, referer=link)
-
-            if text:  # 只保存有内容的公告
-                # 为每个公告创建唯一的 ref_id
-                announce_date_str = pd.to_datetime(announce_date).strftime("%Y-%m-%d")
-                date_only = announce_date_str.split()[0]
-                date_only = date_only.replace(".", "-").replace("/", "-")
-                disclosure_ref_id = f"{symbol}_disclosure_{date_only}_{idx}" # 避免不合法文件名
-
-
-                # 创建详细的描述，包含工具名、源URL等信息
-                description_parts = [
-                    "fetch_disclosure_material",  # 工具名
-                    f"source={entity['name']}({entity['code']})",
-                    f"title={announce_title}",
-                    f"date={announce_date}",
-                    f"market={market}",
-                ]
-                if keyword:
-                    description_parts.append(f"keyword={keyword}")
-                if category:
-                    description_parts.append(f"category={category}")
-                if pdf_url:
-                    description_parts.append(f"url={pdf_url}")
-
-                description = " | ".join(description_parts)
-
-                # 保存公告文本为单独的文件
-                self.short_term.save_material(
-                    ref_id=disclosure_ref_id,
-                    content=text,
-                    description=description,
-                    source="AKshare API:CNINFO",
-                    entity=entity,
-                    time={"announce_date": str(announce_date)},
-                )
-                disclosure_ref_ids.append(disclosure_ref_id)
-
-        # 3. 将 ref_ids 列表添加到 dataframe 中
-        df["ref_id"] = [disclosure_ref_ids[i] if i < len(disclosure_ref_ids) else "" for i in range(len(df))]
-        if "公告链接" in df.columns:
-            df = df.drop(columns=["公告链接"])
-        df = df[['ref_id', '公告标题']].set_index("ref_id")
-
-        # 保存包含 ref_ids 的元数据表格
-        ref_id = f"{symbol}_disclosure_{category or 'all'}_{base_timestamp}"
-        description = f"{entity['name']}（{entity['code']}）股票"
-        parts = [x for x in (keyword, category) if x]
-        if parts:
-            description += " " + " ".join(parts)
-        description = description + "信息披露公告"
-        # self._save_df_to_material(df=df, ref_id=ref_id, source="AKshare API:CNINFO", entity=entity, description=description)
-        header = (
-            f"[fetch_disclosure_material] 信息披露公告（symbol={symbol}, market={market}, "
-            f"category={category or '全部'}, {start_date}~{end_date}）。"
-            f"各disclosure按ref_id单独保存到了本地，请根据需要使用retrieve_local_material或read_material工具读取。"
-        )
-        return _build_tool_response_from_df(
-            df,
-            ref_id=ref_id,
-            header=header,
-            extra_meta={
-                "symbol": symbol,
-                "market": market,
-                "keyword": keyword,
-                "category": category,
-                "start_date": start_date,
-                "end_date": end_date,
-            },
-            save=False,
-        )
 
     # ===================== 财务报表 =====================
     async def fetch_balance_sheet_material(
@@ -1272,12 +843,12 @@ class MaterialTools:
             end_date (str | None):
                 过滤限定日期之前的新闻，格式为 "YYYYMMDD"，例如 "20231231"。如果为 None，则使用当前日期。
             latest_num (int):
-                限定时间范围内最近的新闻条数，默认50
+                限定时间范围内最近的新闻条数，默认100
         """
         cur_date = os.getenv('CUR_DATE') or datetime.now().strftime("%Y%m%d")
         end_date = min(end_date, cur_date) if end_date else cur_date
         assert pd.to_datetime(start_date, format="%Y%m%d") <= pd.to_datetime(end_date, format="%Y%m%d")
-        ref_id = f"{symbol}_{keyword}_news_daterange_{start_date}-{end_date}_num{latest_num}"
+        ref_id = f"{symbol}_{keyword}_news_{int(time_module.time())}"
         start_date, end_date = pd.to_datetime(start_date, format="%Y%m%d"), pd.to_datetime(end_date, format="%Y%m%d")
 
         if symbol is None or symbol == "":
@@ -1296,10 +867,10 @@ class MaterialTools:
         df = pd.concat(dfs)
         df.sort_values("发布时间", inplace=True, ascending=False)
 
-        # self._save_df_to_material(df=df, ref_id=ref_id,source="AKshare API:eastmoney",entity=entity,description=description)
+        self._save_df_to_material(df=df, ref_id=ref_id,source="AKshare API:eastmoney",entity=entity,description=description)
         header = f"[fetch_stock_news_material] 股票新闻资讯（新闻内容大于156字的部分被省略，如需全文请根据url搜索）"
         return _build_tool_response_from_df(
-            df,
+            df=df,
             ref_id=ref_id,
             header=header,
             extra_meta={"symbol": symbol} if symbol else {"keyword": keyword},
@@ -1311,77 +882,485 @@ class MaterialTools:
         Args:
             url (str):
                 网页地址。
-            symbol (str):
+            symbol (str | None):
                 新闻对应股票代码或名称。如果无法判断，可以不提供。
         """
-        bytes = _fetch_page_html(url)
-        page_text, img_urls = _extract_text_and_images(bytes, url)
+        bytes = fetch_page_html(url)
+        page_text, img_urls = extract_text_and_images(bytes, url)
         page_text = page_text or ""
         if page_text:
-            # 保存公告文本为单独的文件
+            # 保存网页提取的文本为单独的文件
             entity = get_entity_info(long_term=self.long_term, text=symbol or page_text)
+            domain = urlparse(url).netloc
+            if domain.startswith("www."):
+                domain = domain[4:]
+            ref_id = "url_page_text_" +url.replace(".html", "").replace("http://", "").replace("https://", "").replace("/", "-")
+
+            published_date = None
+            try:
+                published_date = find_date(
+                    bytes,
+                    url=url,
+                    original_date=True,
+                    extensive_search=True,
+                    deferred_url_extractor=True,
+                )
+            except Exception:
+                published_date = None
+
+            desc = ""
+            time = None
+            if published_date:
+                published_date = fmt_yyyymmdd(published_date)
+                desc = desc+ f"网页发布时间：{published_date} "
+                time = {"point": published_date}
+            if entity:
+                desc = desc+f"发布关于{entity['name']}（{entity['code']}）的内容:"
+
+            desc = desc + page_text[:50]
+            
             self.short_term.save_material(
-                ref_id=str(entity['code']) + "_" +
-                       url.replace(".html", "")
-                       .replace("http://", "").replace("https://", "")
-                       .replace("/", "-"),
+                ref_id=ref_id,
                 content=page_text,
-                description="金融新闻",
-                source="AKshare API:CNINFO",
-                entity=entity
+                description=desc,
+                source="web search（来源：{domain}）",
+                entity=entity,
+                time=time
             )
-        return ToolResponse(
+
+            text_block: TextBlock = {
+                "type": "text",
+                "text": (
+                    f"[fetch_url_page_text] url:{url}对应的网页文本结果获取如下：\n"
+                    f"Material 已写入 ref_id='{ref_id}' TXT 格式）\n"
+                ),
+            }
+            return ToolResponse(content=[text_block], metadata={"ref_id": ref_id})  
+        else:
+            text = f"[fetch_url_page_text] url:{url}未获取到对应的网页文本，请检查url是否正确。"
+            return ToolResponse(
             content=[
-                TextBlock(type="text", text=page_text),
+                TextBlock(
+                    type="text",
+                    text=text,
+                ),
             ],
         )
 
-def _fetch_page_html(url: str, timeout: int = 10) -> bytes:
-    """用 requests 获取网页 HTML 内容"""
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0 Safari/537.36"
+
+    async def fetch_disclosure_material(
+        self,
+        symbol: str,
+        start_date: str,
+        end_date: str | None = None,
+        market: str = "沪深京",
+        keyword: str = "",
+        category: str = "",
+    ) -> ToolResponse:
+        """获取指定股票的信息披露公告，并保存表格结果到Material当中，返回Material标识ref_id。
+        抓取指定 symbol 在给定时间区间内的各类信息披露公告，
+        可按市场、公告类别和关键词进行过滤，并将结果保存为表格。
+        适用场景：生成研报中的“公司公告梳理”“信息披露情况”章节；快速定位某段时间内的年报、季报、重大事项、股权变动等公告列表。
+
+        Args:
+            symbol (str):
+                股票代码，例如 "000001"。
+            start_date (str):
+                公告起始日期，格式为 "YYYYMMDD"，例如 "20230618"。必需参数。
+            end_date (str | None):
+                公告结束日期，格式为 "YYYYMMDD"，例如 "20231219"。
+                如果为 None，则使用当前日期。
+            market (str):
+                市场类型，支持的取值包括：
+                - "沪深京"（默认）、"港股"、"三板"、"基金"、"债券"、"监管"、"预披露"。
+            keyword (str):
+                公告搜索关键词，例如 "股权激励"、"增发"；为空字符串时不做关键词过滤。
+            category (str):
+                公告类别，取值仅限于如下选择之一：
+                - "年报"、"半年报"、"一季报"、"三季报"、"业绩预告"、"权益分派"、
+                "董事会"、"监事会"、"股东大会"、"日常经营"、"公司治理"、"中介报告"、
+                "首发"、"增发"、"股权激励"、"配股"、"解禁"、"公司债"、"可转债"、
+                "其他融资"、"股权变动"、"补充更正"、"澄清致歉"、"风险提示"、
+                "特别处理和退市"、"退市整理期"。
+                - 为空字符串时：不按类别过滤，返回全部信息披露公告。
+
+        """
+        cur_date = os.getenv('CUR_DATE') or datetime.now().strftime("%Y%m%d")
+        end_date = min(end_date, cur_date) if end_date else cur_date
+
+
+            # 内部工具函数：从公告链接 + 公告时间 拼出 PDF URL
+        def _build_pdf_url(link: str, announce_date: str) -> str | None:
+            if not isinstance(link, str) or not link:
+                return None
+
+            announcement_id = None
+            try:
+                parsed = urlparse(link)
+                qs = parse_qs(parsed.query)
+                if "announcementId" in qs and qs["announcementId"]:
+                    announcement_id = qs["announcementId"][0]
+                else:
+                    # 兜底：用正则从 URL 中提取
+                    m = re.search(r"announcementId=(\d+)", link)
+                    if m:
+                        announcement_id = m.group(1)
+            except Exception:
+                pass
+
+            if not announcement_id:
+                return None
+
+            # 公告时间列一般形如 "2023-12-09" 或 "2023-12-09 00:00:00"
+            if not isinstance(announce_date, str):
+                announce_date = str(announce_date)
+            date_str = announce_date.split()[0]  # 去掉可能的时间部分
+            # 替换可能存在的分隔符为 "-"
+            date_str = (
+                date_str.replace(".", "-")
+                        .replace("/", "-")
+            )
+
+            return f"https://static.cninfo.com.cn/finalpage/{date_str}/{announcement_id}.PDF"
+
+        # 内部工具函数：下载 PDF 并用 PyMuPDF 抽取文本
+        def _fetch_pdf_text(pdf_url: str, referer: str | None = None) -> str:
+            if not pdf_url:
+                return ""
+            try:
+                headers = {
+                    "User-Agent": "Mozilla/5.0",
+                }
+                if referer:
+                    headers["Referer"] = referer
+
+                resp = requests.get(pdf_url, headers=headers, timeout=20)
+                resp.raise_for_status()
+
+                with fitz.open(stream=resp.content, filetype="pdf") as doc:
+                    texts: list[str] = []
+                    for page in doc:
+                        t = page.get_text().strip()
+                        if t:
+                            texts.append(t)
+                return "\n".join(texts)
+            except Exception:
+                # 出错就返回空字符串，避免整个流程中断；具体错误可按需改成日志记录
+                return ""
+
+        try:
+            assert pd.to_datetime(start_date, format="%Y%m%d") <= pd.to_datetime(end_date, format="%Y%m%d"), "start_date 晚于当前时间，请重新设置"
+            assert category in {'年报', '半年报', '一季报', '三季报', '业绩预告', '权益分派',
+    '董事会', '监事会', '股东大会', '日常经营', '公司治理', '中介报告',
+     '首发', '增发', '股权激励', '配股', '解禁', '公司债', '可转债', '其他融资',
+     '股权变动', '补充更正', '澄清致歉', '风险提示', '特别处理和退市', '退市整理期', '', None}, f'category 设置错误，不支持"{category}"'
+            df = ak.stock_zh_a_disclosure_report_cninfo(
+                symbol=symbol,
+                market=market,
+                keyword=keyword,
+                category=category,
+                start_date=start_date,
+                end_date=end_date,
+            )
+        except Exception as e:
+        # 捕获 akshare 在内部筛选、字段缺失等造成的异常
+            traceback.print_exc()
+            df = None
+            text = (
+                f"[fetch_disclosure_material] {type(e)}: {e}\n"
+                f"建议修改或放宽搜索条件（symbol={symbol}, market={market}, keyword={keyword}, "
+                f"category={category}, start_date={start_date}, end_date={end_date}）"
+            )
+            return ToolResponse(
+                content=[
+                    TextBlock(
+                        type="text",
+                        text=text,
+                    ),
+                ],
+            )
+
+        
+        # 避免获取的公告数量过多取其中10条，后续可以改成按照某些条件排序取前10条
+        if df is not None and len(df) > 10:
+            df = df.sample(n=10)
+
+        # 2. 遍历 df 行，构造 PDF URL 并抽文本，为每个公告保存为独立文件
+        disclosure_ref_ids: list[str] = []
+        entity = get_entity_info(long_term=self.long_term, text=symbol)
+
+
+        for idx, row in df.iterrows():
+            link = row.get("公告链接")
+            announce_date = row.get("公告时间")
+            announce_date = fmt_yyyymmdd(str(announce_date))
+            announce_title = row.get("公告标题", "未命名公告")
+            pdf_url = _build_pdf_url(link, announce_date)
+            text = _fetch_pdf_text(pdf_url, referer=link)
+
+            if text:  # 只保存有内容的公告
+                # 为每个公告创建唯一的 ref_id
+                disclosure_ref_id = f"{symbol}_disclosure_{int(time_module.time())}_{idx}"
+
+                description_parts = [
+                    f"{entity['name']}（{entity['code']}）信息披露公告"
+                    f"title={announce_title}",
+                    f"date={announce_date}",
+                    f"market={market}",
+                ]
+                if keyword:
+                    description_parts.append(f"keyword={keyword}")
+                if category:
+                    description_parts.append(f"category={category}")
+
+                description = " | ".join(description_parts)
+
+                # 保存公告文本为单独的文件
+                self.short_term.save_material(
+                    ref_id=disclosure_ref_id,
+                    content=text,
+                    description=description,
+                    source="AKshare API:CNINFO",
+                    entity=entity,
+                    time={"point": str(announce_date)},
+                )
+                disclosure_ref_ids.append(disclosure_ref_id)
+
+        # 3. 将 ref_ids 列表添加到 dataframe 中
+        df["ref_id"] = [disclosure_ref_ids[i] if i < len(disclosure_ref_ids) else "" for i in range(len(df))]
+        if "公告链接" in df.columns:
+            df = df.drop(columns=["公告链接"])
+        df = df[['ref_id', '公告标题']].set_index("ref_id")
+        # self._save_df_to_material(df=df, ref_id=ref_id, source="AKshare API:CNINFO", entity=entity, description=description)
+        header = (
+            f"[fetch_disclosure_material] 信息披露公告（symbol={symbol}, market={market}, "
+            f"category={category or '全部'}, {start_date}~{end_date}）。"
+            f"各信息披露公告按ref_id单独保存为了本地Material，请根据需要使用retrieve_local_material或read_material工具根据对应ref_id读取。"
         )
-    }
-    resp = requests.get(url, headers=headers, timeout=timeout)
-    resp.raise_for_status()
-    ctype = resp.headers.get("Content-Type", "")
-    if "text/html" not in ctype and "application/xhtml+xml" not in ctype:
-        return b""
-    return resp.content   # 注意：这里返回的是 bytes
-
-def _extract_text_and_images(html: bytes, base_url: str) -> Tuple[str, List[str]]:
-    """文本使用 trafilatura 提取主内容；图片使用 BeautifulSoup 提取。"""
-    if not html:
-        return "", []
-
-    try:
-        text = extract(
-            html,
-            url=base_url,
-            output_format="txt",    # 返回纯文本
-            include_comments=False,
-            include_tables=True     # 如需保留表格内容
-        ) or ""
-    except Exception:
-        text = ""
-
-    img_urls: List[str] = []
-    try:
-        soup = BeautifulSoup(html, "html.parser")
-        for img in soup.find_all("img"):
-            src = img.get("src") or ""
-            if not src:
-                continue
-            full_url = urljoin(base_url, src)
-            img_urls.append(full_url)
-    except Exception:
-        pass
+        return _build_tool_response_from_df(
+            df,
+            ref_id="",
+            header=header,
+            preview_rows=len(df),
+            extra_meta={
+                "symbol": symbol,
+                "market": market,
+                "keyword": keyword,
+                "category": category,
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            save=False,
+        )
 
 
-    return text, img_urls
+    # ========== 辅助函数 ==========
+
+    def _read_with_keyword(self, ref_id: str, keyword: str, context_lines: int, meta) -> ToolResponse:
+        """
+        使用关键词搜索Material内容。
+        根据Material类型，使用grep工具进行搜索并返回结果。
+
+        Args:
+            ref_id: Material ID
+            keyword: 搜索关键词
+            context_lines: 上下文行数
+            meta: Material元数据
+
+        Returns:
+            ToolResponse with search results
+        """
+        try:
+            # 获取material文件路径
+            material_file = self.short_term.material_dir / meta.filename
+
+            if not material_file.exists():
+                return ToolResponse(
+                    content=[TextBlock(type="text", text=f"[read_material] Material文件不存在: {meta.filename}")],
+                    metadata={"ref_id": ref_id}
+                )
+
+            # 使用grep_file_with_context进行搜索
+            results = grep_file_with_context(
+                filepath=str(material_file),
+                keyword=keyword,
+                context_lines=context_lines,
+                case_sensitive=False,
+                regex=False
+            )
+
+            if not results:
+                return ToolResponse(
+                    content=[TextBlock(type="text", text=f"[read_material] 关键词'{keyword}'未在Material中找到任何匹配")],
+                    metadata={"ref_id": ref_id, "keyword": keyword, "matches": 0}
+                )
+
+            # 格式化搜索结果
+            formatted_results = print_grep_results(results, max_results=10, show_line_numbers=True)
+
+            text = (
+                f"[read_material] ID: {ref_id}\n"
+                f"关键词: '{keyword}'\n"
+                f"共找到 {len(results)} 个匹配\n"
+                f"带有{context_lines}的上下文如下: \n\n"
+                f"{formatted_results}"
+            )
+
+            return ToolResponse(
+                content=[TextBlock(type="text", text=text)],
+                metadata={
+                    "ref_id": ref_id,
+                    "keyword": keyword,
+                    "matches": len(results),
+                    "type": "keyword_search",
+                    "context_lines": context_lines
+                }
+            )
+
+        except Exception as e:
+            return ToolResponse(
+                content=[TextBlock(type="text", text=f"[read_material] 关键词搜索失败: {str(e)}")],
+                metadata={"ref_id": ref_id, "error": str(e)}
+            )
+
+    def _read_table_impl(self, ref_id, cols):
+        df = self.short_term.load_material(ref_id) 
+        
+        # 1. 列筛选 (Horizontal Slicing)
+        if cols:
+            col_list = [c.strip() for c in cols.split(",")]
+            # 容错处理：只保留存在的列
+            valid_cols = [c for c in col_list if c in df.columns]
+            if valid_cols:
+                df = df[valid_cols]
+
+        # 2. 行筛选 (Vertical Slicing)
+        total_rows = len(df)
+        
+        sliced_df = df.copy()
+
+        if ("_disclosure_" in ref_id) and ("公告" in sliced_df.columns):
+            MAX_TOTAL_CHARS = 20000
+            MIN_PER_CELL = 200
+            SUFFIX = "\n...... [内容过长，已截断，如需要完整阅读请对此条结果单独使用read_material工具]"
+
+            # 只统计当前页（切片范围内）“公告”列的字符数
+            ann_series = sliced_df["公告"]
+
+            # 只对 str 进行统计/截断；非字符串保持原样
+            valid_indices = []
+            total_len = 0
+
+            for idx, v in ann_series.items():
+                if isinstance(v, str) and v:
+                    l = len(v)
+                    valid_indices.append(idx)
+                    total_len += l
+            if total_len > MAX_TOTAL_CHARS and valid_indices:
+                n_items = len(valid_indices)
+                per_limit = max(MAX_TOTAL_CHARS // n_items, MIN_PER_CELL)
+
+
+                for idx in valid_indices:
+                    v = sliced_df.at[idx, "公告"]
+                    if isinstance(v, str) and v:
+                        if len(v) > per_limit:
+                            sliced_df.at[idx, "公告"] = v[:per_limit] + SUFFIX
+
+        
+        # preview_str = sliced_df.to_markdown(index=False, disable_numparse=True)
+        preview_str = sliced_df.to_csv(index=False)
+        text = (f"[read_material] ID: {ref_id}\n"
+                f"完整 material 共 {total_rows} 行。\n"
+                f"内容:\n{preview_str}")
+                
+        return ToolResponse(
+            content=[TextBlock(type="text", text=text)],
+            metadata={"ref_id": ref_id, "type": "table", "rows": len(sliced_df)}
+        )
+
+    def _read_text_impl(self, ref_id):
+        # 适用于 .txt, .md
+        content = self.short_term.load_material(ref_id) # 返回 str
+        lines = content.split('\n')
+        total_lines = len(lines)
+
+        # 截取
+        sliced_lines = lines
+        preview_str = "\n".join(sliced_lines)
+
+        text = (f"[read_material] ID: {ref_id}\n"
+                f"完整 material 共 {total_lines} 行。\n"
+                f"内容:\n{preview_str}")
+
+        return ToolResponse(
+            content=[TextBlock(type="text", text=text)],
+            metadata={"ref_id": ref_id, "type": "text", "lines": len(sliced_lines)}
+        )
+
+    def _read_json_impl(
+        self,
+        ref_id: str,
+        key_path: str | None,
+    ) -> ToolResponse:
+        data = self.short_term.load_material(ref_id)  
+        # if isinstance(data, list):
+        sliced = copy.deepcopy(data)
+
+        if (ref_id.startswith("search_engine")):
+            if isinstance(sliced, list):
+                for item in sliced:
+                    if isinstance(item, dict):
+                        # 删除 relevance 字段
+                        item.pop("relevance", None)
+
+
+        # 如果有 key_path，则提取每条对应字段，否则展示整个条目
+        if key_path:
+            def extract(obj, path):
+                cur = obj
+                for k in path.split("."):
+                    if isinstance(cur, dict) and k in cur:
+                        cur = cur[k]
+                    else:
+                        return None
+                return cur
+
+            sliced = [extract(item, key_path) for item in sliced]
+
+        # 序列化成 JSON 字符串
+        json_str = json.dumps(sliced, ensure_ascii=False, indent=2)
+
+        text = (
+            f"[read_material] ID: {ref_id}\n"
+            f"内容:\n{json_str}"
+        )
+
+        return ToolResponse(
+            content=[TextBlock(type="text", text=text)],
+            metadata={"ref_id": ref_id, "type": "json_list"}
+        )
+
+    def _save_df_to_material(
+            self,
+            df: pd.DataFrame,
+            ref_id: str,
+            description: str,
+            source: str,
+            entity:Dict[str,str] | None = None,
+            time:Dict[str,str] | None = None,
+    ) -> int:
+        """DataFrame/Dict 存入 short-term material（CSV/JSON），返回行数。"""
+        if self.short_term is not None:
+            self.short_term.save_material(ref_id=ref_id,
+                                          content=df, 
+                                          description=description,
+                                          source=source,
+                                          entity=entity,
+                                          time=time)
+        return len(df)
+
+
 
 def stock_news_em(keyword: str = "603777", page_idx=1) -> pd.DataFrame:
     """
