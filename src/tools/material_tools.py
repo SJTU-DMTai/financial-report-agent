@@ -613,11 +613,7 @@ class MaterialTools:
                 - "hfq": 后复权。
 
         """
-        cur_date = os.getenv('CUR_DATE') or datetime.now().strftime("%Y%m%d")
-        end_date = min(end_date, cur_date) if end_date else cur_date
-        assert pd.to_datetime(start_date, format="%Y%m%d") <= pd.to_datetime(end_date, format="%Y%m%d")
-
-        cur_date = os.getenv('CUR_DATE') or datetime.now().strftime("%Y%m%d")
+        cur_date = pd.to_datetime(os.getenv('CUR_DATE') or datetime.now()).strftime("%Y%m%d")
         end_date = min(end_date, cur_date) if end_date else cur_date
         assert pd.to_datetime(start_date, format="%Y%m%d") <= pd.to_datetime(end_date, format="%Y%m%d")
 
@@ -696,7 +692,7 @@ class MaterialTools:
                 - 为空字符串时：不按类别过滤，返回全部信息披露公告。
 
         """
-        cur_date = os.getenv('CUR_DATE') or datetime.now().strftime("%Y%m%d")
+        cur_date = pd.to_datetime(os.getenv('CUR_DATE') or datetime.now()).strftime("%Y%m%d")
         end_date = min(end_date, cur_date) if end_date else cur_date
 
 
@@ -775,10 +771,10 @@ class MaterialTools:
             )
         except Exception as e:
         # 捕获 akshare 在内部筛选、字段缺失等造成的异常
-            traceback.print_exc()
+        #     traceback.print_exc()
             df = None
             text = (
-                f"[fetch_disclosure_material] {type(e)}: {e}\n"
+                f"[fetch_disclosure_material] {type(e)}: {'检索结果为空' if isinstance(e, KeyError) else e}。\n"
                 f"建议修改或放宽搜索条件（symbol={symbol}, market={market}, keyword={keyword}, "
                 f"category={category}, start_date={start_date}, end_date={end_date}）"
             )
@@ -1274,11 +1270,11 @@ class MaterialTools:
             latest_num (int):
                 限定时间范围内最近的新闻条数，默认50
         """
-        cur_date = os.getenv('CUR_DATE') or datetime.now().strftime("%Y%m%d")
+        cur_date = pd.to_datetime(os.getenv('CUR_DATE') or datetime.now()).strftime("%Y%m%d")
         end_date = min(end_date, cur_date) if end_date else cur_date
-        assert pd.to_datetime(start_date, format="%Y%m%d") <= pd.to_datetime(end_date, format="%Y%m%d")
+        assert pd.to_datetime(start_date) <= pd.to_datetime(end_date)
         ref_id = f"{symbol}_{keyword}_news_daterange_{start_date}-{end_date}_num{latest_num}"
-        start_date, end_date = pd.to_datetime(start_date, format="%Y%m%d"), pd.to_datetime(end_date, format="%Y%m%d")
+        start_date, end_date = pd.to_datetime(start_date), pd.to_datetime(end_date)
 
         if symbol is None or symbol == "":
             entity = None

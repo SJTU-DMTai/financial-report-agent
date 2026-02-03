@@ -368,28 +368,28 @@ def retrieve_in_memory(
 
     final.sort(key=lambda x: x[0], reverse=True)
 
-    # ===================== DEBUG PRINT (before top_k truncation) =====================
-
-    print("\n" + "=" * 90)
-    print("[retrieve_in_memory][DEBUG] before top_k truncation")
-    print(f"query={query!r} | entity_terms={entity_terms} | total_candidates={len(final)}")
-    for idx, (final_s, bm25_s, rule_s, m) in enumerate(final, 1):
-        desc_preview = (m.description[:320] + "…") if (m.description and len(m.description) > 320) else (m.description or "")
-        row = {
-            "rank": idx,
-            "ref_id": m.ref_id,
-            "final_score": round(final_s, 6),
-            "bm25_score": round(bm25_s, 6),
-            "rule_score": round(rule_s, 6),
-            "m_type": getattr(m.m_type, "value", str(m.m_type)),
-            "filename": m.filename,
-            "entity": m.entity or {},
-            "time": m.time or {},
-            "source": m.source or "",
-            "description": desc_preview,
-        }
-        print(row)
-    print("=" * 90 + "\n")
+    # # ===================== DEBUG PRINT (before top_k truncation) =====================
+    #
+    # print("\n" + "=" * 90)
+    # print("[retrieve_in_memory][DEBUG] before top_k truncation")
+    # print(f"query={query!r} | entity_terms={entity_terms} | total_candidates={len(final)}")
+    # for idx, (final_s, bm25_s, rule_s, m) in enumerate(final, 1):
+    #     desc_preview = (m.description[:320] + "…") if (m.description and len(m.description) > 320) else (m.description or "")
+    #     row = {
+    #         "rank": idx,
+    #         "ref_id": m.ref_id,
+    #         "final_score": round(final_s, 6),
+    #         "bm25_score": round(bm25_s, 6),
+    #         "rule_score": round(rule_s, 6),
+    #         "m_type": getattr(m.m_type, "value", str(m.m_type)),
+    #         "filename": m.filename,
+    #         "entity": m.entity or {},
+    #         "time": m.time or {},
+    #         "source": m.source or "",
+    #         "description": desc_preview,
+    #     }
+    #     print(row)
+    # print("=" * 90 + "\n")
 
     # ===================== DEBUG PRINT END =====================
     final = final[: max(int(top_k), 0)]

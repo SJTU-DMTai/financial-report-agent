@@ -894,8 +894,8 @@ print("<img_b64>" + img_b64 + "</img_b64>")
             text = (
                 "[generate_chart_by_python_code] 图表生成失败。\n"
                 f"returncode = {returncode}\n"
-                "stdout:\n"
-                f"{stdout}\n\n"
+                # "stdout:\n"
+                # f"{stdout}\n\n"
                 "stderr:\n"
                 f"{stderr}\n\n"
                 "请检查你生成的 Python 绘图代码是否报错，"
