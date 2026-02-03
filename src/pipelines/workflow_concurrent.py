@@ -173,7 +173,7 @@ async def process_section_concurrently(section: Section, parent_id, task_desc, a
 
     # 6. 保存中间结果 (可选，防止崩溃全丢)
     # 注意：并发写入文件可能冲突，这里简单处理，实际生产建议用单独的 save 协程或锁
-    (output_pth / f"{stock_symbol}.json").write_text(manuscript_root.to_json(ensure_ascii=False))
+    (output_pth / f"{stock_symbol}_{os.getenv("CUR_DATE", datetime.today().strftime("%Y-%m-%d"))}.json").write_text(manuscript_root.to_json(ensure_ascii=False))
 
 
 async def run_workflow(task_desc: str):
@@ -183,11 +183,6 @@ async def run_workflow(task_desc: str):
 
     PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
-    short_term_dir = PROJECT_ROOT / "data" / "memory" / "short_term"
-    
-    short_term = ShortTermMemoryStore(
-        base_dir=short_term_dir,
-    )
     long_term_dir = PROJECT_ROOT / "data" / "memory" / "long_term"
     
     long_term = LongTermMemoryStore(
@@ -205,12 +200,17 @@ async def run_workflow(task_desc: str):
     stock_symbol = entity["code"]  # 纯数字 6 位代码
     print("股票代码：", stock_symbol)
 
+    filename = f"{stock_symbol}_{os.getenv("CUR_DATE", datetime.today().strftime("%Y-%m-%d"))}"
+    short_term_dir = PROJECT_ROOT / "data" / "memory" / "short_term" / filename
+
+    short_term = ShortTermMemoryStore(
+        base_dir=short_term_dir,
+    )
 
     # 解析demonstration report，第二遍解析同一个report可以注释掉
     demo_pdf_path = STOCK_REPORT_PATHS[stock_symbol][-1]
     manuscript = await process_pdf_to_outline(demo_pdf_path, long_term_dir / "demonstration",
-                                              llm_reasoning, llm_instruct, formatter,
-                                              cur_date=os.getenv("CUR_DATE", datetime.today().strftime("%Y%m%d")))
+                                              llm_reasoning, llm_instruct, formatter,)
 
     verifier_toolkit = build_verifier_toolkit(
         short_term=short_term,
@@ -251,5 +251,5 @@ async def run_workflow(task_desc: str):
     )
 
     markdown_text = section_to_markdown(manuscript)
-    (short_term_dir / "manuscript.md").write_text(markdown_text, encoding="utf-8")
-    md_to_pdf(markdown_text, short_term=short_term)
+    (output_pth / f"{filename}.md").write_text(markdown_text, encoding="utf-8")
+    md_to_pdf(markdown_text, short_term=short_term, output_dir=output_pth / f"{filename}.pdf")
