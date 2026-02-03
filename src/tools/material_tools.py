@@ -760,7 +760,7 @@ class MaterialTools:
                 return ""
 
         try:
-            assert pd.to_datetime(start_date, format="%Y%m%d") <= pd.to_datetime(end_date, format="%Y%m%d"), "start_date 晚于当前时间，请重新设置"
+            assert pd.to_datetime(start_date) <= pd.to_datetime(end_date), "start_date 晚于当前时间，请重新设置"
             assert category in {'年报', '半年报', '一季报', '三季报', '业绩预告', '权益分派',
     '董事会', '监事会', '股东大会', '日常经营', '公司治理', '中介报告',
      '首发', '增发', '股权激励', '配股', '解禁', '公司债', '可转债', '其他融资',

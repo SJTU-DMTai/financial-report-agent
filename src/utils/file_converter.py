@@ -388,7 +388,7 @@ def _safe_trim_title(title: str, max_len: int) -> str:
 def md_to_pdf(
         md_text: str,
         short_term : ShortTermMemoryStore,
-        output_dir: str = "data/output/reports",
+        output_dir: str | Path,
     ):
     """将所有 Manuscript 章节按顺序合并并导出为 PDF 文件。
     """
@@ -500,7 +500,7 @@ def md_to_pdf(
     # 3. 调用 pdfkit 生成 PDF
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    pdf_path = out_dir / safe_name
+    pdf_path = out_dir
 
     # ==== header/footer HTML 写入临时文件 ====
 

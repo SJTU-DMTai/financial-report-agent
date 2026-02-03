@@ -400,11 +400,13 @@ async def process_single_stock_pair(stock_code: str, old_path: Path, new_path: P
         try:
             print(f"\n======= 正在处理股票: {stock_code} =======", flush=True)
 
+            evidences_old = await extract_unique_evidences_from_pdf(old_path, long_term_dir / "demonstration")
+            evidences_new = await extract_unique_evidences_from_pdf(new_path, long_term_dir / "demonstration")
             # ===== 并发提取两份报告的论据 =====
-            evidences_old, evidences_new = await asyncio.gather(
-                extract_unique_evidences_from_pdf(old_path, long_term_dir / "demonstration"),
-                extract_unique_evidences_from_pdf(new_path, long_term_dir / "demonstration")
-            )
+            # evidences_old, evidences_new = await asyncio.gather(
+            #     extract_unique_evidences_from_pdf(old_path, long_term_dir / "demonstration"),
+            #     extract_unique_evidences_from_pdf(new_path, long_term_dir / "demonstration")
+            # )
             common_evidences_texts = await find_best_matches(evidences_old, evidences_new)
 
             common_evidences_with_locs = []
@@ -498,20 +500,19 @@ async def main():
     # 创建信号量，用于限制并发数
     semaphore = asyncio.Semaphore(MAX_CONCURRENT)
 
-    # results = []
-    # for stock_code, old_path, new_path in report_pairs:
-    #     if not _completed((stock_code, old_path.name, new_path.name)):
-    #         res = await process_single_stock_pair(stock_code, old_path, new_path, long_term_dir, output_json_path, results_cache, semaphore)
-    #         results.append(res)
+    results = []
+    for stock_code, old_path, new_path in report_pairs:
+        if not _completed((stock_code, old_path.name, new_path.name)):
+            res = await process_single_stock_pair(stock_code, old_path, new_path, long_term_dir, output_json_path, results_cache, semaphore)
+            results.append(res)
 
-    # 创建并发任务列表
-    tasks = [
-        process_single_stock_pair(stock_code, old_path, new_path, long_term_dir, output_json_path, results_cache, semaphore)
-        for stock_code, old_path, new_path in report_pairs if not _completed((stock_code, old_path.name, new_path.name))
-    ]
-
-    # 并发执行所有任务
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    # # 创建并发任务列表
+    # tasks = [
+    #     process_single_stock_pair(stock_code, old_path, new_path, long_term_dir, output_json_path, results_cache, semaphore)
+    #     for stock_code, old_path, new_path in report_pairs if not _completed((stock_code, old_path.name, new_path.name))
+    # ]
+    # # 并发执行所有任务
+    # results = await asyncio.gather(*tasks, return_exceptions=True)
 
     # # 使用线程池并发执行所有任务
     # results = []
