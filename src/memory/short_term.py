@@ -240,7 +240,7 @@ class ShortTermMemoryStore:
         source: str = "",
         entity: Optional[Dict[str, str]] = None,
         time: Optional[Dict[str, str]] = None,
-        forced_ext: str = None
+        forced_ext: str = ""
     ) -> None:
         self.ensure_dirs()
         
@@ -295,7 +295,91 @@ class ShortTermMemoryStore:
         else:
             return path.read_text(encoding="utf-8")
         
+        
+    def load_material_preview(
+        self,
+        ref_id:str,
+        max_chars: int = 300,
+        table_rows: int = 3
+    ) :
+        """
+        从 Material 中提取预览字符串。
+        """
+        def _truncate(s: str) -> str:
+            
+            s = (s or "").replace("\r\n", "\n")
+            if len(s) <= max_chars:
+                return s
+            return s[:max_chars] + "…[内容过长，已截断]"
 
+        meta = self.get_material_meta(ref_id)
+        content = self.load_material(ref_id)
+        if meta is None or content is None:
+            return ""
+
+
+        # (A) 搜索引擎：search_engine_*
+        if isinstance(ref_id, str) and ref_id.startswith("search_engine_"):
+            page_text = ""
+            if isinstance(content, list) and content and isinstance(content[0], dict):
+                page_text = content[0].get("page_text") or ""
+            return _truncate(page_text)
+
+        # (B) 计算结果：calculate_*
+        if isinstance(ref_id, str) and ref_id.startswith("calculate_"):
+            params = None
+            result = None
+            if isinstance(content, list) and content and isinstance(content[0], dict):
+                params = content[0].get("parameters", None)
+                result = content[0].get("result", None)
+
+            lines = []
+            if params is not None:
+                try:
+                    params_str = json.dumps(params, ensure_ascii=False, indent=2) if isinstance(params, (dict, list)) else str(params)
+                except Exception:
+                    params_str = str(params)
+                lines.append("计算参数:")
+                lines.append(params_str)
+
+            lines.append("计算结果:")
+            if result is None:
+                lines.append("")
+            else:
+                try:
+                    result_str = json.dumps(result, ensure_ascii=False, indent=2) if isinstance(result, (dict, list)) else str(result)
+                except Exception:
+                    result_str = str(result)
+                lines.append(result_str)
+
+            return "\n".join(lines)
+
+        # (C) 表格：m_type==table
+        if meta.m_type == MaterialType.TABLE.value or meta.m_type == "table":
+            if isinstance(content, pd.DataFrame) and not content.empty:
+                df_preview = content.head(table_rows).copy()
+                MAX_CELL_CHARS = 200
+                SUFFIX = "…[内容过长，已截断]"
+                for col in df_preview.columns:
+                    df_preview[col] = df_preview[col].apply(
+                        lambda v: (v[:MAX_CELL_CHARS] + SUFFIX) if isinstance(v, str) and len(v) > MAX_CELL_CHARS else v
+                    )
+                return df_preview.to_csv(index=False)
+            return ""
+
+        # (D) 文本：m_type==text
+
+        if meta.m_type == MaterialType.TEXT.value or meta.m_type == "text":
+            return _truncate(content if isinstance(content, str) else "")
+        if isinstance(content, str):
+            return _truncate(content)
+        if isinstance(content, (dict, list)):
+            try:
+                return _truncate(json.dumps(content, ensure_ascii=False, indent=2))
+            except Exception:
+                return _truncate(str(content))
+
+        return ""
     def load_material_numerical(self, ref_id: str):
         """
         从 Material 中提取适合数值计算的“数值部分”。

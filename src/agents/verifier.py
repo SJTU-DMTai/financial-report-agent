@@ -16,7 +16,6 @@ def create_verifier_agent(
     model,
     formatter,
     toolkit: Toolkit,
-    multi_source_verification : bool = False,
     verifier_type: str = "numeric",  # 默认创建数值一致性Verifier
 ) -> ReActAgent:
     """
@@ -60,40 +59,26 @@ def build_verifier_toolkit(
     toolkit = Toolkit()
 
     # manuscript_tools = ManuscriptTools(short_term=short_term)
-
     # toolkit.register_tool_function(manuscript_tools.read_manuscript_section)
     # toolkit.register_tool_function(manuscript_tools.count_manuscript_words)
     material_tools = MaterialTools(short_term=short_term, long_term=long_term)
     toolkit.register_tool_function(material_tools.read_material)
 
-    if multi_source_verification:
-        toolkit.create_tool_group(
-            group_name="multi_source_search",
-            description="多源交叉验证֤",
-            active=False,
-        )
-        toolkit.register_tool_function(material_tools.fetch_stock_news_material, group_name="multi_source_search")
-        toolkit.register_tool_function(material_tools.fetch_disclosure_material, group_name="multi_source_search")
-        # toolkit.create_tool_group(
-        #     group_name="numeric_consistency",
-        #     description="校验数值一致性",
-        #     active=False,
-        # )
     return toolkit
 
 
 # ---- 工厂函数：创建四个环节 Verifier ----
-def create_all_verifiers(model, formatter, short_term):
+def create_all_verifiers(model, formatter, short_term: ShortTermMemoryStore, long_term: LongTermMemoryStore):
     verifiers = {}
     for verifier_name in ["numeric", "reference", "logic", "quality"]:
         # 每个 verifier 用独立 toolkit
-        toolkit = build_verifier_toolkit(short_term)
+        toolkit = build_verifier_toolkit(short_term,long_term)
         verifiers[verifier_name] = create_verifier_agent(model, formatter, toolkit, verifier_name)
 
     return verifiers
 
 
 # ---- 创建最终审核 Verifier ----
-def create_final_verifier(model, formatter, short_term: ShortTermMemoryStore):
-    toolkit = build_verifier_toolkit(short_term)
+def create_final_verifier(model, formatter, short_term: ShortTermMemoryStore,long_term: LongTermMemoryStore):
+    toolkit = build_verifier_toolkit(short_term, long_term)
     return create_verifier_agent(model, formatter, toolkit, "final")
