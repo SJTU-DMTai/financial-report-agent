@@ -42,13 +42,16 @@ from src.utils.instance import llm_reasoning, llm_instruct, formatter, cfg
 
 CURRENT_RUNNING_TASKS = 0
 
-async def search_evidence(evidence, task_desc, segment_topic, searcher):
+async def search_evidence(evidence, task_desc, demo_date, segment_topic, searcher, reference=None):
     searcher_input = Msg(
         name="user",
         content=(
             f"任务：{task_desc}\n"
             f"当前需要你撰写要点：{segment_topic}\n"
             f"论据所需材料：\n{evidence}\n\n"
+            + f"我有一份{demo_date}发布的历史研报，以下一段内容可能包含所需材料：{reference}\n"
+              f"如果该内容相关材料一定不会因时间变化，在当前撰写时间依然成立，则不必调用搜索工具，直接返回该材料作为论据即可。如果没有符合时效性论据，\n\n"
+            if reference else "" +
             f"请你调用工具搜索，尽量根据多个信息源交叉验证后给出搜索结果。"
         ),
         role="user",
@@ -57,7 +60,7 @@ async def search_evidence(evidence, task_desc, segment_topic, searcher):
     print(f"[Searcher] Finished searching: {evidence[:20]}...")
     return msg.get_text_content()
 
-async def process_single_segment(segment, task_desc, agent_factory, semaphore):
+async def process_single_segment(segment, task_desc, demo_date, agent_factory, semaphore):
     """并发处理单个 Segment：包含搜索和写作"""
     global CURRENT_RUNNING_TASKS
     async with semaphore:
@@ -66,7 +69,7 @@ async def process_single_segment(segment, task_desc, agent_factory, semaphore):
 
         searcher, writer = agent_factory()
         for i, evidence in enumerate(segment.evidences):
-            segment.evidences[i] = await search_evidence(evidence, task_desc, segment.topic, searcher)
+            segment.evidences[i] = await search_evidence(evidence, task_desc, demo_date, segment.topic, searcher, reference=segment.reference)
             await searcher.memory.clear()
 
         try:
@@ -108,8 +111,8 @@ async def process_single_segment(segment, task_desc, agent_factory, semaphore):
             CURRENT_RUNNING_TASKS -= 1
             print(f"[{time.strftime('%H:%M:%S')}] [并发数: {CURRENT_RUNNING_TASKS}] ✅ 完成写作: {segment.topic[:15]}.", flush=True)
 
-async def process_section_concurrently(section: Section, parent_id, task_desc, agent_factory,
-                                       semaphore, stock_symbol, output_pth, manuscript_root):
+async def process_section_concurrently(section: Section, parent_id, task_desc, demo_date,
+                                       agent_factory, semaphore, stock_symbol, output_pth, manuscript_root):
     """递归并发处理章节"""
 
     # 1. 处理子章节 (递归) - 优先启动子任务
@@ -119,7 +122,7 @@ async def process_section_concurrently(section: Section, parent_id, task_desc, a
             section_id = ((parent_id + ".") if parent_id else "") + str(subsection.section_id)
             # 递归调用
             sub_tasks.append(process_section_concurrently(
-                subsection, section_id, task_desc, agent_factory, semaphore, stock_symbol,
+                subsection, section_id, task_desc, demo_date, agent_factory, semaphore, stock_symbol,
                 output_pth, manuscript_root
             ))
 
@@ -129,7 +132,7 @@ async def process_section_concurrently(section: Section, parent_id, task_desc, a
         print(f"\n====== 启动章节 Segments 并发处理: {parent_id} ======\n")
         for segment in section.segments:
             seg_tasks.append(process_single_segment(
-                segment, task_desc, agent_factory, semaphore
+                segment, task_desc, demo_date, agent_factory, semaphore
             ))
 
     # 3. 等待所有 Segments 完成
@@ -209,6 +212,7 @@ async def run_workflow(task_desc: str):
 
     # 解析demonstration report，第二遍解析同一个report可以注释掉
     demo_pdf_path = STOCK_REPORT_PATHS[stock_symbol][-1]
+    demo_date = demo_pdf_path.name.split("_")[1]
     manuscript = await process_pdf_to_outline(demo_pdf_path, long_term_dir / "demonstration",
                                               llm_reasoning, llm_instruct, formatter,)
 
@@ -238,18 +242,24 @@ async def run_workflow(task_desc: str):
         writer = create_writer_agent(model=llm_reasoning, formatter=formatter, toolkit=writer_toolkit)
         return searcher, writer
 
-    # 启动递归并发处理
-    await process_section_concurrently(
-        section=manuscript,
-        parent_id=None,
-        task_desc=task_desc,
-        agent_factory=create_searcher_writer,
-        semaphore=semaphore,
-        stock_symbol=stock_symbol,
-        output_pth=output_pth,
-        manuscript_root=manuscript # 用于在深层递归中保存完整的 json
-    )
+    manuscript_path = output_pth / f"{stock_symbol}_{os.getenv("CUR_DATE", datetime.today().strftime("%Y-%m-%d"))}.json"
+    if manuscript_path.exists():
+        manuscript = Section.from_json(manuscript_path.read_text(encoding='utf-8'))
+        print("加载已有的 manuscript:", manuscript_path)
+    else:
+        # 启动递归并发处理
+        await process_section_concurrently(
+            section=manuscript,
+            parent_id=None,
+            task_desc=task_desc,
+            demo_date=demo_date,
+            agent_factory=create_searcher_writer,
+            semaphore=semaphore,
+            stock_symbol=stock_symbol,
+            output_pth=output_pth,
+            manuscript_root=manuscript # 用于在深层递归中保存完整的 json
+        )
 
     markdown_text = section_to_markdown(manuscript)
     (output_pth / f"{filename}.md").write_text(markdown_text, encoding="utf-8")
-    md_to_pdf(markdown_text, short_term=short_term, output_dir=output_pth / f"{filename}.pdf")
+    md_to_pdf(markdown_text, short_term=short_term, pdf_path=output_pth / f"{filename}.pdf")

@@ -45,9 +45,9 @@ class ShortTermMemoryStore:
     def manuscript_dir(self) -> Path:
         return self.base_dir / "manuscript"
 
-    @property
-    def demonstration_dir(self) -> Path:
-        return self.base_dir / "demonstration"
+    # @property
+    # def demonstration_dir(self) -> Path:
+    #     return self.base_dir / "demonstration"
     
     @property
     def demonstration_path(self) -> Path:
@@ -95,7 +95,7 @@ class ShortTermMemoryStore:
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.material_dir.mkdir(parents=True, exist_ok=True)
         self.manuscript_dir.mkdir(parents=True, exist_ok=True)
-        self.demonstration_dir.mkdir(parents=True, exist_ok=True)
+        # self.demonstration_dir.mkdir(parents=True, exist_ok=True)
 
     # ---- Registry 读写 ----
 
