@@ -22,7 +22,7 @@ from urllib.parse import urlparse
 from ..utils.call_with_retry import call_agent_with_retry
 from ..utils.get_entity_info import get_entity_info
 from ..utils.retrieve_in_memory import retrieve_in_memory
-
+from ..utils.web_scraping import fetch_page_html, extract_text_and_images
 
 class SearchTools:
 
@@ -120,10 +120,10 @@ class SearchTools:
 
                 # 2) 抓取网页 HTML 并抽取文本 + 图片
                 try:
-                    html_bytes = self._fetch_page_html(link)
+                    html_bytes = fetch_page_html(link)
                     if not html_bytes:
                         continue
-                    page_text, img_urls = self._extract_text_and_images(html_bytes, link)
+                    page_text, img_urls = extract_text_and_images(html_bytes, link)
                     published_date = None
                     try:
                         published_date = find_date(
@@ -133,6 +133,8 @@ class SearchTools:
                             extensive_search=True,
                             deferred_url_extractor=True,   # 降低从 URL 猜日期的优先级，减少误判
                         )
+                        if published_date:
+                            published_date = fmt_yyyymmdd(published_date)
                     except Exception:
                         published_date = None
 
@@ -311,7 +313,7 @@ class SearchTools:
         return search_with_searcher
 
 
-def get_retrieve_fn(short_term, long_term) -> Callable[str]:
+def get_retrieve_fn(short_term:ShortTermMemoryStore, long_term:LongTermMemoryStore) -> Callable[str]:
     async def retrieve_local_material(query: str) -> ToolResponse:
         """
         在已保存的本地材料中按关键词搜索和query相关的材料，返回部分预览内容。
@@ -336,67 +338,20 @@ def get_retrieve_fn(short_term, long_term) -> Callable[str]:
                 ref_id = meta.get("ref_id", "")
                 desc = meta.get("description", "")
                 src = meta.get("source", "")
-                m_type = meta.get("m_type", "")
                 lines.append(f"第{i}条材料：Material 的唯一标识 ref_id={ref_id}")
                 if desc:
                     lines.append(f"    简短描述: {desc}")
                 if src:
                     lines.append(f"    来源: {src}")
 
-                try:
-                    content = short_term.load_material(ref_id) if short_term is not None else None
-                except Exception:
-                    content = None
-
-                # (A) 搜索引擎：search_engine_*
-                if isinstance(ref_id, str) and ref_id.startswith("search_engine_"):
-                    page_text_preview = ""
-                    if isinstance(content, list) and content:
-                        first = content[0] if isinstance(content[0], dict) else None
-                        if isinstance(first, dict):
-                            page_text = first.get("page_text") or ""
-                            page_text_preview = page_text[:100]
+                preview = short_term.load_material_preview(ref_id=ref_id)
+                if preview:
                     lines.append("    部分内容预览：")
-                    lines.append(f"   {page_text_preview}")
-
-
-                # (B) 计算结果：calculate_*
-                elif isinstance(ref_id, str) and ref_id.startswith("calculate_"):
-                    params = None
-                    result = None
-                    if isinstance(content, list) and content:
-                        first = content[0] if isinstance(content[0], dict) else None
-                        if isinstance(first, dict):
-                            params = first.get("parameters", None)
-                            result = first.get("result", None)
-                    if params:
-                        lines.append("    计算参数:")
-                        lines.append(f"    {params}")
-                    lines.append("    计算结果:")
-                    lines.append(f"    {result}")
-
-                # (C) 表格：非前缀类时，用 m_type==table 给出前几行
-                elif m_type == "table":
-                    preview = ""
-                    if isinstance(content, pd.DataFrame) and not content.empty:
-                        df_preview = content.head(3).copy()
-                        MAX_CELL_CHARS = 200
-                        SUFFIX = "…[内容过长，已截断]"
-                        for col in df_preview.columns:
-                            df_preview[col] = df_preview[col].apply(
-                                lambda v: (
-                                    v[:MAX_CELL_CHARS] + SUFFIX
-                                    if isinstance(v, str) and len(v) > MAX_CELL_CHARS
-                                    else v
-                                )
-                            )
-
-                        preview = df_preview.to_csv(index=False)
-
-                    lines.append("    前3行预览:")
-                    lines.append(preview)
+                    for ln in preview.splitlines():
+                        lines.append(f"    {ln}")
 
                 lines.append("")  # 空行分隔
+
             lines.append("如果以上无合适材料，请重新调用工具获取数据。")
             res = "\n".join(lines)
         else:
