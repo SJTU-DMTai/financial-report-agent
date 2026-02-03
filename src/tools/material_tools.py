@@ -327,7 +327,6 @@ class MaterialTools:
             metadata={"ref_id": ref_id}
             )
 
-
     # ========== 辅助函数 ==========
 
     def _read_with_keyword(self, ref_id: str, keyword: str, context_lines: int, meta) -> ToolResponse:
@@ -365,7 +364,8 @@ class MaterialTools:
 
             if not results:
                 return ToolResponse(
-                    content=[TextBlock(type="text", text=f"[read_material] 关键词'{keyword}'未在Material中找到任何匹配")],
+                    content=[
+                        TextBlock(type="text", text=f"[read_material] 关键词'{keyword}'未在Material中找到任何匹配")],
                     metadata={"ref_id": ref_id, "keyword": keyword, "matches": 0}
                 )
 
@@ -434,13 +434,11 @@ class MaterialTools:
                 n_items = len(valid_indices)
                 per_limit = max(MAX_TOTAL_CHARS // n_items, MIN_PER_CELL)
 
-
                 for idx in valid_indices:
                     v = sliced_df.at[idx, "公告"]
                     if isinstance(v, str) and v:
                         if len(v) > per_limit:
                             sliced_df.at[idx, "公告"] = v[:per_limit] + SUFFIX
-
 
         # preview_str = sliced_df.to_markdown(index=False, disable_numparse=True)
         preview_str = sliced_df.to_csv(index=False)
@@ -455,7 +453,7 @@ class MaterialTools:
 
     def _read_text_impl(self, ref_id):
         # 适用于 .txt, .md
-        content = self.short_term.load_material(ref_id) # 返回 str
+        content = self.short_term.load_material(ref_id)  # 返回 str
         lines = content.split('\n')
         total_lines = len(lines)
 
@@ -487,7 +485,6 @@ class MaterialTools:
                     if isinstance(item, dict):
                         # 删除 relevance 字段
                         item.pop("relevance", None)
-
 
         # 如果有 key_path，则提取每条对应字段，否则展示整个条目
         if key_path:
@@ -521,8 +518,8 @@ class MaterialTools:
             ref_id: str,
             description: str,
             source: str,
-            entity:Dict[str,str] | None = None,
-            time:Dict[str,str] | None = None,
+            entity: Dict[str, str] | None = None,
+            time: Dict[str, str] | None = None,
     ) -> int:
         """DataFrame/Dict 存入 short-term material（CSV/JSON），返回行数。"""
         if self.short_term is not None:
@@ -533,7 +530,6 @@ class MaterialTools:
                                           entity=entity,
                                           time=time)
         return len(df)
-
 
     # ===================== 股价数据 =====================
 
@@ -662,10 +658,10 @@ class MaterialTools:
         self,
         symbol: str,
         start_date: str,
-        end_date: str | None = None,
-        market: str = "沪深京",
-        keyword: str = "",
-        category: str = "",
+            end_date: str | None = None,
+            market: str = "沪深京",
+            keyword: str = "",
+            category: str = "",
     ) -> ToolResponse:
         """获取指定股票的信息披露公告，并保存表格结果到Material当中，返回Material标识ref_id。
         抓取指定 symbol 在给定时间区间内的各类信息披露公告，
@@ -698,8 +694,7 @@ class MaterialTools:
         cur_date = os.getenv('CUR_DATE') or datetime.now().strftime("%Y%m%d")
         end_date = min(end_date, cur_date) if end_date else cur_date
 
-
-            # 内部工具函数：从公告链接 + 公告时间 拼出 PDF URL
+        # 内部工具函数：从公告链接 + 公告时间 拼出 PDF URL
         def _build_pdf_url(link: str, announce_date: str) -> str | None:
             if not isinstance(link, str) or not link:
                 return None
@@ -728,7 +723,7 @@ class MaterialTools:
             # 替换可能存在的分隔符为 "-"
             date_str = (
                 date_str.replace(".", "-")
-                        .replace("/", "-")
+                .replace("/", "-")
             )
 
             return f"https://static.cninfo.com.cn/finalpage/{date_str}/{announcement_id}.PDF"
@@ -761,9 +756,10 @@ class MaterialTools:
         try:
             assert pd.to_datetime(start_date) <= pd.to_datetime(end_date), "start_date 晚于当前时间，请重新设置"
             assert category in {'年报', '半年报', '一季报', '三季报', '业绩预告', '权益分派',
-    '董事会', '监事会', '股东大会', '日常经营', '公司治理', '中介报告',
-     '首发', '增发', '股权激励', '配股', '解禁', '公司债', '可转债', '其他融资',
-     '股权变动', '补充更正', '澄清致歉', '风险提示', '特别处理和退市', '退市整理期', '', None}, f'category 设置错误，不支持"{category}"'
+                                '董事会', '监事会', '股东大会', '日常经营', '公司治理', '中介报告',
+                                '首发', '增发', '股权激励', '配股', '解禁', '公司债', '可转债', '其他融资',
+                                '股权变动', '补充更正', '澄清致歉', '风险提示', '特别处理和退市', '退市整理期', '',
+                                None}, f'category 设置错误，不支持"{category}"'
             df = ak.stock_zh_a_disclosure_report_cninfo(
                 symbol=symbol,
                 market=market,
@@ -773,7 +769,7 @@ class MaterialTools:
                 end_date=end_date,
             )
         except Exception as e:
-        # 捕获 akshare 在内部筛选、字段缺失等造成的异常
+            # 捕获 akshare 在内部筛选、字段缺失等造成的异常
             traceback.print_exc()
             df = None
             text = (
@@ -789,7 +785,6 @@ class MaterialTools:
                     ),
                 ],
             )
-
 
         # 避免获取的公告数量过多取其中10条，后续可以改成按照某些条件排序取前10条
         if df is not None and len(df) > 10:
@@ -811,8 +806,7 @@ class MaterialTools:
                 # 为每个公告创建唯一的 ref_id
                 announce_date = fmt_yyyymmdd(str(announce_date))
                 date_only = date_only.replace(".", "-").replace("/", "-")
-                disclosure_ref_id = f"{symbol}_disclosure_{date_only}_{idx}" # 避免不合法文件名
-
+                disclosure_ref_id = f"{symbol}_disclosure_{date_only}_{idx}"  # 避免不合法文件名
 
                 # 创建详细的描述，包含工具名、源URL等信息
                 description_parts = [
@@ -879,9 +873,9 @@ class MaterialTools:
 
     # ===================== 财务报表 =====================
     async def fetch_balance_sheet_material(
-        self,
-        symbol: str,
-        indicator: str = "按报告期",
+            self,
+            symbol: str,
+            indicator: str = "按报告期",
     ) -> ToolResponse:
         """获取指定股票的资产负债表数据，并保存表格结果到Material当中，返回Material标识ref_id。
         抓取企业历年或各报告期的资产负债表数据，并将结果保存。
@@ -899,7 +893,6 @@ class MaterialTools:
 
         df = ak.stock_financial_debt_ths(symbol=symbol, indicator=indicator)
 
-
         safe_indicator = indicator.replace(" ", "")
         ref_id = f"{symbol}_balance_{safe_indicator}_{int(time_module.time())}"
         entity = get_entity_info(long_term=self.long_term, text=symbol)
@@ -909,7 +902,7 @@ class MaterialTools:
             description=description,
             entity=entity,
             source="AKshare API:Hithink",
-            )
+        )
         header = f"[fetch_balance_sheet_material] 资产负债表（symbol={symbol}, indicator={indicator}）"
 
         return _build_tool_response_from_df(
@@ -920,9 +913,9 @@ class MaterialTools:
         )
 
     async def fetch_profit_table_material(
-        self,
-        symbol: str,
-        indicator: str = "按报告期",
+            self,
+            symbol: str,
+            indicator: str = "按报告期",
     ) -> ToolResponse:
         """获取指定股票的利润表数据，并保存表格结果到Material当中，返回Material标识ref_id。
         抓取企业历年或各报告期的利润表数据，并保存。
@@ -940,7 +933,6 @@ class MaterialTools:
 
         df = ak.stock_financial_benefit_ths(symbol=symbol, indicator=indicator)
 
-
         safe_indicator = indicator.replace(" ", "")
         ref_id = f"{symbol}_profit_{safe_indicator}"
         entity = get_entity_info(long_term=self.long_term, text=symbol)
@@ -950,7 +942,7 @@ class MaterialTools:
             description=description,
             source="AKshare API:Hithink",
             entity=entity,
-            )
+        )
         header = f"[fetch_profit_table_material] 利润表（symbol={symbol}, indicator={indicator}）"
         return _build_tool_response_from_df(
             df,
@@ -960,9 +952,9 @@ class MaterialTools:
         )
 
     async def fetch_cashflow_table_material(
-        self,
-        symbol: str,
-        indicator: str = "按报告期",
+            self,
+            symbol: str,
+            indicator: str = "按报告期",
     ) -> ToolResponse:
         """获取指定股票的现金流量表数据，并保存表格结果到Material当中，返回Material标识ref_id。
         抓取企业历年或各报告期的现金流量表数据（约 75 个字段），并将结果保存。
@@ -979,7 +971,6 @@ class MaterialTools:
         """
         df = ak.stock_financial_cash_ths(symbol=symbol, indicator=indicator)
 
-
         safe_indicator = indicator.replace(" ", "")
         ref_id = f"{symbol}_cashflow_{safe_indicator}"
         entity = get_entity_info(long_term=self.long_term, text=symbol)
@@ -989,7 +980,7 @@ class MaterialTools:
             description=description,
             source="AKshare API:Hithink",
             entity=entity,
-            )
+        )
         header = f"[fetch_cashflow_table_material] 现金流量表（symbol={symbol}, indicator={indicator}）"
         return _build_tool_response_from_df(
             df,
@@ -1001,9 +992,9 @@ class MaterialTools:
     # ===================== 股东信息 =====================
 
     async def fetch_top10_float_shareholders_material(
-        self,
-        symbol: str,
-        date: str,
+            self,
+            symbol: str,
+            date: str,
     ) -> ToolResponse:
         """获取指定股票在某一报告期的十大流通股东，并保存表格结果到Material当中，返回Material标识ref_id。
 
@@ -1024,7 +1015,7 @@ class MaterialTools:
 
         ref_id = f"{symbol}_top10_free_{date}_{int(time_module.time())}"
         time_point = fmt_yyyymmdd(date)
-        time = {"point":time_point}
+        time = {"point": time_point}
         entity = get_entity_info(long_term=self.long_term, text=symbol)
         description = f"{entity['name']}（{entity['code']}）报告期{time_point}的十大流通股东"
         self._save_df_to_material(
@@ -1033,7 +1024,7 @@ class MaterialTools:
             source="AKshare API:eastmoney",
             entity=entity,
             time=time,
-            )
+        )
 
         header = f"[fetch_top10_float_shareholders_material] 十大流通股东（symbol={symbol}, date={date}）"
         return _build_tool_response_from_df(
@@ -1044,9 +1035,9 @@ class MaterialTools:
         )
 
     async def fetch_top10_shareholders_material(
-        self,
-        symbol: str,
-        date: str,
+            self,
+            symbol: str,
+            date: str,
     ) -> ToolResponse:
         """获取指定股票在某一报告期的十大股东（总股本口径），并保存表格结果到Material当中，返回Material标识ref_id。
         抓取指定 symbol 和 date 对应的股东名称、股份类型、
@@ -1064,7 +1055,7 @@ class MaterialTools:
         df = ak.stock_gdfx_top_10_em(symbol=add_exchange_prefix(symbol, "lower"), date=date)
         ref_id = f"{symbol}_top10_{date}_{int(time_module.time())}"
         time_point = fmt_yyyymmdd(date)
-        time = {"point":time_point}
+        time = {"point": time_point}
         entity = get_entity_info(long_term=self.long_term, text=symbol)
         description = f"{entity['name']}（{entity['code']}）报告期{time_point}的十大股东"
         self._save_df_to_material(
@@ -1073,7 +1064,7 @@ class MaterialTools:
             source="AKshare API:eastmoney",
             entity=entity,
             time=time,
-            )
+        )
         header = f"[fetch_top10_shareholders_material] 十大股东（symbol={symbol}, date={date}）"
         return _build_tool_response_from_df(
             df,
@@ -1083,8 +1074,8 @@ class MaterialTools:
         )
 
     async def fetch_main_shareholders_material(
-        self,
-        symbol: str,
+            self,
+            symbol: str,
     ) -> ToolResponse:
         """获取指定股票的主要股东信息，并保存表格结果到Material当中，返回Material标识ref_id。
         抓取所有历史披露的主要股东信息，
@@ -1105,7 +1096,7 @@ class MaterialTools:
             description=description,
             source="AKshare API:Sina Finance",
             entity=entity,
-            )
+        )
         header = f"[fetch_main_shareholders_material] 主要股东（symbol={symbol}）"
         return _build_tool_response_from_df(
             df,
@@ -1115,8 +1106,8 @@ class MaterialTools:
         )
 
     async def fetch_shareholder_count_detail_material(
-        self,
-        symbol: str,
+            self,
+            symbol: str,
     ) -> ToolResponse:
         """获取指定股票的股东户数详情，并保存表格结果到Material当中，返回Material标识ref_id。
         获取指定 symbol 的全部历史数据，包括股东户数统计截止日、区间涨跌幅、股东户数本次/上次/增减及其比例、户均持股市值与数量、
@@ -1138,7 +1129,7 @@ class MaterialTools:
             description=description,
             source="AKshare API:eastmoney",
             entity=entity,
-            )
+        )
         header = f"[fetch_shareholder_count_detail_material] 股东户数详情（symbol={symbol}）"
         return _build_tool_response_from_df(
             df,
@@ -1148,8 +1139,8 @@ class MaterialTools:
         )
 
     async def fetch_shareholder_change_material(
-        self,
-        symbol: str,
+            self,
+            symbol: str,
     ) -> ToolResponse:
         """获取指定股票的股东持股变动统计信息，并保存表格结果到Material当中，返回Material标识ref_id。
         抓取所有披露的股东持股变动记录，包括公告日期、变动股东、变动数量、交易均价、剩余股份总数、变动期间和变动途径等。
@@ -1162,7 +1153,6 @@ class MaterialTools:
 
         df = ak.stock_shareholder_change_ths(symbol=symbol)
 
-
         ref_id = f"{symbol}_shareholder_change_{int(time_module.time())}"
 
         entity = get_entity_info(long_term=self.long_term, text=symbol)
@@ -1172,7 +1162,7 @@ class MaterialTools:
             description=description,
             source="AKshare API:Hithink",
             entity=entity,
-            )
+        )
         header = f"[fetch_shareholder_change_material] 股东持股变动（symbol={symbol}）"
         return _build_tool_response_from_df(
             df,
@@ -1183,8 +1173,8 @@ class MaterialTools:
 
     # ===================== 业务范围 =====================
     async def fetch_business_description_material(
-        self,
-        symbol: str,
+            self,
+            symbol: str,
     ) -> ToolResponse:
         """获取指定股票的主营业务介绍，并保存表格结果到Material当中，返回Material标识ref_id。
         抓取公司主营业务、产品类型、产品名称及经营范围等字段，
@@ -1205,7 +1195,7 @@ class MaterialTools:
             description=description,
             source="AKshare API:Hithink",
             entity=entity,
-            )
+        )
 
         header = f"[fetch_business_description_material] 主营介绍（symbol={symbol}）"
         return _build_tool_response_from_dict(
@@ -1216,8 +1206,8 @@ class MaterialTools:
         )
 
     async def fetch_business_composition_material(
-        self,
-        symbol: str,
+            self,
+            symbol: str,
     ) -> ToolResponse:
         """获取指定股票的主营构成数据，并保存表格结果到Material当中，返回Material标识ref_id。
         抓取按产品、地区等维度划分的主营收入、成本、利润、及对应比例和毛利率等历史数据。
@@ -1239,7 +1229,7 @@ class MaterialTools:
             description=description,
             source="AKshare API:eastmoney",
             entity=entity,
-            )
+        )
         header = f"[fetch_business_composition_material] 主营构成（symbol={symbol}）"
         return _build_tool_response_from_df(
             df,
@@ -1250,12 +1240,12 @@ class MaterialTools:
 
     # ===================== 金融新闻 =====================
     async def fetch_stock_news_material(
-        self,
-        symbol: str,
-        start_date: str,
-        end_date: str | None = None,
-        keyword: str = "",
-        latest_num: int = 100,
+            self,
+            symbol: str,
+            start_date: str,
+            end_date: str | None = None,
+            keyword: str = "",
+            latest_num: int = 100,
     ) -> ToolResponse:
         """获取指定个股的新闻资讯数据，并保存表格结果到Material当中，返回Material标识ref_id。
         相关的最新新闻资讯（默认为限定时间范围内最近约 100 条），包括新闻标题、内容摘要、发布时间、来源和链接等，
@@ -1289,13 +1279,15 @@ class MaterialTools:
         dfs = []
         for page_idx in range(1, 25):
             df = stock_news_em(keyword=keyword, page_idx=page_idx)
-            dfs.append(df[(pd.to_datetime(df['发布时间']) >= start_date) & (pd.to_datetime(df['发布时间']) <= end_date)])
+            dfs.append(
+                df[(pd.to_datetime(df['发布时间']) >= start_date) & (pd.to_datetime(df['发布时间']) <= end_date)])
             if sum([len(_df) for _df in dfs]) > latest_num:
                 break
         df = pd.concat(dfs)
         df.sort_values("发布时间", inplace=True, ascending=False)
 
-        self._save_df_to_material(df=df, ref_id=ref_id,source="AKshare API:eastmoney",entity=entity,description=description)
+        self._save_df_to_material(df=df, ref_id=ref_id, source="AKshare API:eastmoney", entity=entity,
+                                  description=description)
         header = f"[fetch_stock_news_material] 股票新闻资讯（新闻内容大于156字的部分被省略，如需全文请根据url搜索）"
         return _build_tool_response_from_df(
             df=df,
@@ -1322,7 +1314,8 @@ class MaterialTools:
             domain = urlparse(url).netloc
             if domain.startswith("www."):
                 domain = domain[4:]
-            ref_id = "url_page_text_" +url.replace(".html", "").replace("http://", "").replace("https://", "").replace("/", "-")
+            ref_id = "url_page_text_" + url.replace(".html", "").replace("http://", "").replace("https://", "").replace(
+                "/", "-")
 
             published_date = None
             try:
@@ -1340,10 +1333,10 @@ class MaterialTools:
             time = None
             if published_date:
                 published_date = fmt_yyyymmdd(published_date)
-                desc = desc+ f"网页发布时间：{published_date} "
+                desc = desc + f"网页发布时间：{published_date} "
                 time = {"point": published_date}
             if entity:
-                desc = desc+f"发布关于{entity['name']}（{entity['code']}）的内容:"
+                desc = desc + f"发布关于{entity['name']}（{entity['code']}）的内容:"
 
             desc = desc + page_text[:50]
 
@@ -1367,8 +1360,8 @@ class MaterialTools:
         else:
             text = f"[fetch_url_page_text] url:{url}对应的网页文本为空。"
             return ToolResponse(
-            content=[
-                TextBlock(
+                content=[
+                    TextBlock(
                     type="text",
                     text=text,
                 ),
