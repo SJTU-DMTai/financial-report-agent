@@ -124,7 +124,7 @@ def create_vlm_model():
     if provider == "openrouter":
         return OpenAIChatModel(
             model_name=model_name,
-            api_key=os.environ.get("API_KEY"),
+            api_key = os.environ.get("VLM_API_KEY") or os.environ.get("API_KEY"),
             stream=stream,
             client_args={"base_url": base_url},
             generate_kwargs={"temperature": temperature},
@@ -139,7 +139,7 @@ def create_vlm_model():
     elif provider == "xiaomi":
         return OpenAIChatModel(
             model_name=model_name,
-            api_key=os.environ.get("API_KEY"),
+            api_key = os.environ.get("VLM_API_KEY") or os.environ.get("API_KEY"),
             stream=stream,
             client_args={"base_url": base_url},
             generate_kwargs={"temperature": temperature},

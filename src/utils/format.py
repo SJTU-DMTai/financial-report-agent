@@ -6,6 +6,39 @@ from typing import Any, List
 from agentscope.formatter import OpenAIChatFormatter
 from agentscope._utils._common import _save_base64_data
 from agentscope.message import Msg, AudioBlock, ImageBlock, TextBlock
+from datetime import datetime
+
+def fmt_yyyymmdd(s: str) -> str:
+    """
+    返回YYYY-MM-DD
+    """
+    s = (s or "").strip()
+    if not s:
+        return s
+    if len(s) == 8 and s.isdigit():
+        try:
+            return datetime.strptime(s, "%Y%m%d").strftime("%Y-%m-%d")
+        except ValueError:
+            return s
+
+    patterns = [
+        "%Y-%m-%d",
+        "%Y/%m/%d",
+        "%Y.%m.%d",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y/%m/%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y/%m/%d %H:%M",
+        "%Y-%m-%d %H:%M:%S.%f",
+    ]
+
+    for p in patterns:
+        try:
+            return datetime.strptime(s, p).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+
+    return s
 
 
 class PatchedOpenAIChatFormatter(OpenAIChatFormatter):

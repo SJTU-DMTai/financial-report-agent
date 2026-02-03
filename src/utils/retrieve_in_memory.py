@@ -10,6 +10,7 @@ import hashlib
 import pandas as pd
 
 from ..utils.get_entity_info import get_entity_info
+from ..utils.format import fmt_yyyymmdd
 from ..memory.short_term import ShortTermMemoryStore, MaterialMeta
 from ..memory.long_term import LongTermMemoryStore
 
@@ -47,12 +48,7 @@ def _extract_query_time_signals(q: str) -> Dict[str, Any]:
 
     return {"years": years, "dates": dates, "quarters": quarters}
 
-
 def _meta_time_values(meta: MaterialMeta) -> List[str]:
-    """
-    把 meta.time 里可能出现的日期字符串抽出来，统一用于匹配。
-    time 允许：{}, {"point":...}, {"start":...,"end":...}
-    """
     out = []
     t = meta.time or {}
     for k in ("point", "start", "end"):
@@ -60,6 +56,30 @@ def _meta_time_values(meta: MaterialMeta) -> List[str]:
         if isinstance(v, str) and v.strip():
             out.append(v.strip())
     return out
+
+def _meta_time_span(meta: MaterialMeta) -> tuple[str, str]:
+    """
+    从 meta.time 提取 (start, end) 的 YYYY-MM-DD 字符串区间。
+    time 允许：{}, {"point":...}, {"start":...,"end":...}
+    """
+    t = meta.time or {}
+    if not isinstance(t, dict) or not t:
+        return "", ""
+
+    p = fmt_yyyymmdd(t.get("point") or "")
+    if p:
+        return p, p
+
+    s = fmt_yyyymmdd(t.get("start") or "")
+    e = fmt_yyyymmdd(t.get("end") or "")
+
+    if s and e:
+        return (s, e) if s <= e else (e, s)
+    if s:
+        return s, s
+    if e:
+        return e, e
+    return "", ""
 
 
 # ========= tokenization for BM25 =========
@@ -128,13 +148,8 @@ def _rule_score(
         if code in desc:
             score += 0.6
 
-    # if name:
-    #     if (meta.entity or {}).get("name") == name:
-    #         score += 0.6
-    #     if name in desc:
-    #         score += 0.3
 
-    # 2) 时间加权
+    # 2) time
     years_q = time_sig.get("years") or set()
     dates_q = time_sig.get("dates") or set()
     quarters_q = time_sig.get("quarters") or set()
@@ -142,25 +157,66 @@ def _rule_score(
     meta_times = _meta_time_values(meta)
     meta_time_text = " ".join(meta_times)
 
-    # 日期精确命中优先
-    for d in dates_q:
-        if d in meta_time_text or d in desc:
-            score += 0.7
-            break
+    span_s, span_e = _meta_time_span(meta)
 
-    # 年份命中
-    if years_q:
-        # meta.time 或 description 命中任一年
-        if any(y in meta_time_text for y in years_q) or any(y in desc for y in years_q):
+    # 日期
+    hit_date = False
+    if dates_q:
+        if span_s and span_e:
+            for d in dates_q:
+                d = fmt_yyyymmdd(d)
+                if d and span_s <= d <= span_e:
+                    score += 1
+                    hit_date = True
+                    break
+        if not hit_date:
+            for d in dates_q:
+                if d in meta_time_text or d in desc:
+                    score += 1
+                    hit_date = True
+                    break
+
+
+    # 季度
+    elif quarters_q and (not hit_date):
+        hit_q = False
+        if span_s and span_e:
+            for (y, q) in quarters_q:
+                if q == "1":
+                    qs, qe = f"{y}-01-01", f"{y}-03-31"
+                elif q == "2":
+                    qs, qe = f"{y}-04-01", f"{y}-06-30"
+                elif q == "3":
+                    qs, qe = f"{y}-07-01", f"{y}-09-30"
+                else:
+                    qs, qe = f"{y}-10-01", f"{y}-12-31"
+
+                if not (span_e < qs or span_s > qe):
+                    score += 0.7
+                    hit_q = True
+                    break
+
+        if not hit_q:
+            desc_low = desc.lower()
+            for (y, q) in quarters_q:
+                if (f"{y}q{q}" in desc_low) or (f"{y} q{q}" in desc_low):
+                    score += 0.7
+                    break
+
+    # 年份
+    elif years_q and (not hit_date):
+        hit_year = False
+        if span_s and span_e:
+            for y in years_q:
+                ys, ye = f"{y}-01-01", f"{y}-12-31"
+                if not (span_e < ys or span_s > ye):  # 相交
+                    score += 0.5
+                    hit_year = True
+                    break
+        if (not hit_year) and (any(y in meta_time_text for y in years_q) or any(y in desc for y in years_q)):
             score += 0.5
 
-    # 季度命中（允许字面出现 2025q3）
-    for (y, q) in quarters_q:
-        if (f"{y}q{q}" in desc) or (f"{y} q{q}" in desc) or (y in desc and q in desc):
-            score += 0.5
-            break
-
-    # 3) 关键词命中（指标/任务词）
+    # 3) keywords
     hit = 0
     active = [kw for kw in keywords if kw and kw in query]
     if active:
@@ -231,15 +287,15 @@ def _bm25_scores(
 # ========= 主入口：retrieve =========
 
 def retrieve_in_memory(
-    short_term: Optional[ShortTermMemoryStore],
-    long_term: Optional[LongTermMemoryStore],
+    short_term: ShortTermMemoryStore,
+    long_term: LongTermMemoryStore,
     query: str,
-    top_k: int = 5,
+    top_k: int = 10,
     pre_k: int = 50,
     min_rule_score: float = 0.05,
     bm25_k1: float = 1.5,
     bm25_b: float = 0.75,
-    mix_rule_weight: float = 0.35,  # 最终分 = bm25 + mix_rule_weight * rule
+    mix_rule_weight: float = 0.5,  # 最终分 = bm25 + mix_rule_weight * rule
 ) -> List[Dict[str, Any]]:
     """
     三层策略：
