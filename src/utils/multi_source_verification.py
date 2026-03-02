@@ -28,7 +28,7 @@ class VerifyTask(str, Enum):
 class VerifyInput:
     text: Optional[str] = None                 # 待验证的自然语言文本
     claims: Optional[List[str]] = None         # 文本中提取的原子级陈述，如果传了就不用再提取了
-    ref_id: Optional[str] = None               # 需要读取 material 内容时用
+    cite_id: Optional[str] = None               # 需要读取 material 内容时用
 
 @dataclass
 class ClaimResult:
@@ -67,14 +67,14 @@ def _extract_json_block(out: str) -> str:
 
 def material_source_key(
     short_term,  # ShortTermMemoryStore
-    ref_id: str,
+    cite_id: str,
 ) -> str:
     """
-    给定 ref_id，返回“来源归一化 key”，用于判定两个 material 是否来自同一来源。
+    给定 cite_id，返回“来源归一化 key”，用于判定两个 material 是否来自同一来源。
 
     规则：
       - search_engine：按 domain 聚合（同域名视为同来源）
-      - 计算工具：每个 ref_id 视为独立来源
+      - 计算工具：每个 cite_id 视为独立来源
       - AKshare API：按api的数据来源
       - 其它：按 meta.source 归一化（source 为空则回退到 filename）
 
@@ -85,9 +85,9 @@ def material_source_key(
       - "src:xxx"
       - "file:xxx.csv"
     """
-    meta = short_term.get_material_meta(ref_id)
+    meta = short_term.get_material_meta(cite_id)
     if meta is None:
-        raise ValueError(f"Material ref_id='{ref_id}' 不存在于 registry。")
+        raise ValueError(f"Material cite_id='{cite_id}' 不存在于 registry。")
 
     src_raw = (meta.source or "").strip()
     src_lower = src_raw.lower()
@@ -101,11 +101,11 @@ def material_source_key(
         return f"akshare:{provider}"
 
     # 2) 计算工具：每个结果独立算一个来源
-    if ref_id.startswith("calculate_"):
-        return f"calc:{ref_id}"
+    if cite_id.startswith("calculate_"):
+        return f"calc:{cite_id}"
 
     # 3) Search engine：按 domain 聚合
-    if ref_id.startswith("search_engine") or ("search engine" in src_lower):
+    if cite_id.startswith("search_engine") or ("search engine" in src_lower):
         domain = None
         if not src_raw:
             domain = None
@@ -127,7 +127,7 @@ def material_source_key(
     
         if not domain:
             # 从 material 原文解析 link/url
-            obj = short_term.load_material(ref_id)
+            obj = short_term.load_material(cite_id)
             url = obj[0].get("link","")
             if url:
                 domain = urlparse(url).netloc
@@ -259,7 +259,7 @@ async def judge_grounding(material_text: str, text: str) -> Dict[str, Any]:
 def parse_verifier_output(text: str) -> Dict[str, Any]:
         """
         期望格式（重复多条）：
-        1. ref_id:xxxx
+        1. cite_id:xxxx
         支持该陈述 / 不支持该陈述
         理由...
 
@@ -267,21 +267,21 @@ def parse_verifier_output(text: str) -> Dict[str, Any]:
         """
         raw = (text or "").strip()
         if not raw or raw == "无":
-            return {"evidence_ref_ids": [], "conflict_ref_ids": [], "points": []}
+            return {"evidence_cite_ids": [], "conflict_cite_ids": [], "points": []}
 
         lines = [ln.rstrip() for ln in raw.splitlines() if ln.strip()]
-        # 兼容两种 ref_id 行：
-        # 1) "1. ref_id:xxx" / "1.ref_id：xxx"
-        # 2) "[ref_id:xxx|...]"（兜底）
-        pat1 = re.compile(r"^\s*(\d+)\s*[\.\)]\s*ref_id\s*[:：]\s*([A-Za-z0-9_\-]+)\s*$")
-        pat2 = re.compile(r"\[ref_id:([A-Za-z0-9_\-]+)(?:\|[^\]]*)?\]")
+        # 兼容两种 cite_id 行：
+        # 1) "1. cite_id:xxx" / "1.cite_id：xxx"
+        # 2) "[^cite_id:xxx|...]"（兜底）
+        pat1 = re.compile(r"^\s*(\d+)\s*[\.\)]\s*cite_id[:：]\s*([A-Za-z0-9_\-]+)\s*$")
+        pat2 = re.compile(r"\[(?:\^cite_id:|\^|cite_id:)+([A-Za-z0-9_\-]+)(?:\|[^\]]*)?\]")
 
         blocks: List[Dict[str, str]] = []
         cur: Optional[Dict[str, str]] = None
 
         def flush():
             nonlocal cur
-            if cur and cur.get("ref_id"):
+            if cur and cur.get("cite_id"):
                 blocks.append(cur)
             cur = None
 
@@ -289,15 +289,15 @@ def parse_verifier_output(text: str) -> Dict[str, Any]:
             m = pat1.match(ln)
             if m:
                 flush()
-                cur = {"idx": m.group(1), "ref_id": m.group(2), "label": "", "reason": ""}
+                cur = {"idx": m.group(1), "cite_id": m.group(2), "label": "", "reason": ""}
                 continue
 
-            # 如果没有遇到 pat1，但遇到 [ref_id:xxx]，也尝试开新块
+            # 如果没有遇到 pat1，但遇到 [^xxx]，也尝试开新块
             if cur is None:
                 m2 = pat2.search(ln)
                 if m2:
                     flush()
-                    cur = {"idx": str(len(blocks) + 1), "ref_id": m2.group(1), "label": "", "reason": ""}
+                    cur = {"idx": str(len(blocks) + 1), "cite_id": m2.group(1), "label": "", "reason": ""}
                     continue
 
             if cur is None:
@@ -310,12 +310,12 @@ def parse_verifier_output(text: str) -> Dict[str, Any]:
 
         flush()
 
-        evidence_ref_ids: List[str] = []
-        conflict_ref_ids: List[str] = []
+        evidence_cite_ids: List[str] = []
+        conflict_cite_ids: List[str] = []
         points: List[str] = []
 
         for b in blocks:
-            rid = b.get("ref_id", "").strip()
+            rid = b.get("cite_id", "").strip()
             if not rid:
                 continue
 
@@ -327,10 +327,10 @@ def parse_verifier_output(text: str) -> Dict[str, Any]:
             is_support = ("支持" in label) and (not is_conflict)
 
             if is_conflict:
-                conflict_ref_ids.append(rid)
+                conflict_cite_ids.append(rid)
                 tag = "不支持"
             elif is_support:
-                evidence_ref_ids.append(rid)
+                evidence_cite_ids.append(rid)
                 tag = "支持"
             else:
                 # label 不符合预期就忽略该条
@@ -338,9 +338,9 @@ def parse_verifier_output(text: str) -> Dict[str, Any]:
 
             idx = b.get("idx") or str(len(points) + 1)
             if reason:
-                points.append(f"{idx}.找到 Material(ref_id={rid}) {tag}陈述：{reason}")
+                points.append(f"{idx}.找到 Material(cite_id={rid}) {tag}陈述：{reason}")
             else:
-                points.append(f"{idx}.找到 Material(ref_id={rid}) {tag}陈述")
+                points.append(f"{idx}.找到 Material(cite_id={rid}) {tag}陈述")
 
         # 去重但保持顺序
         def uniq(xs: List[str]) -> List[str]:
@@ -354,17 +354,17 @@ def parse_verifier_output(text: str) -> Dict[str, Any]:
             return out
 
         return {
-            "evidence_ref_ids": uniq(evidence_ref_ids),
-            "conflict_ref_ids": uniq(conflict_ref_ids),
+            "evidence_cite_ids": uniq(evidence_cite_ids),
+            "conflict_cite_ids": uniq(conflict_cite_ids),
             "points": points,
         }
 async def multi_source_verification(input:VerifyInput, task:VerifyTask, short_term:ShortTermMemoryStore, long_term:LongTermMemoryStore) ->  List[ClaimResult]:
     
-    if input.ref_id:
-        material = short_term.load_material(input.ref_id)
+    if input.cite_id:
+        material = short_term.load_material(input.cite_id)
         if material is None:
-            raise ValueError(f"ref_id={input.ref_id} material 不存在或读取失败")
-        meta = short_term.get_material_meta(input.ref_id) 
+            raise ValueError(f"cite_id={input.cite_id} material 不存在或读取失败")
+        meta = short_term.get_material_meta(input.cite_id) 
         if meta.m_type == MaterialType.TABLE:
             material = material.to_csv(index=False)
         elif meta.m_type == MaterialType.JSON:
@@ -381,11 +381,11 @@ async def multi_source_verification(input:VerifyInput, task:VerifyTask, short_te
             claims = [c.strip() for c in input.claims if isinstance(c, str) and c.strip()]
         elif input.text and input.text.strip():
             claims = await extract_atomic_claims(input.text)
-        elif input.ref_id and material_text.strip():
+        elif input.cite_id and material_text.strip():
             # 没有 text 时可对 material 做“材料正确性验证”
             claims = await extract_atomic_claims(material_text)
         else:
-            raise ValueError("FACTUAL/CORROBORATE 需要 input.text 或 input.claims 或 input.ref_id(可读 material)")
+            raise ValueError("FACTUAL/CORROBORATE 需要 input.text 或 input.claims 或 input.cite_id(可读 material)")
 
         if not claims:
             return []
@@ -421,26 +421,26 @@ async def multi_source_verification(input:VerifyInput, task:VerifyTask, short_te
             verdict_text = verify_msg.get_text_content()
 
             parsed = parse_verifier_output(verdict_text)
-            evidence_ref_ids = parsed["evidence_ref_ids"]
-            conflict_ref_ids = parsed["conflict_ref_ids"]
+            evidence_cite_ids = parsed["evidence_cite_ids"]
+            conflict_cite_ids = parsed["conflict_cite_ids"]
 
-            if task == VerifyTask.CORROBORATE and input.ref_id:
-                evidence_ref_ids = [rid for rid in evidence_ref_ids if rid != input.ref_id]
-                base_key = material_source_key(short_term, input.ref_id)
-                evidence_ref_ids = [
-                    rid for rid in evidence_ref_ids
+            if task == VerifyTask.CORROBORATE and input.cite_id:
+                evidence_cite_ids = [rid for rid in evidence_cite_ids if rid != input.cite_id]
+                base_key = material_source_key(short_term, input.cite_id)
+                evidence_cite_ids = [
+                    rid for rid in evidence_cite_ids
                     if material_source_key(short_term, rid) != base_key
                 ]
 
 
 
-            if len(conflict_ref_ids) > 0:
+            if len(conflict_cite_ids) > 0:
                 verdict = "refute"
                 confidence = 0.90
-            elif len(evidence_ref_ids) >= 2:
+            elif len(evidence_cite_ids) >= 2:
                 verdict = "support"
-                confidence = min(1, len(evidence_ref_ids)*0.05+0.8)
-            elif len(evidence_ref_ids) == 1:
+                confidence = min(1, len(evidence_cite_ids)*0.05+0.8)
+            elif len(evidence_cite_ids) == 1:
                 verdict = "support"
                 confidence = 0.50
             else:
@@ -455,8 +455,8 @@ async def multi_source_verification(input:VerifyInput, task:VerifyTask, short_te
                 slots=slots,
                 verdict=verdict,
                 confidence=confidence,
-                evidence=evidence_ref_ids,
-                conflicts=conflict_ref_ids,
+                evidence=evidence_cite_ids,
+                conflicts=conflict_cite_ids,
                 rationale=rationale
             ))
         return results
@@ -475,8 +475,8 @@ async def multi_source_verification(input:VerifyInput, task:VerifyTask, short_te
     )]
 
     elif task == VerifyTask.CODE:
-        if not input.ref_id or not input.ref_id.startswith("calculate_or_analysis_by_python_code"):
-            raise ValueError("task=CODE 传入无效Material，应为自定义计算工具的计算结果 material(ref_id 以 calculate_or_analysis_by_python_code 开头)")
+        if not input.cite_id or not input.cite_id.startswith("calculate_or_analysis_by_python_code"):
+            raise ValueError("task=CODE 传入无效Material，应为自定义计算工具的计算结果 material(cite_id 以 calculate_or_analysis_by_python_code 开头)")
             # todo
     else:
         raise ValueError(f"task={task}无效( {VerifyTask.FACTUAL}, {VerifyTask.CORROBORATE}, {VerifyTask.GROUNDING}, {VerifyTask.CODE} )")

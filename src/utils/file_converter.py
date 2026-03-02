@@ -5,7 +5,6 @@ import os
 import sys
 import warnings
 
-from utils.local_file import DEMO_DIR
 
 # Windows 特定编码修复
 if sys.platform == 'win32':
@@ -44,26 +43,26 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 import config
 
 def add_citation(
-    ref_id: str,
+    cite_id: str,
     detail: str,
     short_term: ShortTermMemoryStore,
     citation_index_map: dict,
     citations: list,
 ) -> Optional[int]:
     """
-    根据 (ref_id, detail) 获取或创建引用编号。
-    如果在 registry 里找不到 ref_id，则返回 None（表示不做替换）。
+    根据 (cite_id, detail) 获取或创建引用编号。
+    如果在 registry 里找不到 cite_id，则返回 None（表示不做替换）。
     """
     # 没有 get_material_meta 就直接放弃
     if not hasattr(short_term, "get_material_meta"):
         return None
 
-    meta = short_term.get_material_meta(ref_id)
-    # ref_id 在 registry 中不存在：不生成引用，调用方应保持原文不变
+    meta = short_term.get_material_meta(cite_id)
+    # cite_id 在 registry 中不存在：不生成引用，调用方应保持原文不变
     if meta is None:
         return None
 
-    key = (ref_id, detail)
+    key = (cite_id, detail)
     if key in citation_index_map:
         return citation_index_map[key]
 
@@ -72,7 +71,7 @@ def add_citation(
     citations.append(
         {
             "index": idx,
-            "ref_id": ref_id,
+            "cite_id": cite_id,
             "detail": detail,
             "meta": meta,
         }
@@ -87,21 +86,21 @@ def _inject_refs(
     citations: list,
 ) -> str:
     """
-    扫描 md_text 中的ref_id标记，
+    扫描 md_text 中的cite_id标记，
     支持以下形式，具有一定容错能力：
-      - [ref_id:xxx|yyy]
-      - ref_id:xxx|yyy
-      - ref_id:xxx
-      - [ref_id:xxx|yyy；ref_id:zzz]
-      - [ref_id:xxx|yyy；zzz]
+      - [^xxx|yyy]
+      - cite_id:xxx|yyy
+      - cite_id:xxx
+      - [^xxx|yyy；cite_id:zzz]
+      - [^xxx|yyy；zzz]
 
     其中 yyy 为可选位置描述可缺省。
 
     """
-# ---------- 第一轮：处理显式写出的 ref_id:xxx 或 ref_id:xxx|yyy ----------
+# ---------- 第一轮：处理显式写出的 cite_id:xxx 或 cite_id:xxx|yyy ----------
     # 不要求方括号存在，detail(yyy) 可缺省
     pattern_main = re.compile(
-        r"ref_id[:=]\s*([0-9A-Za-z_\u4e00-\u9fff\-]+)(?:\|([^；\]\s]+))?"
+        r"cite_id[:=]\s*([0-9A-Za-z_\u4e00-\u9fff\-]+)(?:\|([^；\]\s]+))?"
     )
 
     text = md_text
@@ -112,10 +111,10 @@ def _inject_refs(
         # 先把上一个匹配之后的原文拼上
         result_parts.append(text[last_end:m.start()])
 
-        ref_id = m.group(1).strip()
+        cite_id = m.group(1).strip()
         detail = (m.group(2) or "").strip()
 
-        idx = add_citation(ref_id, detail, short_term, citation_index_map, citations)
+        idx = add_citation(cite_id, detail, short_term, citation_index_map, citations)
 
         if idx is None:
             # 没找到 meta：不要替换，原样保留
@@ -130,11 +129,11 @@ def _inject_refs(
     result_parts.append(text[last_end:])
     text_after_main = "".join(result_parts)
 
-    # ---------- 第二轮：处理 “(1)；zzz” 这种漏写 ref_id 的情况 ----------
+    # ---------- 第二轮：处理 “(1)；zzz” 这种漏写 cite_id 的情况 ----------
     # 典型来源：
-    #   原文：[ref_id:xxx|yyy；zzz]
+    #   原文：[^xxx|yyy；zzz]
     #   第一轮后：[(1)；zzz]
-    # 这里尝试把 zzz 当作 ref_id 去解析，如果 registry 里没有，就保持原样。
+    # 这里尝试把 zzz 当作 cite_id 去解析，如果 registry 里没有，就保持原样。
     pattern_follow = re.compile(
         r'(\(<a href="#ref-(\d+)" class="ref">\2</a>\))\s*([；;])\s*([0-9A-Za-z_\u4e00-\u9fff\-]+)'
     )
@@ -148,12 +147,12 @@ def _inject_refs(
 
         anchor = m.group(1)          # 已有的 (1)
         sep = m.group(3)             # 分号：；或 ;
-        ref_id2 = m.group(4).strip() # 疑似漏写 ref_id: 的部分
+        cite_id2 = m.group(4).strip() # 疑似漏写 cite_id: 的部分
 
-        idx2 = add_citation(ref_id2, "", short_term, citation_index_map, citations)
+        idx2 = add_citation(cite_id2, "", short_term, citation_index_map, citations)
 
         if idx2 is None:
-            # 第二个“疑似 ref_id”在 registry 中找不到：保持原样，不改
+            # 第二个“疑似 cite_id”在 registry 中找不到：保持原样，不改
             result_parts.append(text[m.start():m.end()])
         else:
             anchor2 = f'(<a href="#ref-{idx2}" class="ref">{idx2}</a>)'
@@ -233,6 +232,16 @@ def _remove_word_count_tags(md_text: str) -> str:
     return pattern.sub("", md_text)
 
 
+def _remove_external_images(md_text: str) -> str:
+    """
+    删除所有使用 HTTP/HTTPS URL 的图片引用。
+    匹配形如 ![alt](http://... 或 https://... 的图片标记。
+    这样可以避免 wkhtmltopdf 尝试访问外部网络资源导致的 HostNotFoundError。
+    """
+    pattern = re.compile(r'!\[.*?\]\(https?://[^\)]+\)')
+    return pattern.sub("", md_text)
+
+
 
 def _build_appendix_md(citations: List[Dict]) -> str:
     """
@@ -271,18 +280,18 @@ def _build_appendix_md(citations: List[Dict]) -> str:
     # 按 index 排序，保证顺序稳定
     for c in sorted(citations, key=lambda x: x["index"]):
         idx = c["index"]
-        ref_id = c["ref_id"]
+        cite_id = c["cite_id"]
         detail = c["detail"]
         meta = c["meta"]
 
         # 做一下 HTML 转义，避免特殊字符干扰
-        esc_ref_id = html.escape(str(ref_id)) if ref_id is not None else ""
+        esc_cite_id = html.escape(str(cite_id)) if cite_id is not None else ""
         esc_detail = html.escape(str(detail)) if detail else ""
 
         # 有序列表项首行：
         # 1. <a id="ref-1"></a>**REF_ID**（引用字段/行：detail）
         # 注意：<a id="ref-1"></a> 是真正的锚点，和正文里的 href="#ref-1" 完全对应
-        first_line = f'1. <a id="ref-{idx}"></a>**{esc_ref_id}**'
+        first_line = f'1. <a id="ref-{idx}"></a>**{esc_cite_id}**'
         if esc_detail:
             first_line += f'（引用字段/行：{esc_detail}）'
         lines.append(first_line)
@@ -305,7 +314,7 @@ def _build_appendix_md(citations: List[Dict]) -> str:
                 esc_source = html.escape(str(meta.source))
                 lines.append(f"    - 来源：{esc_source}")
         else:
-            lines.append("    - *警告：未在 registry 中找到该 ref_id 对应的元数据*")
+            lines.append("    - *警告：未在 registry 中找到该 cite_id 对应的元数据*")
 
         # 每条引用之间空一行，增强可读性
         lines.append("")
@@ -394,7 +403,7 @@ def md_to_pdf(
     """
 
     main_title = ""
-    # 全局引用信息：key=(ref_id, detail) -> index
+    # 全局引用信息：key=(cite_id, detail) -> index
     citation_index_map: dict[tuple[str, str], int] = {}
     citations: list[dict] = []
     cleaned_sections_md: list[str] = []
@@ -413,6 +422,7 @@ def md_to_pdf(
             break
 
     md_text = _remove_word_count_tags(md_text)
+    # md_text = _remove_external_images(md_text)
     md_text = _inject_refs(md_text, short_term, citation_index_map, citations)
     md_text = _replace_chart_placeholders(md_text, short_term.manuscript_dir)
     md_text = _normalize_tables(md_text)
@@ -481,12 +491,12 @@ def md_to_pdf(
     mono_family = f'"PDFMono",{fallback_mono}' if mono_font_uri else fallback_mono
 
     font_face_css = ""
-    if body_font_uri:
-        font_face_css += f'@font-face{{font-family:"PDFBody";src:url("{body_font_uri}");}}\n'
-    if heading_font_uri:
-        font_face_css += f'@font-face{{font-family:"PDFHeading";src:url("{heading_font_uri}");}}\n'
-    if mono_font_uri:
-        font_face_css += f'@font-face{{font-family:"PDFMono";src:url("{mono_font_uri}");}}\n'
+    # if body_font_uri:
+    #     font_face_css += f'@font-face{{font-family:"PDFBody";src:url("{body_font_uri}");}}\n'
+    # if heading_font_uri:
+    #     font_face_css += f'@font-face{{font-family:"PDFHeading";src:url("{heading_font_uri}");}}\n'
+    # if mono_font_uri:
+    #     font_face_css += f'@font-face{{font-family:"PDFMono";src:url("{mono_font_uri}");}}\n'
 
 
     if not main_title:
@@ -614,8 +624,11 @@ def md_to_pdf(
     options = {
         "encoding": "UTF-8",
         "disable-smart-shrinking": None,
-        "enable-internal-links": None,
+        # "enable-internal-links": None,
         "enable-local-file-access": None,
+        "no-stop-slow-scripts": None,
+        "load-error-handling": "ignore",
+        "load-media-error-handling": "ignore",
 
         "header-html": str(header_path),
         "header-spacing": "6",
@@ -845,7 +858,7 @@ def _parse_lines_as_section(lines: List[str], parent: Section) -> int:
             # 非标题行，积累到当前内容
             if line.strip():
                 current_content.append(line)
-                i += 1
+            i += 1
 
     # 处理末尾的内容
     if current_content:
@@ -853,6 +866,39 @@ def _parse_lines_as_section(lines: List[str], parent: Section) -> int:
         parent.segments.append(elem)
 
     return i
+
+
+def _adjust_content_headers(content: str, min_level: int) -> str:
+    """
+    调整content中的markdown标题级别，确保不与section结构冲突
+
+    Args:
+        content: 要处理的内容
+        min_level: 当前section的最小标题级别
+
+    Returns:
+        调整后的内容
+    """
+    lines = content.split('\n')
+    adjusted_lines = []
+
+    for line in lines:
+        # 检测markdown标题
+        if match := re.match(r'^(#{1,6})\s+(.+)', line):
+            current_hashes = len(match.group(1))
+            title_text = match.group(2);
+
+            # 如果当前标题级别 <= min_level，需要增加井号数量
+            # 确保content中的标题至少比当前section多一级
+            if current_hashes <= min_level:
+                new_level = min_level + 1
+                adjusted_lines.append('#' * new_level + ' ' + title_text)
+            else:
+                adjusted_lines.append(line)
+        else:
+            adjusted_lines.append(line)
+
+    return '\n'.join(adjusted_lines)
 
 
 def section_to_markdown(section: Section, level: int = 1) -> str:
@@ -868,9 +914,12 @@ def section_to_markdown(section: Section, level: int = 1) -> str:
     """
     lines = [f"{'#' * level} {section.title}\n"]
     # 添加当前 Section 的所有 segments 内容
-    for elem in section.segments:
-        if elem.content:
-            lines.append(elem.content + '\n')
+    for seg in section.segments:
+        if seg.content:
+            content = seg.content
+            # 调整content中的标题级别，确保不与section结构冲突
+            adjusted_content = _adjust_content_headers(content, level)
+            lines.append(adjusted_content + '\n')
 
     # 递归处理所有子 Section
     for subsection in section.subsections:

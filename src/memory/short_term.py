@@ -10,6 +10,9 @@ from typing import List, Tuple, Dict, Any, Union, Optional
 from enum import Enum
 import re
 from datetime import datetime
+from src.utils.instance import cfg
+
+
 class MaterialType(str, Enum):
     TABLE = "table"  # 对应 csv, excel
     TEXT = "text"    # 对应 md, txt
@@ -17,7 +20,7 @@ class MaterialType(str, Enum):
 
 @dataclass
 class MaterialMeta:
-    ref_id: str
+    cite_id: str
     m_type: MaterialType
     filename: str
     entity: Dict[str, str] = field(default_factory=lambda: {"name": "", "code": ""})
@@ -32,6 +35,7 @@ class ShortTermMemoryStore:
 
     base_dir: Path
     do_post_init: bool = True
+    current_date: str = datetime.now().strftime("%Y%m%d")
 
     @property
     def outline_path(self) -> Path:
@@ -55,7 +59,7 @@ class ShortTermMemoryStore:
     
     @property
     def registry_path(self) -> Path:
-        return self.material_dir / "registry.json"
+        return self.material_dir / f"{cfg.llm_name}_registry.json"
 
     def __post_init__(self):
         
@@ -113,8 +117,8 @@ class ShortTermMemoryStore:
         data = {k: {**asdict(v), 'm_type': v.m_type.value} for k, v in self._registry.items()}
         self.registry_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    def get_material_meta(self, ref_id: str) -> Optional[MaterialMeta]:
-        return self._registry.get(ref_id)
+    def get_material_meta(self, cite_id: str) -> Optional[MaterialMeta]:
+        return self._registry.get(cite_id)
 
     # ---- Outline ----
     def load_outline(self) -> str:
@@ -234,7 +238,7 @@ class ShortTermMemoryStore:
     # Material 存储
     # -----------------------------------------
 
-    def save_material(self, ref_id: str, 
+    def save_material(self, cite_id: str, 
         content: Union[str, pd.DataFrame, dict, list],
         description: str = "",
         source: str = "",
@@ -249,14 +253,21 @@ class ShortTermMemoryStore:
             ext, m_type = "csv", MaterialType.TABLE
             if content.index.name is None:
                 content.index.name = "index"
-            content.to_csv(self.material_dir / f"{ref_id}.csv", index=True)
+            content.to_csv(self.material_dir / f"{cite_id}.csv", index=True)
         elif isinstance(content, (dict, list)):
             ext, m_type = "json", MaterialType.JSON
-            (self.material_dir / f"{ref_id}.json").write_text(json.dumps(content, ensure_ascii=False, indent=2), encoding="utf-8")
+            (self.material_dir / f"{cite_id}.json").write_text(json.dumps(content, ensure_ascii=False, indent=2), encoding="utf-8")
         else: # str
+            content = content.replace(r"<br>", " ",)
+            content = content.replace(r"\n ", "\n",)
+            content = content.replace(r"\n\t", "\n",)
+            content = re.sub(r"\t{2,}", "\t", content)
+            content = re.sub(r"\n{3,}", "\n\n", content)
+            content = re.sub(r" {3,}", "  ", content)
+            content = re.sub(r"-{4,}", "---", content)
             ext = forced_ext or "txt"
             m_type = MaterialType.TEXT
-            (self.material_dir / f"{ref_id}.{ext}").write_text(str(content), encoding="utf-8")
+            (self.material_dir / f"{cite_id}.{ext}").write_text(str(content), encoding="utf-8")
 
         entity = entity if entity is not None else {"name": "", "code": ""}
         time = time if time is not None else {}
@@ -265,15 +276,15 @@ class ShortTermMemoryStore:
         _DESC_WS_RE = re.compile(r"\s+")
 
         description = (description or "").strip()
-        description = _DESC_SEP_RE.sub(" ", description)
+        # description = _DESC_SEP_RE.sub(" ", description)
         description = _DESC_WS_RE.sub(" ", description)
         description = description.lower()
 
 
-        self._registry[ref_id] = MaterialMeta(
-            ref_id=ref_id,
+        self._registry[cite_id] = MaterialMeta(
+            cite_id=cite_id,
             m_type=m_type,
-            filename=f"{ref_id}.{ext}",
+            filename=f"{cite_id}.{ext}",
             entity=entity,
             time=time,
             description=description,
@@ -281,8 +292,8 @@ class ShortTermMemoryStore:
         )
         self._save_registry()
 
-    def load_material(self, ref_id: str) -> Union[pd.DataFrame, dict, str, None]:
-        meta = self._registry.get(ref_id)
+    def load_material(self, cite_id: str) -> Union[pd.DataFrame, dict, str, None]:
+        meta = self._registry.get(cite_id)
         if not meta: return None
         
         path = self.material_dir / meta.filename
@@ -298,7 +309,7 @@ class ShortTermMemoryStore:
         
     def load_material_preview(
         self,
-        ref_id:str,
+        cite_id:str,
         max_chars: int = 300,
         table_rows: int = 3
     ) :
@@ -312,21 +323,21 @@ class ShortTermMemoryStore:
                 return s
             return s[:max_chars] + "…[内容过长，已截断]"
 
-        meta = self.get_material_meta(ref_id)
-        content = self.load_material(ref_id)
+        meta = self.get_material_meta(cite_id)
+        content = self.load_material(cite_id)
         if meta is None or content is None:
             return ""
 
 
         # (A) 搜索引擎：search_engine_*
-        if isinstance(ref_id, str) and ref_id.startswith("search_engine_"):
+        if isinstance(cite_id, str) and cite_id.startswith("search_engine_"):
             page_text = ""
             if isinstance(content, list) and content and isinstance(content[0], dict):
                 page_text = content[0].get("page_text") or ""
             return _truncate(page_text)
 
         # (B) 计算结果：calculate_*
-        if isinstance(ref_id, str) and ref_id.startswith("calculate_"):
+        if isinstance(cite_id, str) and cite_id.startswith("calculate_"):
             params = None
             result = None
             if isinstance(content, list) and content and isinstance(content[0], dict):
@@ -380,7 +391,7 @@ class ShortTermMemoryStore:
                 return _truncate(str(content))
 
         return ""
-    def load_material_numerical(self, ref_id: str):
+    def load_material_numerical(self, cite_id: str):
         """
         从 Material 中提取适合数值计算的“数值部分”。
         返回：
@@ -389,19 +400,19 @@ class ShortTermMemoryStore:
         异常：
             ValueError: 无法从该 Material 中找到可用的数值数据。
         """
-        meta = self.get_material_meta(ref_id)
+        meta = self.get_material_meta(cite_id)
         if meta is None:
-            raise ValueError(f"Material ref_id='{ref_id}' 不存在。")
+            raise ValueError(f"Material cite_id='{cite_id}' 不存在。")
 
-        obj = self.load_material(ref_id)
+        obj = self.load_material(cite_id)
         if obj is None:
-            raise ValueError(f"Material ref_id='{ref_id}' 对应内容不存在或已被删除。")
+            raise ValueError(f"Material cite_id='{cite_id}' 对应内容不存在或已被删除。")
 
         # 表格类：直接返回 DataFrame，并尝试将能转成数值的列转成数值
         if meta.m_type == MaterialType.TABLE:
             if not isinstance(obj, pd.DataFrame):
                 raise ValueError(
-                    f"Material ref_id='{ref_id}' 类型为 TABLE，但 load_material 返回的不是 DataFrame。"
+                    f"Material cite_id='{cite_id}' 类型为 TABLE，但 load_material 返回的不是 DataFrame。"
                 )
             df = obj.copy()
             # 尝试将各列转为数值，无法转换的保持原样
@@ -414,7 +425,7 @@ class ShortTermMemoryStore:
             def decode(record: dict):
                 if "result" not in record:
                     raise ValueError(
-                        f"Material ref_id='{ref_id}' 的记录中缺少 'result' 字段。"
+                        f"Material cite_id='{cite_id}' 的记录中缺少 'result' 字段。"
                     )
                 val = record["result"]
                 r_type = record.get("result_type")
@@ -429,7 +440,7 @@ class ShortTermMemoryStore:
                         df = pd.DataFrame(val)
                     else:
                         raise ValueError(
-                            f"Material ref_id='{ref_id}' 标记为 DataFrame，但 result 类型为 {type(val).__name__}。"
+                            f"Material cite_id='{cite_id}' 标记为 DataFrame，但 result 类型为 {type(val).__name__}。"
                         )
                     df = df.copy()
                     for col in df.columns:
@@ -443,7 +454,7 @@ class ShortTermMemoryStore:
                         ser = pd.Series(val)
                     else:
                         raise ValueError(
-                            f"Material ref_id='{ref_id}' 标记为 Series，但 result 类型为 {type(val).__name__}。"
+                            f"Material cite_id='{cite_id}' 标记为 Series，但 result 类型为 {type(val).__name__}。"
                         )
                     return ser
 
@@ -452,7 +463,7 @@ class ShortTermMemoryStore:
             if isinstance(data, dict):
                 if "result" not in data:
                     raise ValueError(
-                        f"Material ref_id='{ref_id}' 为 JSON dict，但不含 'result' 字段。"
+                        f"Material cite_id='{cite_id}' 为 JSON dict，但不含 'result' 字段。"
                     )
                 return decode(data)
 
@@ -463,14 +474,14 @@ class ShortTermMemoryStore:
                         results.append(decode(item))
                 if not results:
                     raise ValueError(
-                        f"Material ref_id='{ref_id}' 为 JSON list，但没有任何元素包含 'result' 字段。"
+                        f"Material cite_id='{cite_id}' 为 JSON list，但没有任何元素包含 'result' 字段。"
                     )
                 return results[0] if len(results) == 1 else results
 
             raise ValueError(
-                f"Material ref_id='{ref_id}' 为 JSON，但顶层类型为 {type(data).__name__}。"
+                f"Material cite_id='{cite_id}' 为 JSON，但顶层类型为 {type(data).__name__}。"
             )
 
         raise ValueError(
-            f"Material ref_id='{ref_id}' 类型为 {meta.m_type.value}，不支持提取 numerical 数据。"
+            f"Material cite_id='{cite_id}' 类型为 {meta.m_type.value}，不支持提取 numerical 数据。"
         )

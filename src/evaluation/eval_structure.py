@@ -4,8 +4,10 @@ import asyncio
 from json import JSONDecodeError
 from typing import Tuple, List
 
+from pydantic import BaseModel
+
 from src.memory.working import Section
-from utils.call_with_retry import call_chatbot_with_retry
+from src.utils.call_with_retry import call_chatbot_with_retry
 
 from src.utils.instance import llm_reasoning, formatter
 
@@ -54,6 +56,9 @@ def num_of_segment(report: Section) -> Tuple[int, int]:
         
     return (total_segments, avg_segments_per_section)
 
+class StructureScore(BaseModel):
+    comprehensiveness: int
+    logicality: int
 
 async def structure_score(report: Section) -> Tuple[int, int]:
     """
@@ -68,26 +73,27 @@ async def structure_score(report: Section) -> Tuple[int, int]:
     """
     
     # 提取简洁的大纲文本
-    outline = report.read(with_requirements=False, with_content=False, with_evidence=False, with_reference=False)
+    outline = report.read(with_requirements=False, with_content=False,
+                          with_evidence=False, with_reference=False, read_subsections=True)
     sys_prompt = f"""你是一名资深的金融分析师和首席编辑。你的任务是评估以下这份研究报告的大纲结构。
 
 **评估维度:**
-1.  **内容完整性 (Comprehensiveness)**: 大纲是否全面覆盖了分析一家公司所需的核心要素？例如：公司概况、行业分析、业务拆解、财务预测、估值、风险提示等。
-2.  **逻辑连贯性 (Logicality)**: 大纲的章节和段落主题之间的组织是否合乎逻辑？论述是否层层递进，从宏观到微观，从现状到未来？
+1.  **内容完整性 (comprehensiveness)**: 大纲是否全面覆盖了分析一家公司所需的核心要素？例如：公司概况、行业分析、业务拆解、财务预测、估值、风险提示等。
+2.  **逻辑连贯性 (logicality)**: 大纲的章节和段落主题之间的组织是否合乎逻辑？论述是否层层递进，从宏观到微观，从现状到未来？
 
 **评分标准:**
 -   请在每个维度上给出 1-10 的整数分数。10分代表完美。
 
 **输出格式:**
--   你的输出必须是一个合法的、不包含任何其他文字的JSON对象，格式如下：
-    `{{"comprehensiveness": [分数], "logicality": [分数]}}`
+-   除思考过程放在指定标签中，你的最终答案必须是一个合法的、不包含任何其他文字的JSON对象，格式如下：
+{{"comprehensiveness": [分数], "logicality": [分数]}}
 
 
 
 现在，请给出你的评分。"""
     scores = await call_chatbot_with_retry(llm_reasoning, formatter, sys_prompt,
                                            f"**待评估的研报大纲:**\n---\n{outline}\n---",
-                                           hook=json.loads, handle_hook_exceptions=(JSONDecodeError, ))
-    comprehensiveness = int(scores.get("comprehensiveness", -1))
-    logicality = int(scores.get("logicality", -1))
+                                           structured_model=StructureScore,)
+    comprehensiveness = scores.get("comprehensiveness")
+    logicality = scores.get("logicality")
     return (comprehensiveness, logicality)

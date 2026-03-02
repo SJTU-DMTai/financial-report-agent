@@ -34,7 +34,7 @@ from src.utils.image_analyze import inject_vlm_into_demo_markdown, load_images_f
 from src.evaluation.parse_verifier_verdict import parse_verdict
 from src.evaluation.segment_scorer import WritingScorer, WritingScore
 
-from utils.call_with_retry import call_chatbot_with_retry
+from src.utils.call_with_retry import call_chatbot_with_retry
 
 
 async def run_workflow(task_desc: str):
@@ -206,7 +206,8 @@ async def run_workflow(task_desc: str):
                 if segment.evidences is None:
                     segment.evidences = []
                 for i in range(len(segment.evidences)):
-                    searched_content = "当前已搜索到的论据：\n" + "\n".join(segment.evidences[:i]) + "\n"
+                    evidences = [e for e in segment.evidences[:i] if e]
+                    searched_content = ("当前已搜索到的论据：\n" + "\n".join(evidences) + "\n") if evidences else ""
                     searcher_input = Msg(
                         name="user",
                         content=(
@@ -278,7 +279,7 @@ async def run_workflow(task_desc: str):
                 except Exception as e:
                     print(f"评估segment失败: {e}")
 
-            section_text = "\n".join([s.content for s in subsection.segments])
+            section_text = "\n".join([s.content for s in subsection.segments if s.content])
             draft_msg = await call_agent_with_retry(writer, Msg(
                 name="user",
                 content=(

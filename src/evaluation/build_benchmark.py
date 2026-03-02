@@ -91,13 +91,13 @@ def filter_and_sort_comparison_results():
 
     # Save top 50 to benchmark.json
     benchmark_data = []
-    for item in results[:20]:
+    for item in results[:50]:
         new_date = extract_date_from_filename(item['new_report'])
         benchmark_item = {
             'stock_code': item['stock_code'],
             'date': new_date.strftime('%Y-%m-%d'),
             'reference': item['old_report'],
-            'test': item['new_report']
+            'human_report': item['new_report']
         }
         benchmark_data.append(benchmark_item)
 

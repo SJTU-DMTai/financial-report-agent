@@ -49,7 +49,21 @@ models:
     provider: openrouter
     model_name: qwen/qwen3-32b
     base_url_env: https://openrouter.ai/api/v1
-    stream: true
+    stream: false
+    temperature: 0.5
+    top_k: 20
+
+  qwen3-235b-thinking:
+    provider: openrouter
+    model_name: qwen/qwen3-235b-a22b-thinking-2507
+    base_url_env: https://openrouter.ai/api/v1
+    stream: false
+
+  qwen3-235b-instruct:
+    provider: openrouter
+    model_name: qwen/qwen3-235b-a22b-instruct-2507
+    base_url_env: https://openrouter.ai/api/v1
+    stream: false
 
   ds-v3.2:
     provider: openrouter
@@ -108,11 +122,26 @@ models:
     base_url_env: https://ark-ap-southeast.byteintl.net/api/v3
     stream: false
 
+  deepseek-v3.2:
+    provider: ark
+    model_name: ep-20260212213128-4kwzl
+    base_url_env: https://ark-ap-southeast.byteintl.net/api/v3
+    stream: false
+    temperature: 0.5
+
+  qwen/qwen3.5:
+    provider: openrouter
+    model_name: qwen/qwen3.5-397b-a17b
+    base_url_env: https://openrouter.ai/api/v1
+    stream: false
+    temperature: 0.5
+    top_k: 20
+
 pdf_style:
   base_color: "#1F4E79"
-  body_font_path: "C:/Windows/Fonts/msyh.ttc"
-  heading_font_path: "C:/Windows/Fonts/msyhbd.ttc"
-  mono_font_path: "C:/Windows/Fonts/consola.ttf"
+  body_font_path: "/System/Library/Fonts/STHeiti Medium.ttc"
+  heading_font_path: "/System/Library/Fonts/STHeiti Medium.ttc"
+  mono_font_path: "/System/Library/Fonts/Courier.ttc"
 
 
 verify_config:

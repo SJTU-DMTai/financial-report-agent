@@ -67,12 +67,12 @@ class RefIdTools:
             print(f"[ERROR _extract_text_safe] 提取文本失败: {str(e)}")
             return ""
 
-    def extract_ref_ids(self, section_id: str) -> ToolResponse:
+    def extract_cite_ids(self, section_id: str) -> ToolResponse:
         """
-        从章节正文中解析所有引用的 material ref_id
+        从章节正文中解析所有引用的 material cite_id
         """
         try:
-            print(f"[DEBUG] 开始提取章节 {section_id} 的 ref_id")
+            print(f"[DEBUG] 开始提取章节 {section_id} 的 cite_id")
             
             # 1. 通过 ManuscriptTools 读取章节内容
             from ..tools.manuscipt_tools import ManuscriptTools
@@ -93,44 +93,44 @@ class RefIdTools:
             if not text or text.strip() == "":
                 return ToolResponse(
                     content=[TextBlock(type="text", text="章节内容为空")],
-                    metadata={"section_id": section_id, "ref_ids": []}
+                    metadata={"section_id": section_id, "cite_ids": []}
                 )
             
-            # 5. 正则匹配 ref_id
-            # 匹配 [ref_id:xxx] 或 [ref_id:xxx|描述] 格式
-            pattern = re.compile(r'\[ref_id:([^\|\]]+)(?:\|[^\]]*)?\]')
+            # 5. 正则匹配 cite_id
+            # 匹配 [^cite_id] 或 [^cite_id|描述] 格式
+            pattern = re.compile(r'\[(?:\^cite_id:|\^|cite_id:)([^\|\]]+)(?:\|[^\]]*)?\]')
             matches = pattern.findall(text)
             print(f"[DEBUG] 找到匹配: {matches}")
             
             # 去重 + 保序
             seen = set()
-            unique_ref_ids = []
+            unique_cite_ids = []
             for rid in matches:
                 if rid not in seen:
                     seen.add(rid)
-                    unique_ref_ids.append(rid)
+                    unique_cite_ids.append(rid)
             
-            print(f"[DEBUG] 去重后 ref_ids: {unique_ref_ids}")
+            print(f"[DEBUG] 去重后 cite_ids: {unique_cite_ids}")
             
             # 6. 准备输出
-            if unique_ref_ids:
-                result_text = f"在章节 {section_id} 中找到 {len(unique_ref_ids)} 个 ref_id:\n"
-                for i, ref_id in enumerate(unique_ref_ids, 1):
-                    result_text += f"{i}. {ref_id}\n"
+            if unique_cite_ids:
+                result_text = f"在章节 {section_id} 中找到 {len(unique_cite_ids)} 个 cite_id:\n"
+                for i, cite_id in enumerate(unique_cite_ids, 1):
+                    result_text += f"{i}. {cite_id}\n"
             else:
-                result_text = f"章节 {section_id} 中没有找到 ref_id 引用"
+                result_text = f"章节 {section_id} 中没有找到 cite_id 引用"
             
             return ToolResponse(
                 content=[TextBlock(type="text", text=result_text)],
                 metadata={
                     "section_id": section_id,
-                    "ref_ids": unique_ref_ids,
-                    "count": len(unique_ref_ids)
+                    "cite_ids": unique_cite_ids,
+                    "count": len(unique_cite_ids)
                 }
             )
             
         except Exception as e:
-            error_msg = f"提取 ref_id 时出错: {str(e)}"
+            error_msg = f"提取 cite_id 时出错: {str(e)}"
             print(f"[ERROR] {error_msg}")
             return ToolResponse(
                 content=[TextBlock(type="text", text=error_msg)],
@@ -156,8 +156,8 @@ class SectionStatusTools:
             section_result = manuscript_tools.read_manuscript_section(section_id)
             
             # 使用安全的文本提取方法
-            ref_id_tools = RefIdTools(self.short_term)
-            text = ref_id_tools._extract_text_safe(section_result)
+            cite_id_tools = RefIdTools(self.short_term)
+            text = cite_id_tools._extract_text_safe(section_result)
             
             print(f"[DEBUG] 检查章节内容长度: {len(text) if text else 0}")
             
@@ -192,7 +192,7 @@ class SectionStatusTools:
             else:
                 # 统计字数
                 count_result = manuscript_tools.count_manuscript_words(section_id)
-                count_text = ref_id_tools._extract_text_safe(count_result)
+                count_text = cite_id_tools._extract_text_safe(count_result)
                 
                 return ToolResponse(
                     content=[TextBlock(

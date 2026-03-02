@@ -149,7 +149,7 @@ def format_injected_block(vlm_text: str) -> str:
     """
     if not vlm_text.strip():
         return ""
-    q = ["> 【图片内容解析】"]
+    q = ["> 【画图内容要求】"]
     for ln in vlm_text.splitlines():
         ln = ln.strip()
         if ln:
@@ -180,7 +180,7 @@ async def inject_vlm_into_demo_markdown(
     """
     将图片解析结果注入到 demonstration 的 markdown 原文中：
     - 只处理在 markdown 中出现过的图片
-    - 对每个图片引用行：若下一条非空行是 > 【图片内容解析】，则认为之前已注入，跳过该图
+    - 对每个图片引用行：若下一条非空行是 > 【画图内容要求】，则认为之前已注入，跳过该图
     - 重复出现（引用次数>1）的图片直接跳过
     - 过滤头像/图标/装饰图
     """
@@ -212,7 +212,7 @@ async def inject_vlm_into_demo_markdown(
         j = i + 1
         while j < len(lines) and lines[j].strip() == "":
             j += 1
-        if j < len(lines) and lines[j].strip().startswith("> 【图片内容解析】"):
+        if j < len(lines) and lines[j].strip().startswith("> 【画图内容要求】"):
             i += 1
             continue
 

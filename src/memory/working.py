@@ -18,7 +18,7 @@ class Segment:
     template: str = None
     evidences: List[str] = None
 
-    def __str__(self, with_requirements=True, with_reference=True, with_content=True, with_evidence=True):
+    def __str__(self, with_requirements=True, with_reference=False, with_content=True, with_evidence=True):
         ctx = ""
         if with_reference and self.reference is not None:
             ref_text = "\n".join(
@@ -43,7 +43,7 @@ class Segment:
         if with_evidence and self.evidences is not None:
             evidence_text = "\n".join(
                 "\t\t- " + e.replace("\n\n", "\n")
-                for e in self.evidences
+                for e in self.evidences if e
             )
             ctx += f"\t+ **论据材料**\n{evidence_text}\n\n"
 
@@ -65,7 +65,7 @@ class Section:
         unfinished = [i for i, s in enumerate(self.segments) if not s.finished]
         # if len(unfinished) == 0:
         #     return "All finished."
-        if self.content is not None:
+        if with_content and self.content is not None:
             ctx += self.content + '\n\n'
         else:
             for i, s in enumerate(self.segments):
@@ -97,10 +97,37 @@ class Section:
                 assert c1 == c2 > 0, "Incomplete answer. You must give <evidence>, </evidence>, <template>, </template>, <requirement>, </requirement>, <topic> and </topic> for each item. Please Retry."
         contents = contents.replace("\r\n", "\n")
         print(contents, flush=True)
-        res = re.findall(r"<evidence>(.+?)(?:</evidence>)?<template>(.+?)(?:</template>)?.*<requirement>(.+?)(?:</requirement>)?.*<topic>(.+?)</topic>", contents, re.DOTALL)
+        res = re.findall(r"<evidence>(.+?)(?:</evidence>)?\s*<template>(.+?)(?:</template>)?\s*<requirement>(.+?)(?:</requirement>)?\s*<topic>(.+?)</topic>", contents, re.DOTALL)
         assert len(res) > 0, "Format error. You did not correctly warp template, evidence, requirement, or topic with the corresponding blocks and put them in order. Please Retry."
         evidences, template, requirements, topic = [s.strip() for s in res[0]]
         evidences = evidences.replace("\n", "").replace(";", "；").split("；")
         evidences = [e.strip() for e in evidences if e.strip() != ""]
+        _evidences = []
+        for e in evidences:
+            if e not in _evidences:
+                _evidences.append(e)
+        evidences = None if len(_evidences) == 0 else _evidences
         return Segment(template=template, requirements=requirements, topic=topic, evidences=evidences)
+
+    @staticmethod
+    def parse_evidence(contents: str) -> Segment:
+        keys = ['evidence', 'topic']
+        cnts = [contents.count(f"<{k}>") for k in keys]
+        # cnts += [contents.count(f"</{k}>") for k in keys]
+        for c1 in cnts:
+            for c2 in cnts:
+                assert c1 == c2 > 0, "Incomplete answer. You must give <evidence>, </evidence>, <topic> and </topic> for each item. Please Retry."
+        contents = contents.replace("\r\n", "\n")
+        print(contents, flush=True)
+        res = re.findall(r"<evidence>(.+?)(?:</evidence>)?\s*<topic>(.+?)</topic>", contents, re.DOTALL)
+        assert len(res) > 0, "Format error. You did not correctly warp evidence or topic with the corresponding blocks and put them in order. Please Retry."
+        evidences, topic = [s.strip() for s in res[0]]
+        evidences = evidences.replace("\n", "").replace(";", "；").split("；")
+        evidences = [e.strip() for e in evidences if e.strip() != ""]
+        _evidences = []
+        for e in evidences:
+            if e not in _evidences:
+                _evidences.append(e)
+        evidences = None if len(_evidences) == 0 else _evidences
+        return Segment(template=None, requirements=None, topic=topic, evidences=evidences)
 

@@ -33,15 +33,16 @@ def create_chat_model(reasoning=True):
     stream = m["stream"]
 
     temperature = m.get("temperature", 0)
-    # top_k = m.get("top_k", 1)
+    top_k = m.get("top_k", 20)
 
     if provider == "openrouter":
         return OpenAIChatModel(
-            model_name=model_name,
+            model_name=model_name if reasoning else model_name.replace("-thinking", ""),
             api_key=os.environ.get("API_KEY"),
             stream=stream,
-            client_args={"base_url": base_url},
-            generate_kwargs={"extra_body": {"reasoning": {"enabled": reasoning}},
+            client_kwargs={"base_url": base_url},
+            generate_kwargs={"extra_body": {"reasoning": {"enabled": reasoning},
+                                            "top_k": top_k },
                              "temperature": temperature},
         )
 
@@ -57,7 +58,7 @@ def create_chat_model(reasoning=True):
             model_name=model_name,
             api_key=os.environ.get("API_KEY"),
             stream=stream,
-            client_args={"base_url": base_url},
+            client_kwargs={"base_url": base_url},
             generate_kwargs={"extra_body":{"enable_thinking": reasoning}}
         )
 
@@ -66,14 +67,21 @@ def create_chat_model(reasoning=True):
             model_name=model_name,
             api_key=os.environ.get("API_KEY"),
             stream=stream,
-            client_args={"base_url": base_url},
+            client_kwargs={"base_url": base_url},
             generate_kwargs={'extra_body': {"thinking":{"type": 'enabled' if reasoning else 'disabled'}},
                              "temperature": temperature,
                              'max_tokens': 16384},
         )
 
     else:
-        raise ValueError(f"未知 provider: {provider}")
+        return OpenAIChatModel(
+            model_name=model_name,
+            api_key=os.environ.get("API_KEY"),
+            stream=stream,
+            client_kwargs={"base_url": base_url},
+            generate_kwargs={"extra_body": {"reasoning": {"enabled": reasoning, "exclude": False}},
+                             "temperature": temperature},
+        )
 
 def create_agent_formatter():
     m = cfg.get_model_cfg()
@@ -97,7 +105,7 @@ def create_agent_formatter():
     if provider in ("openrouter", "xiaomi"):
         return OpenAIChatFormatter()
     elif provider == "modelscope":
-        return PatchedOpenAIChatFormatter()
+        return OpenAIChatFormatter()
     elif provider == "ark":
         return PatchedOpenAIChatFormatter()
     elif provider == "dashscope":
@@ -126,7 +134,7 @@ def create_vlm_model():
             model_name=model_name,
             api_key = os.environ.get("VLM_API_KEY") or os.environ.get("API_KEY"),
             stream=stream,
-            client_args={"base_url": base_url},
+            client_kwargs={"base_url": base_url},
             generate_kwargs={"temperature": temperature},
         )
     elif provider in ["ark"]:
@@ -134,14 +142,14 @@ def create_vlm_model():
             model_name=model_name,
             api_key="7e3cde63-e447-4a63-9445-69c8942fdfa9",
             stream=stream,
-            client_args={"base_url": base_url},
+            client_kwargs={"base_url": base_url},
         )
     elif provider == "xiaomi":
         return OpenAIChatModel(
             model_name=model_name,
             api_key = os.environ.get("VLM_API_KEY") or os.environ.get("API_KEY"),
             stream=stream,
-            client_args={"base_url": base_url},
+            client_kwargs={"base_url": base_url},
             generate_kwargs={"temperature": temperature},
         )
 
