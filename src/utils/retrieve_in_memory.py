@@ -290,7 +290,7 @@ def retrieve_in_memory(
     short_term: ShortTermMemoryStore,
     long_term: LongTermMemoryStore,
     query: str,
-    top_k: int = 10,
+    top_k: int = 5,
     pre_k: int = 50,
     min_rule_score: float = 0.05,
     bm25_k1: float = 1.5,
@@ -303,7 +303,7 @@ def retrieve_in_memory(
       层1：规则召回（关键词/代码/简称命中），截断到 pre_k
       层2：对候选集使用 BM25 重排
 
-    返回：按 final_score 降序的候选 material 列表（含 ref_id、分数、desc 等）
+    返回：按 final_score 降序的候选 material 列表（含 cite_id、分数、desc 等）
     """
     if short_term is None:
         return []
@@ -337,13 +337,13 @@ def retrieve_in_memory(
     seen = set()
     metas_dedup: List[MaterialMeta] = []
     for m in metas:
-        key = None
+        key = m.cite_id
         try:
             m_type = getattr(m.m_type, "value", str(m.m_type))
 
             # (1) table: 前3行+后3行 hash
             if m_type == "table":
-                df = short_term.load_material(m.ref_id)
+                df = short_term.load_material(m.cite_id)
                 if isinstance(df, pd.DataFrame) and not df.empty:
                     head = df.head(3).fillna("")
                     tail = df.tail(3).fillna("")
@@ -359,8 +359,8 @@ def retrieve_in_memory(
                     key = "table:" + hashlib.md5(sig_src.encode("utf-8")).hexdigest()
 
             # (2) search_engine_*: 用首条 link 去重
-            elif isinstance(m.ref_id, str) and m.ref_id.startswith("search_engine_"):
-                data = short_term.load_material(m.ref_id)
+            elif isinstance(m.cite_id, str) and m.cite_id.startswith("search_engine_"):
+                data = short_term.load_material(m.cite_id)
                 link = ""
                 if isinstance(data, list) and data:
                     first = data[0] if isinstance(data[0], dict) else None
@@ -384,7 +384,7 @@ def retrieve_in_memory(
     
 
     time_sig = _extract_query_time_signals(query)
-    kw = _DEFAULT_KEYWORDS
+    kw = query.split()
 
     # 层1：规则召回打分并截断
     rule_scored: List[Tuple[float, MaterialMeta]] = []
@@ -402,7 +402,7 @@ def retrieve_in_memory(
 
     # 层2：BM25 仅在候选集内计算
     cand_metas = [m for _, m in candidates]
-    docs_tokens = [_tokenize_for_bm25(m.description or "") for m in cand_metas]
+    docs_tokens = [_tokenize_for_bm25(m.cite_id + "\n\n" + m.description or "") for m in cand_metas]
 
     # query tokens：把 query + entity 信息一起纳入（提升稳定性）
     q_extra = []
@@ -433,7 +433,7 @@ def retrieve_in_memory(
     #     desc_preview = (m.description[:320] + "…") if (m.description and len(m.description) > 320) else (m.description or "")
     #     row = {
     #         "rank": idx,
-    #         "ref_id": m.ref_id,
+    #         "cite_id": m.cite_id,
     #         "final_score": round(final_s, 6),
     #         "bm25_score": round(bm25_s, 6),
     #         "rule_score": round(rule_s, 6),
@@ -453,7 +453,7 @@ def retrieve_in_memory(
     out: List[Dict[str, Any]] = []
     for final_s, bm25_s, rule_s, m in final:
         out.append({
-            "ref_id": m.ref_id,
+            "cite_id": m.cite_id,
             "final_score": round(final_s, 6),
             "bm25_score": round(bm25_s, 6),
             "rule_score": round(rule_s, 6),

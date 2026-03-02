@@ -4,9 +4,9 @@ Benchmark评估流程
 - 读取benchmark.json配置
 - 配对新研报与参考研报
 - 计算structure、evidence、content三方面指标
-- 缓存reference的outline和evidence以加速后续评估
+- 缓存human_report的outline和evidence以加速后续评估
 """
-
+import argparse
 import sys
 import os
 import json
@@ -17,15 +17,14 @@ from dataclasses import dataclass, asdict, field
 from datetime import datetime
 
 from src.memory.working import Section
-from src.evaluation.extract_evidence import get_all_evidences_from_section
+from src.evaluation.extract_evidence import get_all_evidences_from_section, extract_unique_evidences_from_pdf, \
+    extract_unique_evidences
 from src.evaluation.eval_structure import num_of_segment, structure_score
 from src.evaluation.eval_evidence import evidence_coverage_and_accuracy
-from src.evaluation.eval_content import get_content_score
+from src.evaluation.eval_content import get_content_score, ContentScore
 from src.utils.instance import llm_reasoning, llm_instruct, formatter
 from src.pipelines.planning import process_pdf_to_outline
-
-CONCURRENCY_LIMIT = int(os.getenv("N_THREAD", 32))
-
+from utils import local_file
 
 
 @dataclass
@@ -34,6 +33,7 @@ class BenchmarkItem:
     stock_code: str
     date: str
     reference: str
+    human_report: str
 
 
 @dataclass
@@ -53,72 +53,16 @@ class EvidenceMetrics:
 
 
 @dataclass
-class ContentMetrics:
-    """内容指标（各维度）"""
-    insight: float
-    readability: float
-    relevance: float
-    sufficiency: float
-    average_score: float
-
-
-@dataclass
 class BenchmarkResult:
     """单个benchmark评估的完整结果"""
     stock_code: str
     date: str
-    reference_name: str
+    human_report_name: str
     new_report_name: str
     structure: StructureMetrics
     evidence: EvidenceMetrics
-    content: ContentMetrics
+    content: ContentScore
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
-
-
-async def get_reference_evidences(
-    reference_path: Path, save_dir: Path
-) -> List[str]:
-    """
-    从save_dir读取reference的evidence.json，如果不存在则提取并保存
-
-    Evidence文件命名规则: {reference_pdf_filename_without_ext}_evidences.json
-    例如: 000333_2025-10-30_均衡发展，稳中求进_evidences.json
-
-    Args:
-        reference_path: 参考PDF路径
-        save_dir: 长期记忆目录
-
-    Returns:
-        论据列表
-    """
-    # 生成evidence文件名（基于reference pdf文件名）
-    pdf_stem = reference_path.stem  # 去掉.pdf后缀
-    evidence_filename = f"{pdf_stem}_evidences.json"
-    evidence_path = save_dir / evidence_filename
-
-    # 尝试直接读取
-    if evidence_path.exists():
-        print(f"    - 检测到已有的evidences，加载: {evidence_filename}")
-        evidences = json.loads(evidence_path.read_text(encoding="utf-8"))
-        return evidences
-
-    # 如果不存在，需要先获取reference的Section，然后提取evidence
-    print(f"    - Evidence不存在，正在提取: {evidence_filename}")
-
-    # 处理PDF生成Section
-    ref_section = await process_pdf_to_outline(reference_path, save_dir,
-                                               llm_reasoning, llm_instruct, formatter)
-
-    # 提取evidences
-    evidences = get_all_evidences_from_section(ref_section)
-
-    # 保存到long_term_dir
-    evidence_path.write_text(
-        json.dumps(evidences, ensure_ascii=False, indent=2),
-        encoding="utf-8"
-    )
-    print(f"    -> Evidence已保存到: {evidence_path}")
-    return evidences
 
 
 async def evaluate_structure(new_section: Section) -> StructureMetrics:
@@ -137,27 +81,13 @@ async def evaluate_structure(new_section: Section) -> StructureMetrics:
     )
 
 
-async def evaluate_evidence(
-    new_section: Section, ref_section: Section, ref_evidences: Optional[List[str]] = None
-) -> EvidenceMetrics:
-    """评估论据指标（使用提供的evidences或从ref_section提取）"""
-    print(f"    - 正在评估evidence指标...")
-
-    coverage_ratio, accuracy_ratio = await evidence_coverage_and_accuracy(
-        new_section, ref_section, ref_evidences
-    )
-    return EvidenceMetrics(
-        coverage_ratio=coverage_ratio, accuracy_ratio=accuracy_ratio
-    )
-
-
-async def evaluate_content(new_section: Section) -> ContentMetrics:
+async def evaluate_content(new_section: Section) -> ContentScore:
     """
     评估内容指标，对每个section应用score_content
     取各维度所有segment的平均值
 
     改进：
-    - 异步并发收集所有segment的评分，最大并发数由CONCURRENCY_LIMIT控制
+    - 异步并发收集所有segment的评分
     - 更好的错误处理和日志记录
     - 更高效的平均值计算
     """
@@ -184,26 +114,18 @@ async def evaluate_content(new_section: Section) -> ContentMetrics:
     # 初始化维度scores
     dimension_scores = {
         "comprehensiveness": [],
-        "insight": [],
+        "insightfulness": [],
         "readability": [],
         "relevance": [],
         "sufficiency": [],
     }
-
-    # 创建信号量控制并发数
-    semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
-
-    async def score_with_limit(content: str, topic: str):
-        """使用信号量包装 get_content_score 调用"""
-        async with semaphore:
-            return await get_content_score(llm_reasoning, formatter, content, topic)
 
     # 异步评估所有segment
     print(f"      - 共需评估 {len(segment_tasks)} 个segment...")
 
     # 使用 asyncio.gather 并发执行所有评分任务
     segment_scores = await asyncio.gather(
-        *[score_with_limit(content, topic) for content, topic in segment_tasks],
+        *[get_content_score(llm_reasoning, formatter, content, topic) for content, topic in segment_tasks],
         return_exceptions=True
     )
 
@@ -227,18 +149,15 @@ async def evaluate_content(new_section: Section) -> ContentMetrics:
         for dim, scores in dimension_scores.items()
     }
 
-    overall_avg = sum(avg_scores.values()) / len(avg_scores) if avg_scores else 0.0
-
     print(f"      - 成功评估 {evaluated_count}/{len(segment_tasks)} 个segment")
     if failed_count > 0:
         print(f"      - 评估失败 {failed_count} 个segment")
 
-    return ContentMetrics(
-        insight=avg_scores.get("insight", 0.0),
-        readability=avg_scores.get("readability", 0.0),
-        relevance=avg_scores.get("relevance", 0.0),
-        sufficiency=avg_scores.get("sufficiency", 0.0),
-        average_score=overall_avg,
+    return ContentScore(
+        insightfulness=avg_scores["insightfulness"],
+        readability=avg_scores["readability"],
+        relevance=avg_scores["relevance"],
+        sufficiency=avg_scores["sufficiency"],
     )
 
 
@@ -246,17 +165,17 @@ async def benchmark_single_pair(
     stock_code: str,
     date: str,
     new_report_path: Path,
-    reference_path: Path,
+    human_report_path: Path,
     long_term_dir: Path,
 ) -> Optional[BenchmarkResult]:
     """
-    评估一对(new_report, reference)
+    评估一对(new_report, human_report)
 
     Args:
         stock_code: 股票代码
         date: 报告日期
         new_report_path: 新研报PDF路径
-        reference_path: 参考研报PDF路径
+        human_report_path: 参考研报PDF路径
         long_term_dir: 长期记忆目录
 
     Returns:
@@ -268,20 +187,21 @@ async def benchmark_single_pair(
     print(f"{'='*60}")
 
     async def _do_evaluation():
-        save_dir = long_term_dir / "demonstration"
-        print(f"[1/4] 处理参考报告...")
-        ref_section = await process_pdf_to_outline(reference_path, save_dir, llm_reasoning, llm_instruct, formatter)
+        print(f"[1/4] 处理报告...")
+        new_section = await process_pdf_to_outline(new_report_path, new_report_path.parent, llm_reasoning,
+                                                   llm_instruct, formatter, only_evidence=True)
+        human_section = await process_pdf_to_outline(human_report_path, long_term_dir / 'evidences', llm_reasoning,
+                                                     llm_instruct, formatter, only_evidence=True)
 
-        # 获取reference的evidences（从long_term_dir读取或新提取）
-        ref_evidences = await get_reference_evidences(reference_path, save_dir)
-
-        print(f"[2/4] 处理新报告...")
-        print(f"  -> {new_report_path.name}")
-        new_section = await process_pdf_to_outline(new_report_path, new_report_path, llm_reasoning, llm_instruct, formatter)
+        print(f"[2/4] 抽取论据...")
+        new_evidences = await extract_unique_evidences(new_section,
+                                                       new_report_path.parent / f"{new_report_path.name}_evidences.json")
+        human_evidences = await extract_unique_evidences(human_section,
+                                                         long_term_dir / 'evidences' / f"{human_report_path.name}_evidences.json")
 
         print(f"[3/4] 评估指标...")
         structure_metrics = await evaluate_structure(new_section)
-        evidence_metrics = await evaluate_evidence(new_section, ref_section, ref_evidences)
+        coverage_ratio, accuracy_ratio = await evidence_coverage_and_accuracy(new_evidences, human_evidences)
         content_metrics = await evaluate_content(new_section)
 
         # 组装结果
@@ -289,10 +209,12 @@ async def benchmark_single_pair(
         result = BenchmarkResult(
             stock_code=stock_code,
             date=date,
-            reference_name=reference_path.name,
+            human_report_name=human_report_path.name,
             new_report_name=new_report_path.name,
             structure=structure_metrics,
-            evidence=evidence_metrics,
+            evidence=EvidenceMetrics(
+                coverage_ratio=coverage_ratio, accuracy_ratio=accuracy_ratio
+            ),
             content=content_metrics,
         )
 
@@ -367,23 +289,23 @@ async def run_benchmark(
     for idx, item in enumerate(benchmark_items, 1):
         print(f"[{idx}/{len(benchmark_items)}] 处理 {item.stock_code} ({item.date})")
 
-        # 查找reference报告
-        ref_path = new_reports_dir.parent / item.reference
+        # 查找human_report报告
+        ref_path = local_file.DEMO_DIR / item.human_report
         if not ref_path.exists():
-            print(f"  ✗ 参考报告不存在: {item.reference}")
+            print(f"  ✗ 参考报告不存在: {item.human_report}")
             NONE += 1
-            failure_reasons[f"reference_NONE_{item.stock_code}"] = item.reference
+            failure_reasons[f"human_report_NONE_{item.stock_code}"] = item.human_report
             continue
 
         # 查找新报告
         matching_files = list(
-            new_reports_dir.glob(f"{item.stock_code}_{item.date}_*.pdf")
+            new_reports_dir.glob(f"{item.stock_code}_{item.date}*.md")
         )
 
         if not matching_files:
-            print(f"  ✗ 未找到新报告（搜索模式: {item.stock_code}_{item.date}_*.pdf）")
+            print(f"  ✗ 未找到新报告（搜索模式: {item.stock_code}_{item.date}*.md）")
             NONE += 1
-            failure_reasons[f"new_report_NONE_{item.stock_code}"] = f"{item.stock_code}_{item.date}_*.pdf"
+            failure_reasons[f"new_report_NONE_{item.stock_code}"] = f"{item.stock_code}_{item.date}*.md"
             continue
 
         if len(matching_files) > 1:
@@ -396,7 +318,7 @@ async def run_benchmark(
             stock_code=item.stock_code,
             date=item.date,
             new_report_path=new_report_path,
-            reference_path=ref_path,
+            human_report_path=ref_path,
             long_term_dir=long_term_dir,
         )
 
@@ -500,15 +422,15 @@ def print_benchmark_summary(results_json_path: Path) -> None:
 # ==============================================================================
 
 
-async def main():
+async def main(model_name):
     """示例使用"""
     PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
     # 配置路径
-    benchmark_json = PROJECT_ROOT / "data" / "benchmark.json"
-    new_reports = PROJECT_ROOT / "data" / "output" / "reports"
+    benchmark_json = PROJECT_ROOT / "benchmark.json"
+    new_reports = PROJECT_ROOT / "data" / "output" / "reports" / model_name
     long_term = PROJECT_ROOT / "data" / "memory" / "long_term"
-    output = PROJECT_ROOT / "data" / "benchmark_results.json"
+    output = PROJECT_ROOT / "data" / "output" / f"{model_name}_benchmark_results.json"
 
     # 执行评估
     summary = await run_benchmark(
@@ -524,145 +446,14 @@ async def main():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="运行 benchmark 测试，支持并行执行")
+    parser.add_argument(
+        "--model_name",
+        type=str,
+        default='qwen3-32b',
+    )
+    args = parser.parse_args()
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-    asyncio.run(main())
-
-
-# ==============================================================================
-# 使用说明
-# ==============================================================================
-#
-# 【目录结构要求】
-#
-# financial-report-agent/
-#   ├── data/
-#   │   ├── benchmark.json              # 配置文件（需要创建）
-#   │   ├── output/
-#   │   │   └── reports/                # 新研报目录
-#   │   │       ├── 000333_2025-10-30_xxx.pdf
-#   │   │       ├── 002594_2025-06-24_xxx.pdf
-#   │   │       └── ...
-#   │   └── memory/
-#   │       └── long_term/              # 长期记忆目录
-#   └── {reference_reports_parent}/     # 参考报告所在目录（与new_reports同级）
-#       ├── 000333_2025-10-30_均衡发展，稳中求进.pdf
-#       ├── 002594_2024-06-24_首次覆盖报告：新能源车领军企业，剑指海外市场.pdf
-#       └── ...
-#
-# 【benchmark.json 示例】
-#
-# [
-#   {
-#     "stock_code": "000333",
-#     "date": "2025-10-30",
-#     "reference": "000333_2025-10-30_均衡发展，稳中求进.pdf"
-#   },
-#   {
-#     "stock_code": "002594",
-#     "date": "2025-06-24",
-#     "reference": "002594_2024-06-24_首次覆盖报告：新能源车领军企业，剑指海外市场.pdf"
-#   }
-# ]
-#
-# 【Python调用示例】
-#
-# import asyncio
-# from pathlib import Path
-# from src.evaluation.benchmark import run_benchmark, print_benchmark_summary
-#
-# async def main():
-#     PROJECT_ROOT = Path(".")
-#
-#     summary = await run_benchmark(
-#         benchmark_json_path=PROJECT_ROOT / "data" / "benchmark.json",
-#         new_reports_dir=PROJECT_ROOT / "data" / "output" / "reports",
-#         long_term_dir=PROJECT_ROOT / "data" / "memory" / "long_term",
-#         output_path=PROJECT_ROOT / "data" / "benchmark_results.json",
-#         cache_dir=PROJECT_ROOT / "data" / "benchmark_cache",
-#     )
-#
-#     if summary:
-#         print_benchmark_summary(PROJECT_ROOT / "data" / "benchmark_results.json")
-#
-# asyncio.run(main())
-#
-# 【输出结果说明】
-#
-# 运行完成后会生成两个输出：
-#
-# 1. benchmark_results.json (详细结果JSON)
-#    {
-#      "total": 2,
-#      "successful": 2,
-#      "failed": 0,
-#      "results": [
-#        {
-#          "stock_code": "000333",
-#          "date": "2025-10-30",
-#          "reference_name": "000333_2025-10-30_均衡发展，稳中求进.pdf",
-#          "new_report_name": "000333_2025-10-30_生成研报.pdf",
-#          "structure": {
-#            "total_segments": 45,
-#            "avg_segments_per_section": 5.2
-#          },
-#          "evidence": {
-#            "coverage_ratio": 0.85,      # 覆盖率
-#            "accuracy_ratio": 0.92       # 准确率
-#          },
-#          "content": {
-#            "comprehensiveness": 7.8,     # 信息覆盖度
-#            "insight": 8.1,               # 分析深度
-#            "readability": 8.5,           # 可读性
-#            "relevance": 8.2,             # 相关性
-#            "sufficiency": 7.9,           # 充分性
-#            "average_score": 8.1          # 平均分
-#          },
-#          "timestamp": "2026-01-29T10:30:45.123456"
-#        },
-#        ...
-#      ],
-#      "timestamp": "2026-01-29T10:35:22.456789"
-#    }
-#
-# 2. benchmark_cache/ (缓存目录，自动创建)
-#    benchmark_cache/
-#      ├── 000333_2025-10-30/
-#      │   ├── outline.md         # 参考报告的outline markdown
-#      │   ├── evidences.json     # 参考报告的unique evidences
-#      │   └── metadata.json      # 缓存元数据
-#      └── 002594_2025-06-24/
-#          ├── outline.md
-#          ├── evidences.json
-#          └── metadata.json
-#
-# 【评估指标说明】
-#
-# Structure (结构) - 评估报告的组织结构
-#   - total_segments: 新报告中所有segment的总数
-#   - avg_segments_per_section: 每个section平均包含的segment数
-#
-# Evidence (论据) - 评估论据的覆盖和准确性
-#   - coverage_ratio: 新报告覆盖的参考报告论据比例（0-1）
-#   - accuracy_ratio: 新报告论据与参考报告一致的比例（0-1）
-#
-# Content (内容) - 评估生成内容的各维度质量（1-10分制）
-#   - comprehensiveness: 信息覆盖的广度和深度
-#   - insight: 分析见解的深度和价值
-#   - readability: 结构清晰度、语言流畅度等
-#   - relevance: 内容与主题的相关性
-#   - sufficiency: 论据的充分性和支撑力
-#   - average_score: 以上5个维度的平均分
-#
-# 【缓存优化】
-#
-# 系统会自动缓存参考报告的：
-#   - outline markdown: 用于快速查阅报告结构
-#   - unique evidences: 用于加速论据评估
-#   - metadata: 缓存的创建时间、PDF大小等
-#
-# 如果同一个参考报告被多次评估，第二次及以后的评估会大幅加速。
-# 删除cache目录可强制重新计算所有缓存。
-#
-# ==============================================================================
+    asyncio.run(main(args.model_name))

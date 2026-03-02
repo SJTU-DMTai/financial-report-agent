@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 class Config:
-    def __init__(self, path: str | None = None):
+    def __init__(self, path: str | None = None, llm_name: str = None, vlm_name: str = None):
         """
         加载顺序：
         1. 显式传入 path
@@ -29,6 +29,9 @@ class Config:
             self.data = yaml.safe_load(f)
 
         self._config_path = str(config_path)
+        models = self.data["models"]
+        self.llm_name = llm_name or os.getenv("LLM_NAME") or models["default"]
+        self.vlm_name = vlm_name or os.getenv("VLM_NAME") or models.get("vlm_default") or models.get("default")
 
     def get_pdf_style(self) -> dict:
         style = self.data.get("pdf_style", {}) or {}
@@ -38,12 +41,12 @@ class Config:
          
     def get_model_cfg(self):
         models = self.data["models"]
-        model_id = os.getenv('LLM_NAME', models["default"])
+        model_id = self.llm_name
         return models[model_id]
     
     def get_vlm_cfg(self):
         models = self.data["models"]
-        model_id = os.getenv("VLM_NAME") or models.get("vlm_default") or models.get("default")
+        model_id = self.vlm_name
         if model_id is None:
             raise KeyError("未配置 models.vlm_default/models.default，且未设置 VLM_NAME")
         return models[model_id]

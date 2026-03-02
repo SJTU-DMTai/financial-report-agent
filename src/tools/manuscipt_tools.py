@@ -86,7 +86,7 @@ class ManuscriptTools:
             )
 
         markdown = re.sub(
-            r"\[ref_id:[^\]]*\]",  # 从 [ref_id: 开始到下一个 ] 结束
+            r"\[(?:\^cite_id:|\^|cite_id:)[^\]]*\]",  # 从 [^cite_id: 开始到下一个 ] 结束
             "",
             markdown,
         )

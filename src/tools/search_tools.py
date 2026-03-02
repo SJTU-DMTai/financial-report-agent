@@ -80,7 +80,7 @@ class SearchTools:
 
     #searcher agent使用
     async def search_engine(self, query: str, max_results: int = 10) -> ToolResponse:
-        """进行 Web 搜索并返回搜索结果预览，并保存每一条搜索结果到Material当中，返回每一条Material标识ref_id。
+        """进行 Web 搜索并返回搜索结果预览，并保存每一条搜索结果到Material当中，返回每一条Material标识cite_id。
         - 调用搜索引擎，根据给定关键词返回若干条过滤后的搜索结果，适合获取大致信息或者是新闻等。
         - 如果需要完整、可核查的原文内容，或者是结构化数据请调用其他工具。
         Args:
@@ -95,7 +95,7 @@ class SearchTools:
             max_results = 10
 
         candidates: List[Dict[str, Any]] = []
-        item_ref_ids: List[str] = []
+        item_cite_ids: List[str] = []
         try:
             ddgs = DDGS()
             # 1) 调用 DuckDuckGo 搜索接口
@@ -178,10 +178,10 @@ class SearchTools:
                 if len(candidates) > max_results:
                     candidates = candidates[:max_results]
 
-                pre_ref_id = f"search_engine_{int(time_module.time())}"
+                pre_cite_id = f"search_engine_{int(time_module.time())}"
                 
                 for i, item in enumerate(candidates):
-                    item_ref_id = pre_ref_id + f"{i:03d}"
+                    item_cite_id = pre_cite_id + f"{i:03d}"
                     published_date = item.get("published_date")
                     time = {"point": published_date} if published_date else None
                     
@@ -205,7 +205,7 @@ class SearchTools:
                         domain = domain[4:]
 
                     self.short_term.save_material(
-                        ref_id=item_ref_id,
+                        cite_id=item_cite_id,
                         content=[candidates[i]],
                         time=time,
                         entity=entity,
@@ -213,7 +213,7 @@ class SearchTools:
                         # source=f"Search Engine 搜索「{query}」的结果"
                         source=f"Search Engine 搜索结果（来源：{domain}）"
                     )
-                    item_ref_ids.append(item_ref_id)
+                    item_cite_ids.append(item_cite_id)
 
 
                 # 以下仅仅为调试使用 （便于看到单次搜索内容）
@@ -224,7 +224,7 @@ class SearchTools:
                 #     "items": [
                 #         {
                 #             "index": i,
-                #             "ref_id": item_ref_ids[i],
+                #             "cite_id": item_cite_ids[i],
                 #             "title": candidates[i].get("title", ""),
                 #             "link": candidates[i].get("link", ""),
                 #             "description": candidates[i].get("page_description", ""),
@@ -235,7 +235,7 @@ class SearchTools:
                 #     ],
                 # }
                 # self.short_term.save_material(
-                #     ref_id=pre_ref_id,
+                #     cite_id=pre_cite_id,
                 #     content=index_payload,
                 #     description=f"Search Engine 搜索「{query}」的结果",
                 #     source="Search Engine",
@@ -255,7 +255,7 @@ class SearchTools:
 
                     lines.append(f"第{i}条. {title}")
                     lines.append(f"   链接: {link}")
-                    lines.append(f"   Material 已写入 ref_id='{item_ref_ids[i]}'（JSON 格式）")
+                    lines.append(f"   Material 已写入 cite_id='{item_cite_ids[i]}'（JSON 格式）")
                     lines.append(f"   搜索摘要: {desc}")
 
                     page_text_i = item.get("page_text", "")
@@ -304,9 +304,13 @@ class SearchTools:
             )
             await searcher.memory.clear()
             res = await call_agent_with_retry(searcher,msg)
-            
             return ToolResponse(
-                content=res.content,
+                content=[
+                    TextBlock(
+                        type="text",
+                        text=res.get_text_content(),
+                    ),
+                ],
                 metadata={"from_agent": searcher.name},
             )
 
@@ -316,7 +320,7 @@ class SearchTools:
 def get_retrieve_fn(short_term:ShortTermMemoryStore, long_term:LongTermMemoryStore) -> Callable[str]:
     async def retrieve_local_material(query: str) -> ToolResponse:
         """
-        在已保存的本地材料中按关键词搜索和query相关的材料，返回部分预览内容。
+        在已保存的本地材料中按关键词（BM25算法）搜索和query最相关的前若干条材料，返回cite_id、来源、简短描述和部分预览内容。
         Args:
             query (str):
                 搜索内容。
@@ -335,22 +339,74 @@ def get_retrieve_fn(short_term:ShortTermMemoryStore, long_term:LongTermMemorySto
             ]
 
             for i, meta in enumerate(candidates, 1):
-                ref_id = meta.get("ref_id", "")
+                cite_id = meta.get("cite_id", "")
                 desc = meta.get("description", "")
                 src = meta.get("source", "")
-                lines.append(f"第{i}条材料：Material 的唯一标识 ref_id={ref_id}")
+                m_type = meta.get("m_type", "")
+                lines.append(f"<material>\ncite_id={cite_id}")
                 if desc:
-                    lines.append(f"    简短描述: {desc}")
+                    lines.append(f"简短描述: {desc}")
                 if src:
-                    lines.append(f"    来源: {src}")
+                    lines.append(f"来源: {src}")
 
-                preview = short_term.load_material_preview(ref_id=ref_id)
-                if preview:
-                    lines.append("    部分内容预览：")
-                    for ln in preview.splitlines():
-                        lines.append(f"    {ln}")
 
-                lines.append("")  # 空行分隔
+                try:
+                    content = short_term.load_material(cite_id) if short_term is not None else None
+                except Exception:
+                    content = None
+
+                # (A) 搜索引擎：search_engine_*
+                if isinstance(cite_id, str) and cite_id.startswith("search_engine_"):
+                    page_text_preview = ""
+                    # if isinstance(content, list) and content:
+                    #     first = content[0] if isinstance(content[0], dict) else None
+                    #     if isinstance(first, dict):
+                    #         page_text = first.get("page_text") or ""
+                    #         page_text_preview = page_text[:100]
+                    # preview = short_term.load_material_preview(cite_id=cite_id)
+                    # if preview:
+                    #     lines.append("    部分内容预览：")
+                    #     lines.append(f"   {page_text_preview}")
+
+
+                # (B) 计算结果：calculate_*
+                elif isinstance(cite_id, str) and cite_id.startswith("calculate_"):
+                    params = None
+                    result = None
+                    if isinstance(content, list) and content:
+                        first = content[0] if isinstance(content[0], dict) else None
+                        if isinstance(first, dict):
+                            params = first.get("parameters", None)
+                            result = first.get("result", None)
+                    if params:
+                        lines.append(f"计算参数: {params}")
+                    lines.append(f"计算结果: {result}")
+
+                # # (C) 表格：非前缀类时，用 m_type==table 给出前几行
+                # elif m_type == "table":
+                #     preview = ""
+                #     if isinstance(content, pd.DataFrame) and not content.empty:
+                #         # df_preview = content.head(3).copy()
+                #         # MAX_CELL_CHARS = 32
+                #         # SUFFIX = "…[内容过长，已截断]"
+                #         # for col in df_preview.columns:
+                #         #     df_preview[col] = df_preview[col].apply(
+                #         #         lambda v: (
+                #         #             v[:MAX_CELL_CHARS] + SUFFIX
+                #         #             if isinstance(v, str) and len(v) > MAX_CELL_CHARS
+                #         #             else v
+                #         #         )
+                #         #     )
+                #         #
+                #         # preview = df_preview.to_csv(index=False)
+                #         preview = ', '.join(content.columns)
+                #
+                #     lines.append("    列名:")
+                #     lines.append(preview)
+                #     for ln in preview.splitlines():
+                #         lines.append(f"    {ln}")
+
+                lines.append("</material>\n")  # 空行分隔
 
             lines.append("如果以上无合适材料，请重新调用工具获取数据。")
             res = "\n".join(lines)

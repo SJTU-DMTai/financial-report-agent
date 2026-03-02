@@ -11,9 +11,10 @@ from agentscope.formatter import FormatterBase
 from agentscope.message import Msg
 from agentscope.model import ChatModelBase
 
-from prompt import prompt_dict
-from utils.call_with_retry import call_chatbot_with_retry
+from src.prompt import prompt_dict
+from src.utils.call_with_retry import call_chatbot_with_retry
 from src.memory.working import Segment
+from pydantic import BaseModel
 
 WRITING_DIMENSIONS = {
     "comprehensiveness": "信息覆盖的广度和深度",
@@ -22,6 +23,12 @@ WRITING_DIMENSIONS = {
     "relevance": "各论据、数据和陈述与论点主题的相关性",
     "sufficiency": "所有论据的充分性和支撑力"
 }
+
+class ContentScore(BaseModel):
+    insightfulness: int | float
+    readability: int | float
+    relevance: int | float
+    sufficiency: int | float
 
 async def get_content_score(model: ChatModelBase, formatter: FormatterBase, content: str, topic: str) -> Dict[str, int]:
     """
@@ -33,18 +40,16 @@ async def get_content_score(model: ChatModelBase, formatter: FormatterBase, cont
     Returns:
         Dict[str, int]: 包含四个维度的评分
     """
-
     # 准备评估提示
-    user_prompt = f"""
-    # 评估任务
-    **研报片段主题:** {topic}
-    **研报片段内容:**
-    {content}
-    """
+    user_prompt = f"""# 评估任务
+**研报片段主题:** {topic}
+**研报片段内容:**
+{content}
+
+请你仔细思考分析后进行打分。"""
     scores = await call_chatbot_with_retry(model, formatter,
                                            prompt_dict['eval_content'], user_prompt,
-                                           hook=_extract_score,
-                                           handle_hook_exceptions=(AssertionError,))
+                                           structured_model=ContentScore)
     return scores
 
 def _extract_score(text: str) -> Dict[str, int]:
@@ -60,7 +65,19 @@ def _extract_score(text: str) -> Dict[str, int]:
         scores_dict[dimension] = int(score_match.group(1))
     return scores_dict
 
-async def evaluate_segment(model: ChatModelBase, formatter: FormatterBase, segment: Segment) -> Tuple[Dict[str, int], str]:
+class Comparison(BaseModel):
+    analysis: str
+    score: int
+    suggestion: Optional[str] = None
+
+class SegmentScore(BaseModel):
+    comprehensiveness: Comparison
+    insightfulness: Comparison
+    readability: Comparison
+    relevance: Comparison
+    sufficiency: Comparison
+
+async def evaluate_segment(model: ChatModelBase, formatter: FormatterBase, segment: Segment) -> str:
     """
     评估给定的 Segment。
 
@@ -85,19 +102,31 @@ async def evaluate_segment(model: ChatModelBase, formatter: FormatterBase, segme
 **AI Agent生成的研报片段（待评估）:**
 {segment.content}
 """
-    scores, suggestions = await call_chatbot_with_retry(model, formatter,
-                                                        prompt_dict['compare_content_with_ref'], user_prompt,
-                                                        hook=_extract_score_suggestion,
-                                                        handle_hook_exceptions=(AssertionError, ))
-    return scores, suggestions
+    def _derive_suggestions(scores_dict: dict) -> str:
+        suggestions_dict = {}
+        for dimension in SegmentScore.model_fields:
+            # 提取该维度的建议（仅当分数为 -1 时）
+            if int(scores_dict[dimension]['score']) < 0:
+                suggestion_text = scores_dict[dimension]['suggestion']
+                if suggestion_text:
+                    suggestions_dict[dimension] = suggestion_text
+        suggestions = suggestions_dict if any(suggestions_dict.values()) and len(suggestions_dict) > 0 else None
+        if suggestions:
+            suggestions = "\n".join([f"- {WRITING_DIMENSIONS.get(dim, dim)}不足，建议: {suggestion}"
+                                     for dim, suggestion in suggestions.items() if suggestions])
+        return suggestions
+    return await call_chatbot_with_retry(model, formatter,
+                                         prompt_dict['compare_content_with_ref'], user_prompt,
+                                         hook=_extract_score_suggestion,
+                                         handle_hook_exceptions=(AssertionError, KeyError))
 
-def _extract_score_suggestion(text: str) -> Tuple[Dict[str, int], str | None]:
+def _extract_score_suggestion(text: str) -> str:
     scores_dict = {}
     suggestions_dict = {}
 
     dimensions = [
         "comprehensiveness",
-        "insight",
+        "insightfulness",
         "readability",
         "relevance",
         "sufficiency"
@@ -129,4 +158,4 @@ def _extract_score_suggestion(text: str) -> Tuple[Dict[str, int], str | None]:
     if suggestions:
         suggestions = "\n".join([f"- {WRITING_DIMENSIONS.get(dim, dim)}不足，建议: {suggestion}"
                                  for dim, suggestion in suggestions.items() if suggestions])
-    return scores_dict, suggestions
+    return suggestions

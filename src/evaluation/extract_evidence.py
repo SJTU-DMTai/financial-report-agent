@@ -10,14 +10,14 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from filelock import FileLock
 
-from pipelines.planning import process_pdf_to_outline
+from src.pipelines.planning import process_pdf_to_outline
 from src.memory.working import Section
-from utils.call_with_retry import call_chatbot_with_retry
-from utils.local_file import DEMO_DIR
-from src.utils.instance import llm_reasoning, llm_instruct, formatter
+from src.utils.call_with_retry import call_chatbot_with_retry
+from src.utils.local_file import DEMO_DIR
+from src.utils.instance import llm_reasoning, llm_instruct, formatter, cfg
 
 # 最大并发数限制
-MAX_CONCURRENT = 4
+MAX_CONCURRENT = 8
 
 
 def extract_text_from_content(content) -> str:
@@ -52,7 +52,7 @@ def get_all_evidences_from_section(section: Section) -> List[str]:
             evidences.extend(get_all_evidences_from_section(subsection))
     return evidences
 
-async def extract_unique_evidences_from_pdf(pdf_path: Path, save_dir: Path) -> List[str]:
+async def extract_unique_evidences_from_pdf(pdf_path: Path, save_dir: Path, only_evidence: bool = False) -> List[str]:
     pdf_stem = pdf_path.stem  # 去掉.pdf后缀
     evidence_filename = f"{pdf_stem}_evidences.json"
     evidence_path = save_dir / evidence_filename
@@ -63,8 +63,11 @@ async def extract_unique_evidences_from_pdf(pdf_path: Path, save_dir: Path) -> L
         return evidences
 
     print(f"\n-> 开始提取并清洗文件: {pdf_path.name}", flush=True)
-    manuscript = await process_pdf_to_outline(pdf_path, save_dir, llm_reasoning, llm_instruct, formatter)
+    manuscript = await process_pdf_to_outline(pdf_path, save_dir, llm_reasoning, llm_instruct, formatter, only_evidence)
     print(f"  - 从 {pdf_path.name} 的结构中提取论据...")
+    return await extract_unique_evidences(manuscript, evidence_path)
+
+async def extract_unique_evidences(manuscript: Section, evidence_path: Path) -> List[str]:
     evidences = get_all_evidences_from_section(manuscript)
     print(f"  - 对 {len(evidences)} 条原始论据进行语义去重...")
 
@@ -163,7 +166,7 @@ R_6, S_2
         match_map_by_id = {}
         answer_match = re.search(r"<ANSWER>(.+)</?ANSWER>", response, re.DOTALL)
         assert answer_match is not None, "输出格式错误：未找到<ANSWER>和</ANSWER>标签包裹的内容。"
-        answer_content = answer_match.group(1).strip()
+        answer_content = answer_match.group(1).strip().replace('-', '_')
         for line in answer_content.splitlines():
             if "NONE" in line or "无" in line:
                 continue
@@ -252,7 +255,7 @@ EV_3,s2_s3_p2
         locations_map = {}
         answer_match = re.search(r"<ANSWER>(.+)</?ANSWER>", response, re.DOTALL)
         assert answer_match is not None, "输出格式错误：未找到<ANSWER>和</ANSWER>标签包裹的内容。"
-        answer_content = answer_match.group(1).strip()
+        answer_content = answer_match.group(1).strip().replace('-', '_')
         for line in answer_content.splitlines():
             parts = line.strip().split(",", 1)
             if len(parts) < 2:
@@ -413,8 +416,12 @@ async def process_single_stock_pair(stock_code: str, old_path: Path, new_path: P
             assert len(common_evidences_texts) > 0, "!!! 未找到任何共通论据"
             if common_evidences_texts:
                 print(f"\n  --- 开始为 {len(common_evidences_texts)} 条共通论据定位 ---", flush=True)
-                outline_old_path = long_term_dir / "demonstration" / f"{old_path.stem}_outline.json"
-                outline_new_path = long_term_dir / "demonstration" / f"{new_path.stem}_outline.json"
+                outline_old_path = long_term_dir / "demonstration" / cfg.llm_name / f"{old_path.stem}_outline.json"
+                outline_new_path = long_term_dir / "demonstration" / cfg.llm_name / f"{new_path.stem}_outline.json"
+                if not outline_new_path.exists():
+                    outline_new_path = long_term_dir / "demonstration" / f"{new_path.stem}_outline.json"
+                if not outline_old_path.exists():
+                    outline_old_path = long_term_dir / "demonstration" / f"{old_path.stem}_outline.json"
 
                 outline_old_content = outline_old_path.read_text(encoding='utf-8')
                 outline_new_content = outline_new_path.read_text(encoding='utf-8')
@@ -465,8 +472,8 @@ async def process_single_stock_pair(stock_code: str, old_path: Path, new_path: P
 
 def _process_single_stock_pair(stock_code: str, old_path: Path, new_path: Path,
                                     long_term_dir: Path, output_json_path: Path,
-                                    results_cache: Dict) -> Optional[Dict]:
-    return asyncio.run(process_single_stock_pair(stock_code, old_path, new_path, long_term_dir, output_json_path, results_cache))
+                                    results_cache: Dict, semaphore) -> Optional[Dict]:
+    return asyncio.run(process_single_stock_pair(stock_code, old_path, new_path, long_term_dir, output_json_path, results_cache, semaphore))
 
 async def main():
     PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -488,31 +495,22 @@ async def main():
 
     print(f"\n--- 步骤 2: 开始批量处理研报对（并发模式，最大并发数: {MAX_CONCURRENT}）... ---")
 
-    def _completed(k):
-        cached_data = results_cache.get(k)
-        if cached_data and "common_evidences" in cached_data:
-            first_common = cached_data["common_evidences"][0] if cached_data["common_evidences"] else {}
-            if isinstance(first_common, dict) and "location_old" in first_common:
-                print(f"--- 股票 {k} 已被完整处理（包括定位），完全跳过 ---", flush=True)
-                return True
-        return False
-
     # 创建信号量，用于限制并发数
     semaphore = asyncio.Semaphore(MAX_CONCURRENT)
 
-    results = []
-    for stock_code, old_path, new_path in report_pairs:
-        if not _completed((stock_code, old_path.name, new_path.name)):
-            res = await process_single_stock_pair(stock_code, old_path, new_path, long_term_dir, output_json_path, results_cache, semaphore)
-            results.append(res)
+    # results = []
+    # for stock_code, old_path, new_path in report_pairs:
+    #     if (stock_code, old_path.name, new_path.name) not in results_cache:
+    #         res = await process_single_stock_pair(stock_code, old_path, new_path, long_term_dir, output_json_path, results_cache, semaphore)
+    #         results.append(res)
 
-    # # 创建并发任务列表
-    # tasks = [
-    #     process_single_stock_pair(stock_code, old_path, new_path, long_term_dir, output_json_path, results_cache, semaphore)
-    #     for stock_code, old_path, new_path in report_pairs if not _completed((stock_code, old_path.name, new_path.name))
-    # ]
-    # # 并发执行所有任务
-    # results = await asyncio.gather(*tasks, return_exceptions=True)
+    # 创建并发任务列表
+    tasks = [
+        process_single_stock_pair(stock_code, old_path, new_path, long_term_dir, output_json_path, results_cache, semaphore)
+        for stock_code, old_path, new_path in report_pairs if not (stock_code, old_path.name, new_path.name) not in results_cache
+    ]
+    # 并发执行所有任务
+    results = await asyncio.gather(*tasks, return_exceptions=True)
 
     # # 使用线程池并发执行所有任务
     # results = []
@@ -522,9 +520,9 @@ async def main():
     #         executor.submit(
     #             _process_single_stock_pair,
     #             stock_code, old_path, new_path,
-    #             long_term_dir, output_json_path, results_cache
+    #             long_term_dir, output_json_path, results_cache, semaphore
     #         ): stock_code
-    #         for stock_code, old_path, new_path in report_pairs if not _completed((stock_code, old_path.name, new_path.name))
+    #         for stock_code, old_path, new_path in report_pairs if (stock_code, old_path.name, new_path.name) not in results_cache
     #     }
     #     # 收集结果
     #     for future in as_completed(futures):
