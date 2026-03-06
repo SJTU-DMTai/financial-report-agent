@@ -40,7 +40,7 @@ import config
 import asyncio
 
 from src.utils.call_with_retry import call_chatbot_with_retry
-from src.utils.instance import llm_reasoning, llm_instruct, formatter, cfg
+from src.utils.instance import llm_reasoning, llm_instruct, llm_judge, formatter, cfg
 
 # 用于保护并发写入文件的锁
 SAVE_LOCK = asyncio.Lock()
@@ -107,7 +107,7 @@ async def process_single_segment(segment: Segment, task_desc, demo_date, agent_f
 
         for _ in range(5):
             await searcher.memory.clear()
-            suggestions = await evaluate_segment(create_chat_model(reasoning=False),
+            suggestions = await evaluate_segment(llm_judge,
                                                  create_agent_formatter(), segment)
             if suggestions is None:
                 break
