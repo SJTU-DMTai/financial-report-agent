@@ -21,10 +21,10 @@ import config
 cfg = config.Config()
 
 
-def create_chat_model(reasoning=True):
+def create_chat_model(reasoning=True, model_cfg=None):
     """统一创建一个聊天模型实例。
     """
-    m = cfg.get_model_cfg()
+    m = model_cfg or cfg.get_model_cfg()
 
     provider = m["provider"]
     model_name = m["model_name"]
@@ -159,4 +159,5 @@ def create_vlm_model():
 
 llm_reasoning = create_chat_model()
 llm_instruct = create_chat_model(reasoning=False)
+llm_judge = create_chat_model(model_cfg=config.Config(llm_name=os.getenv("LLM_JUDGE", None)).get_model_cfg())
 formatter = create_agent_formatter()
