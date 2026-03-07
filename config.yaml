@@ -153,6 +153,14 @@ models:
     temperature: 0.5
     top_k: 20
 
+  kalm-qwen3.5-flash:
+    provider: kalm
+    model_name: 18955
+    base_url_env: http://mmdcadamsminiserverproxy.office.polaris/service/8907/v1
+    stream: false
+    temperature: 0.5
+    top_k: 20
+
 pdf_style:
   base_color: "#1F4E79"
   body_font_path: "/System/Library/Fonts/STHeiti Medium.ttc"

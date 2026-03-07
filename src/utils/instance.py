@@ -14,6 +14,7 @@ from agentscope.model import (
     DashScopeChatModel,
     OpenAIChatModel
 )
+from openai import OpenAI
 
 from src.utils.format import PatchedOpenAIChatFormatter
 import config
@@ -69,6 +70,26 @@ def create_chat_model(reasoning=True, model_cfg=None):
             stream=stream,
             client_kwargs={"base_url": base_url},
             generate_kwargs={'extra_body': {"thinking":{"type": 'enabled' if reasoning else 'disabled'}},
+                             "temperature": temperature,
+                             'max_tokens': 16384},
+        )
+
+    elif provider in ["kalm"]:
+
+        client = OpenAI(api_key=os.environ.get("API_KEY"), base_url=base_url)
+        headers = {"ADAMS-BUSINESS": "3939",
+                   "Adams-Platform-User": os.environ.get("USER_NAME"),
+                   "Adams-User-Token": os.environ.get("USER_TOKEN"),
+                   "ADAMS-PREDICT-LIMIT-S": "300",  # 配置前端超时为300秒
+                   }
+        model_name = client.models.list(extra_headers=headers).data[0].id  # 获取服务对应的模型名
+        return OpenAIChatModel(
+            model_name=model_name,
+            api_key=os.environ.get("API_KEY"),
+            stream=stream,
+            client_kwargs={"base_url": base_url},
+            generate_kwargs={'extra_body': {"thinking":{"type": 'enabled' if reasoning else 'disabled'}},
+                             "extra_headers": headers,
                              "temperature": temperature,
                              'max_tokens': 16384},
         )
@@ -153,11 +174,30 @@ def create_vlm_model():
             generate_kwargs={"temperature": temperature},
         )
 
+    elif provider in ["kalm"]:
+
+        client = OpenAI(api_key=os.environ.get("API_KEY"), base_url=base_url)
+        headers = {"ADAMS-BUSINESS": "deep-research",
+                   "Adams-Platform-User": os.environ.get("USER_NAME"),
+                   "Adams-User-Token": os.environ.get("USER_TOKEN"),
+                   "ADAMS-PREDICT-LIMIT-S": "300",  # 配置前端超时为300秒
+                   }
+        model_name = client.models.list(extra_headers=headers).data[0].id  # 获取服务对应的模型名
+        return OpenAIChatModel(
+            model_name=model_name,
+            api_key=os.environ.get("API_KEY"),
+            stream=stream,
+            client_kwargs={"base_url": base_url},
+            generate_kwargs={"extra_headers": headers,
+                             "temperature": temperature,
+                             'max_tokens': 16384},
+        )
+
     else:
         raise ValueError(f"未知 provider: {provider}")
 
 
 llm_reasoning = create_chat_model()
 llm_instruct = create_chat_model(reasoning=False)
-llm_judge = create_chat_model(model_cfg=config.Config(llm_name=os.getenv("LLM_JUDGE", None)).get_model_cfg())
+llm_judge = create_chat_model(model_cfg=config.Config(llm_name=os.getenv("JUDGE_NAME", None)).get_model_cfg())
 formatter = create_agent_formatter()

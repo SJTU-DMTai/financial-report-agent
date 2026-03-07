@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 import asyncio
+from dotenv import load_dotenv
+load_dotenv()
 
 from src.pipelines.workflow_concurrent import run_workflow
 # from src.pipelines.workflow import run_workflow
