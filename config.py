@@ -52,8 +52,12 @@ class Config:
         return models[model_id]
 
     def get_max_verify_rounds(self) -> int:
-        verify_config = self.data["verify_config"]
-        return verify_config["max_verify_rounds"]
+        verify_config = self.data.get("verify_config", {}) or {}
+        return int(verify_config.get("max_verify_rounds", 2))
+    
+    def is_multi_source_verification_enabled(self) -> bool:
+        verify_config = self.data.get("verify_config", {}) or {}
+        return bool(verify_config.get("enable_multi_source_verification", False))
     
     def get_wkhtmltopdf_path(self) -> str | None:
         wkhtmltopdf_cfg = self.data.get("wkhtmltopdf_path", {})

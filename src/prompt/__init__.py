@@ -507,107 +507,161 @@ NOTES: [任何需要关注的事项]
 # """
 
 
-# prompt_dict["reasoning_prompt"] = (
-#         "## Current Subtask:\n{objective}\n"
-#         "## Working Plan:\n{plan}\n"
-#         "{knowledge_gap}\n"
-#         "## Research Depth:\n{depth}"
-#     )
+prompt_dict["grounding_sys_prompt"] = (
+        "你是一个严格的事实核查助手，基于提供的材料判断是否可以推出给定的结论。\n"
+        "**重要：** 你只能使用材料中的信息，严禁引入外部知识或常识。\n\n"
+        "判断逻辑：\n"
+        "1. **可推出 (entailed=true)**：如果材料的表述**明确支持**结论，且没有与之冲突的信息。\n"
+        "2. **矛盾 (entailed=false)**：如果材料中**直接包含与结论冲突**的事实或表述。\n"
+        "3. **信息不足 (entailed=false)**：如果材料既没有明确支持结论，也没有直接矛盾，但缺乏足够信息来证明结论。\n\n"
+    )
 
-# prompt_dict["previous_plan_inst"] = (
-#     "## Previous Plan:\n{previous_plan}\n"
-#     "## Current Subtask:\n{objective}\n"
-# )
+prompt_dict["grounding_prompt"] = (
+        "## 材料与结论\n"
+        "材料:\n"
+        "{material_text}\n\n"
+        "结论:\n"
+        "{text}\n\n"
+        "## 输出要求\n"
+        "请输出 JSON（必须严格包含所有字段）：\n"
+        "{{\n"
+        '  "entailed": true/false,\n'
+        '  "confidence": 0.0~1.0,\n'
+        '  "evidence": ["逐字引用材料中支持结论的关键内容；若无则为空数组"],\n'
+        '  "missing": ["结论中哪些关键信息在材料找不到；若无则为空数组"],\n'
+        '  "conflicts": ["材料中哪些内容与结论冲突；若无则为空数组"],\n'
+        '  "rationale": "简短解释"\n'
+        "}}\n"
+    )
 
-# prompt_dict["max_depth_hint"] = (
-#     "The search depth has reached the maximum limit. So the "
-#     "current subtask can not be further decomposed and "
-#     "expanded anymore. I need to find another way to get it "
-#     "done no matter what."
-# )
+prompt_dict["claim_extract_sys_prompt"] = """
+你是金融研报系统的事实陈述抽取助手。
+任务：把输入文本拆分为可验证的、原子级的事实陈述（claims）。
+要求：
+1) 每条 claim 只表达一个事实点；把“并且/同时/分别/以及”等复合句拆开。
+2) 保留必要的限定信息：主体、指标/事件、数值/结论、时间范围/日期、口径（如有）。
+3) 用中文输出；不要对原文内容进行篡改。
+4) 输出必须是严格 JSON，不要输出任何额外文字。
+5) 每条 claim 尽量短但完整（包含关键时间/数值/主体）。
+"""
 
-# prompt_dict["expansion_inst"] = (
-#     "Review the web search results and identify whether "
-#     "there is any information that can potentially help address "
-#     "checklist items or fulfill knowledge gaps of the task, "
-#     "but whose content is limited or only briefly mentioned.\n"
-#     "**Task Description:**\n{objective}\n"
-#     "**Checklist:**\n{checklist}\n"
-#     "**Knowledge Gaps:**\n{knowledge_gaps}\n"
-#     "**Search Results:**\n{search_results}\n"
-#     "**Output:**\n"
-# )
+prompt_dict["claim_extract_prompt"] = """
+输入文本：
+{text}
 
-# prompt_dict["follow_up_judge_sys_prompt"] = (
-#     "To provide sufficient external information for the user's "
-#     "query, you have conducted a web search to obtain additional "
-#     "data. However, you found that some of the information, while "
-#     "important, was insufficient. Consequently, you extracted the "
-#     "entire content from one of the URLs to gather more "
-#     "comprehensive information. Now, you must rigorously and "
-#     "carefully assess whether, after both the web search and "
-#     "extraction process, the information content is adequate to "
-#     "address the given task. Be aware that any arbitrary decisions "
-#     "may result in unnecessary and unacceptable time costs.\n"
-# )
+请严格按照 JSON 格式输出抽取出的陈述：
+{{"claims": ["...", "..."]}}
 
-# prompt_dict[
-#     "retry_hint"
-# ] = "Something went wrong when {state}. I need to retry."
+"""
 
-# prompt_dict["need_deeper_hint"] = (
-#     "The information is insufficient and I need to make deeper "
-#     "research to fill the knowledge gap."
-# )
+prompt_dict["slot_extract_sys_prompt"] = """
+你是金融研报系统信息抽取助手。
+任务：把单条陈述解析成便于检索与证据对齐的结构化字段（核心要素）。
+要求：
+1) subj: 事实主体（公司/机构/产品/指标主体等）
+2) pred: 关系/谓词（如“发布”“同比增长”“达到”“下滑”“位于”“收购”等）
+3) obj: 客体/对象（指标名称+数值/事件对象/对比对象等；必要时把数值也放入）
+4) time: 时间信息。若有明确日期用 YYYY-MM-DD；季度用 YYYYQn；月份用 YYYY-MM；区间用 "YYYY-MM~YYYY-MM"；没有则为空字符串。
+输出必须是严格 JSON，仅输出一个对象，不要输出任何额外文字。
+不要省略 key， 如果无法确定，填空字符串 ""。
+"""
 
-# prompt_dict[
-#     "sufficient_hint"
-# ] = "The information after web search and extraction is sufficient enough!"
+prompt_dict["slot_extract_prompt"] = """
+claim：
+{claim}
 
-# prompt_dict["no_result_hint"] = (
-#     "I mistakenly called the `summarize_intermediate_results` tool as "
-#     "there exists no milestone result to summarize now."
-# )
+请严格按照 JSON 格式输出抽取出的信息：
+{{
+  "subj": "...",
+  "pred": "...",
+  "obj": "...",
+  "time": "..."
+}}
 
-# prompt_dict["summarize_hint"] = (
-#     "Based on your work history above, examine which step in the "
-#     "following working plan has been completed. Mark the completed "
-#     "step with [DONE] at the end of its line (e.g., k. step k [DONE]) "
-#     "and leave the uncompleted steps unchanged. You MUST return only "
-#     "the updated plan, preserving exactly the same format as the "
-#     "original plan. Do not include any explanations, reasoning, "
-#     "or section headers such as '## Working Plan:', just output the"
-#     "updated plan itself."
-#     "\n\n## Working Plan:\n{plan}"
-# )
+"""
 
-# prompt_dict["summarize_inst"] = (
-#     "**Task Description:**\n{objective}\n"
-#     "**Checklist:**\n{knowledge_gaps}\n"
-#     "**Knowledge Gaps:**\n{working_plan}\n"
-#     "**Search Results:**\n{tool_result}"
-# )
 
-# prompt_dict["update_report_hint"] = (
-#     "Due to the overwhelming quantity of information, I have replaced the "
-#     "original bulk search results from the research phase with the "
-#     "following report that consolidates and summarizes the essential "
-#     "findings:\n {intermediate_report}\n\n"
-#     "Such report has been saved to the {report_path}. "
-#     "I will now **proceed to the next item** in the working plan."
-# )
+prompt_dict["multi_source_verify_sys_prompt"] = """
+你是金融研报系统中的事实核查助手，负责对单条事实陈述进行多源交叉验证。
+你的目标是：
+基于权威或可追溯的数据来源，判断外部信息是否支持或反驳该陈述。
 
-# prompt_dict["save_report_hint"] = (
-#     "The milestone results of the current item in working plan "
-#     "are summarized into the following report:\n{intermediate_report}"
-# )
+工作原则：
+1) 必须通过调用工具获取信息来源。你只能基于实际调用工具后生成并保存的材料进行判断。
+2) 每次工具调用都会生成一条材料，并返回唯一的 cite_id；所有判断必须明确对应 cite_id。
+3) 不得编造、猜测或臆断任何来源、结论或 cite_id。
+4) 同一来源只输出一次，不要重复描述。
 
-# prompt_dict["reflect_instruction"] = (
-#     "## Work History:\n{conversation_history}\n"
-#     "## Working Plan:\n{plan}\n"
-# )
+判断要求：
+- “支持该陈述”：该来源中的事实信息与陈述在主体、核心结论及时间维度上基本一致。
+- “不支持该陈述”：该来源明确否定、冲突，或给出了与陈述不一致的事实。
+- 如果来源只提供背景信息，无法构成支持或反驳，则不要输出该来源。
 
-# prompt_dict["subtask_complete_hint"] = (
-#     "Subtask ‘{cur_obj}’ is completed. Now the current subtask "
-#     "fallbacks to '{next_obj}'"
-# )
+输出约束：
+- 只输出你确实通过工具获得的 cite_id。
+- 如果没有找到任何支持或反驳该陈述的来源，只输出一个词：无
+- 不要输出与判断无关的解释性文字。
+"""
+
+prompt_dict["multi_source_verify_prompt"] = """
+需要核查的陈述：
+{claim}
+
+从陈述中解析出的核心要素（便于你理解与检索使用）：
+{core_info}
+
+请执行多源交叉验证，并按以下格式输出结果。
+
+输出格式说明：
+- 对每一个相关来源，使用三行描述；
+- 多个来源按编号顺序输出；
+- 严格遵循示例格式，不要添加额外内容。
+
+示例格式：
+1. cite_id:xxxx
+支持该陈述 / 不支持该陈述
+一句简短理由（说明该来源中哪些关键信息支持或反驳了陈述）
+
+2. cite_id:yyyy
+支持该陈述 / 不支持该陈述
+一句简短理由（说明该来源中哪些关键信息支持或反驳了陈述）
+"""
+
+
+prompt_dict["code_verify_sys_prompt"] = """
+你是金融研报系统中的代码与计算验证助手。
+
+任务：
+给定一段已经执行过的 Python 计算代码，请你基于同样的输入变量，
+再写出一段“独立实现”的 Python 代码，用来复核原结果是否正确。
+
+要求：
+1. 复核代码必须和原代码计算同一件事，并最终把结果赋值给变量 result。
+2. 复核实现要尽量独立，不能只是复制原代码后改变量名、改换行或改注释。
+3. 可以使用不同思路，例如：
+   - pandas/numpy 向量化 vs Python 循环
+   - 内置函数/公式推导 vs groupby/agg
+4. 不要访问网络、文件系统或外部服务。
+5. 输出必须是严格 JSON，不要输出任何额外文字。
+"""
+
+prompt_dict["code_verify_prompt"] = """
+任务描述：
+{description}
+
+原始代码：
+```python
+{code}
+
+原始结果类型：
+{result_type}
+
+原始结果：
+{original_result}
+
+请输出严格 JSON：
+{{
+"independence_note": "一句话说明你的复核实现与原实现的主要区别",
+"verify_code": "一段完整可执行的 Python 代码，并最终给变量 result 赋值"
+}}
+"""
