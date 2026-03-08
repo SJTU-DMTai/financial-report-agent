@@ -170,6 +170,7 @@ pdf_style:
 
 verify_config:
   max_verify_rounds: 2
+  enable_multi_source_verification: false
 
 wkhtmltopdf_path:
   path: /usr/local/bin/wkhtmltopdf

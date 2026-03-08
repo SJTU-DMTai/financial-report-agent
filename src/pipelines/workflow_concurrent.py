@@ -35,12 +35,11 @@ from src.utils.parse_verdict import parse_verifier_verdict
 from src.utils.call_with_retry import call_agent_with_retry
 from src.utils.get_entity_info import get_entity_info
 from src.utils.file_converter import markdown_to_sections
+from src.utils.multi_source_verification import verify_segment_content
 from src.utils.local_file import STOCK_REPORT_PATHS
 import config
-import asyncio
-
 from src.utils.call_with_retry import call_chatbot_with_retry
-from src.utils.instance import llm_reasoning, llm_instruct, llm_judge, formatter, cfg
+from src.utils.instance import llm_reasoning, llm_instruct, llm_judge, formatter
 
 # 用于保护并发写入文件的锁
 SAVE_LOCK = asyncio.Lock()
@@ -73,13 +72,20 @@ async def search_evidence(query, known_evidence, task_desc, demo_date, segment_t
         traceback.print_exc()
         raise  # Re-raise the exception to propagate it properly
 
-async def process_single_segment(segment: Segment, task_desc, demo_date, agent_factory):
+async def process_single_segment(segment: Segment,
+                                 task_desc,
+                                 demo_date,
+                                 agent_factory,
+                                 short_term,
+                                 long_term,
+                                 multi_source_verification_enabled,
+                                 max_verify_rounds):
     """并发处理单个 Segment：包含搜索和写作"""
     print(f"[{time.strftime('%H:%M:%S')}]  ✍️ 开始写作: {segment.topic[:15]}...", flush=True)
 
     searcher, writer = agent_factory()
     for i, evidence in enumerate(segment.evidences):
-        if '【画图内容要求】' in segment.reference:
+        if segment.reference and '【画图内容要求】' in segment.reference:
             continue
         evidences = [e for e in segment.evidences[:i] if e]
         known_evidence = ("当前已搜索到的论据：\n" + "\n".join(evidences) + "\n") if evidences else ""
@@ -120,6 +126,30 @@ async def process_single_segment(segment: Segment, task_desc, demo_date, agent_f
                 segment.content = draft_msg.get_text_content()
                 print(f"[Writer] Segment finished: {segment.topic}")
                 print(segment.content, flush=True)
+        
+        if multi_source_verification_enabled:
+            for _ in range(max_verify_rounds):
+                verify_issues = await verify_segment_content(segment, short_term, long_term)
+                if not verify_issues:
+                    break
+
+                verify_feedback = "\n\n".join(verify_issues[:8])  # 防止过长
+                writer_input = Msg(
+                    name="user",
+                    content=(
+                        "以下是对你当前段落的事实核验问题，请你只修正文，不要输出修改说明：\n\n"
+                        f"{verify_feedback}\n\n"
+                        "要求：\n"
+                        "1. 保留能被材料支持的内容；\n"
+                        "2. 删除、降级或改写无法被支持的断言；\n"
+                        "3. 补上正确的 cite_id 引用；\n"
+                        "4. 不要新增无来源数字。"
+                    ),
+                    role="user",
+                )
+                draft_msg = await call_agent_with_retry(writer, writer_input)
+                segment.content = draft_msg.get_text_content()
+
         await writer.memory.clear()
         segment.finished = True
         print(f"[{time.strftime('%H:%M:%S')}] ✅ 完成写作: {segment.topic[:15]}.", flush=True)
@@ -128,7 +158,8 @@ async def process_single_segment(segment: Segment, task_desc, demo_date, agent_f
         raise e
 
 async def process_section_concurrently(section: Section, parent_id, task_desc, demo_date, cur_date,
-                                       agent_factory, stock_symbol, output_pth, manuscript_root):
+                                       agent_factory, stock_symbol, output_pth, manuscript_root, short_term, long_term,
+                                       multi_source_verification_enabled, max_verify_rounds):
     """递归并发处理章节"""
 
     # 1. 处理子章节 (递归) - 优先启动子任务
@@ -139,7 +170,7 @@ async def process_section_concurrently(section: Section, parent_id, task_desc, d
             # 递归调用
             sub_tasks.append(process_section_concurrently(
                 subsection, section_id, task_desc, demo_date, cur_date, agent_factory,
-                stock_symbol, output_pth, manuscript_root
+                stock_symbol, output_pth, manuscript_root, short_term, long_term, multi_source_verification_enabled, max_verify_rounds
             ))
 
     # 2. 处理当前章节的 Segments (并发)
@@ -150,7 +181,7 @@ async def process_section_concurrently(section: Section, parent_id, task_desc, d
             if segment.finished:
                 continue
             seg_tasks.append(process_single_segment(
-                segment, task_desc, demo_date, agent_factory
+                segment, task_desc, demo_date, agent_factory, short_term, long_term, multi_source_verification_enabled, max_verify_rounds
             ))
 
     # 3. 等待所有 Segments 完成
@@ -231,9 +262,11 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
         base_dir=long_term_dir,
     )
 
-
+    cfg = config.Config()
     planner_cfg = cfg.get_planner_cfg()
     use_demo = planner_cfg.get("use_demonstration", False)
+    multi_source_verification_enabled = cfg.is_multi_source_verification_enabled()
+    max_verify_rounds = cfg.get_max_verify_rounds()
 
     entity = get_entity_info(long_term, task_desc)
     if not entity or not entity.get("code"):
@@ -269,7 +302,7 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
             cite_id=f"{demo_date}_reference_report",
             content=(long_term_dir / "demonstration" / f"{demo_pdf_path.stem}.md").read_text(encoding='utf-8'),
             description=demo_pdf_path.name,
-            source="AKshare API:CNINFO",
+            source="",
             entity=entity,
             time={"point": str(demo_date)},
         )
@@ -343,7 +376,11 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
             agent_factory=create_searcher_writer,
             stock_symbol=stock_symbol,
             output_pth=output_pth,
-            manuscript_root=manuscript  # 用于在深层递归中保存完整的 json
+            manuscript_root=manuscript,  # 用于在深层递归中保存完整的 json
+            short_term=short_term,
+            long_term=long_term,
+            multi_source_verification_enabled=multi_source_verification_enabled,
+            max_verify_rounds=max_verify_rounds,
         )
 
     markdown_text = section_to_markdown(manuscript)

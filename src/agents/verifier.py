@@ -7,6 +7,7 @@ from agentscope.formatter import DashScopeChatFormatter
 from agentscope.tool import Toolkit
 
 from ..tools.material_tools import MaterialTools
+from ..tools.search_tools import SearchTools
 from ..memory.short_term import ShortTermMemoryStore
 from ..memory.long_term import LongTermMemoryStore
 from ..prompt import prompt_dict
@@ -25,6 +26,7 @@ def create_verifier_agent(
     - logic: 逻辑与语言
     - quality: 写作水平与参考对比
     - final: 最终质量审核
+    - multi_source: 多源交叉验证
     """
     sys_prompt_map = {
         "numeric": prompt_dict['verifier_numeric_prompt'],
@@ -32,6 +34,7 @@ def create_verifier_agent(
         "logic": prompt_dict['verifier_logic_prompt'],
         "quality": prompt_dict['verifier_quality_prompt'],
         "final": prompt_dict['verifier_final_check'],
+        "multi_source": prompt_dict['multi_source_verify_sys_prompt'],
     }
 
     sys_prompt = sys_prompt_map.get(verifier_type)
@@ -62,8 +65,24 @@ def build_verifier_toolkit(
     # toolkit.register_tool_function(manuscript_tools.read_manuscript_section)
     # toolkit.register_tool_function(manuscript_tools.count_manuscript_words)
     material_tools = MaterialTools(short_term=short_term, long_term=long_term)
+    search_tools = SearchTools(short_term=short_term, long_term=long_term)
     toolkit.register_tool_function(material_tools.read_material)
 
+    if multi_source_verification:
+        toolkit.register_tool_function(material_tools.fetch_history_price_material)
+        toolkit.register_tool_function(material_tools.fetch_stock_news_material)
+        toolkit.register_tool_function(material_tools.fetch_disclosure_material)
+        toolkit.register_tool_function(material_tools.fetch_balance_sheet_material)
+        toolkit.register_tool_function(material_tools.fetch_profit_table_material)
+        toolkit.register_tool_function(material_tools.fetch_cashflow_table_material)
+        toolkit.register_tool_function(material_tools.fetch_top10_float_shareholders_material)
+        toolkit.register_tool_function(material_tools.fetch_top10_shareholders_material)
+        toolkit.register_tool_function(material_tools.fetch_main_shareholders_material)
+        toolkit.register_tool_function(material_tools.fetch_shareholder_count_detail_material)
+        toolkit.register_tool_function(material_tools.fetch_shareholder_change_material)
+        toolkit.register_tool_function(material_tools.fetch_business_description_material)
+        toolkit.register_tool_function(material_tools.fetch_business_composition_material)
+        toolkit.register_tool_function(search_tools.search_engine)
     return toolkit
 
 
