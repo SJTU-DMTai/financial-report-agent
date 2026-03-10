@@ -2,6 +2,7 @@
 import asyncio
 import os
 import random
+import time
 import traceback
 import warnings
 from copy import deepcopy
@@ -65,6 +66,8 @@ async def call_chatbot_with_retry(
                     model.model_name = list(endpoints - exceed_tpm_models)[0]
                     print("切换为", model.model_name, flush=True)
             except Exception as e:
+                if "服务限流，请稍后重试":
+                    time.sleep(60)
                 warnings.warn(f"[调用 ChatModel 失败] 第 {_} 次尝试异常：{type(e).__name__}: {e}，")
                 continue
             if res:

@@ -22,7 +22,7 @@ from src.evaluation.extract_evidence import get_all_evidences_from_section, extr
 from src.evaluation.eval_structure import num_of_segment, structure_score
 from src.evaluation.eval_evidence import evidence_coverage_and_accuracy
 from src.evaluation.eval_content import get_content_score, ContentScore
-from src.utils.instance import llm_reasoning, llm_instruct, formatter
+from src.utils.instance import llm_reasoning, llm_instruct, formatter, cfg
 from src.pipelines.planning import process_pdf_to_outline
 from utils import local_file
 
@@ -186,42 +186,70 @@ async def benchmark_single_pair(
     print(f"正在评估: {stock_code} ({date})")
     print(f"{'='*60}")
 
-    async def _do_evaluation():
-        print(f"[1/4] 处理报告...")
-        new_section = await process_pdf_to_outline(new_report_path, new_report_path.parent, llm_reasoning,
-                                                   llm_instruct, formatter, only_evidence=True)
-        human_section = await process_pdf_to_outline(human_report_path, long_term_dir / 'evidences', llm_reasoning,
-                                                     llm_instruct, formatter, only_evidence=True)
+    print(f"[1/4] 处理报告...")
+    new_section = await process_pdf_to_outline(new_report_path, new_report_path.parent, llm_reasoning,
+                                               llm_instruct, formatter, only_evidence=True)
+    human_section = await process_pdf_to_outline(human_report_path, long_term_dir / cfg.llm, llm_reasoning,
+                                                 llm_instruct, formatter, only_evidence=True)
 
-        print(f"[2/4] 抽取论据...")
-        new_evidences = await extract_unique_evidences(new_section,
-                                                       new_report_path.parent / f"{new_report_path.name}_evidences.json")
-        human_evidences = await extract_unique_evidences(human_section,
-                                                         long_term_dir / 'evidences' / f"{human_report_path.name}_evidences.json")
+    print(f"[2/4] 抽取论据...")
+    new_evidences = await extract_unique_evidences(new_section,
+                                                   new_report_path.parent / f"{new_report_path.stem}_evidences.json")
+    human_evidences = await extract_unique_evidences(human_section,
+                                                     long_term_dir / 'evidences' / f"{human_report_path.stem}_evidences.json")
 
-        print(f"[3/4] 评估指标...")
-        structure_metrics = await evaluate_structure(new_section)
-        coverage_ratio, accuracy_ratio = await evidence_coverage_and_accuracy(new_evidences, human_evidences)
-        content_metrics = await evaluate_content(new_section)
+    print(f"[3/4] 评估指标...")
+    structure_metrics = await evaluate_structure(new_section)
+    coverage_ratio, accuracy_ratio = await evidence_coverage_and_accuracy(new_evidences, human_evidences, new_section, human_section)
+    content_metrics = await evaluate_content(new_section)
 
-        # 组装结果
-        print(f"[4/4] 汇总结果...")
-        result = BenchmarkResult(
-            stock_code=stock_code,
-            date=date,
-            human_report_name=human_report_path.name,
-            new_report_name=new_report_path.name,
-            structure=structure_metrics,
-            evidence=EvidenceMetrics(
-                coverage_ratio=coverage_ratio, accuracy_ratio=accuracy_ratio
-            ),
-            content=content_metrics,
-        )
+    # 组装结果
+    print(f"[4/4] 汇总结果...")
+    result = BenchmarkResult(
+        stock_code=stock_code,
+        date=date,
+        human_report_name=human_report_path.name,
+        new_report_name=new_report_path.name,
+        structure=structure_metrics,
+        evidence=EvidenceMetrics(
+            coverage_ratio=coverage_ratio, accuracy_ratio=accuracy_ratio
+        ),
+        content=content_metrics,
+    )
+    print(f"✓ 评估完成")
+    print(result)
+    return result
 
-        print(f"✓ 评估完成")
-        return result
 
-    return await _do_evaluation()
+def _load_existing_results(output_path: Path) -> Tuple[List[dict], set]:
+    """加载已有的评估结果，返回结果列表和已完成的 (stock_code, date) 集合"""
+    if not output_path.exists():
+        return [], set()
+    try:
+        with open(output_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        existing_results = data.get("results", [])
+        completed = {(r["stock_code"], r["date"]) for r in existing_results}
+        print(f"✓ 读取已有结果: {len(completed)} 条，将跳过已完成的任务")
+        return existing_results, completed
+    except Exception as e:
+        print(f"! 读取已有结果失败 ({e})，从头开始")
+        return [], set()
+
+
+def _save_incremental(output_path: Path, results: List[dict], total: int,
+                      successful: int, failed: int, none_count: int) -> None:
+    """将当前结果增量保存到文件"""
+    summary = {
+        "total": total,
+        "successful": successful,
+        "failed": failed,
+        "NONE": none_count,
+        "results": results,
+        "timestamp": datetime.now().isoformat(),
+    }
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(summary, f, ensure_ascii=False, indent=2)
 
 
 async def run_benchmark(
@@ -231,7 +259,10 @@ async def run_benchmark(
     output_path: Optional[Path] = None,
 ) -> Optional[Dict[str, any]]:
     """
-    执行完整的benchmark评估流程
+    执行完整的benchmark评估流程，支持断点继续。
+
+    每次评估完一个任务后立即将结果追加保存到 output_path；
+    启动时自动检测已保存的结果并跳过已完成的条目。
 
     Args:
         benchmark_json_path: benchmark.json路径
@@ -262,7 +293,6 @@ async def run_benchmark(
         print(f"✗ 错误: 长期记忆目录不存在: {long_term_dir}")
         return None
 
-
     # 设置输出路径
     if output_path is None:
         output_path = benchmark_json_path.parent / "benchmark_results.json"
@@ -278,21 +308,33 @@ async def run_benchmark(
 
     benchmark_items = [BenchmarkItem(**item) for item in benchmark_data]
 
-    print(f"✓ 读取了 {len(benchmark_items)} 个benchmark条目\n")
+    print(f"✓ 读取了 {len(benchmark_items)} 个benchmark条目")
 
-    results = []
-    successful = 0
+    # 加载已有结果，支持断点继续
+    existing_result_dicts, completed_keys = _load_existing_results(output_path)
+    results: List[dict] = list(existing_result_dicts)
+    successful = len([r for r in results if True])  # 已成功数即已保存结果数
+    successful = len(results)
     failed = 0
     NONE = 0
     failure_reasons = {}
 
     for idx, item in enumerate(benchmark_items, 1):
+        key = (item.stock_code, item.date)
+
+        # 跳过已完成的条目
+        if key in completed_keys:
+            print(f"[{idx}/{len(benchmark_items)}] 跳过 {item.stock_code} ({item.date})（已有结果）")
+            continue
+
         print(f"[{idx}/{len(benchmark_items)}] 处理 {item.stock_code} ({item.date})")
 
         # 查找human_report报告
         ref_path = local_file.DEMO_DIR / item.human_report
         if not ref_path.exists():
-            print(f"  ✗ 参考报告不存在: {item.human_report}")
+            ref_path = long_term_dir / "demonstration" / item.human_report.replace('.pdf', '.md')
+        if not ref_path.exists():
+            print(f"  ✗ 参考报告不存在: {ref_path}")
             NONE += 1
             failure_reasons[f"human_report_NONE_{item.stock_code}"] = item.human_report
             continue
@@ -323,14 +365,18 @@ async def run_benchmark(
         )
 
         if result:
-            results.append(result)
+            result_dict = asdict(result)
+            results.append(result_dict)
+            completed_keys.add(key)
             successful += 1
+            # 立即保存，支持断点继续
+            _save_incremental(output_path, results, len(benchmark_items), successful, failed, NONE)
+            print(f"  ✓ 结果已追加保存到: {output_path}")
         else:
             failed += 1
             failure_reasons[f"evaluation_failed_{item.stock_code}"] = "评估过程中失败"
 
-
-    # 保存结果
+    # 最终汇总输出
     print(f"\n{'='*60}")
     print(f"评估完成！")
     print(f"{'='*60}")
@@ -344,20 +390,18 @@ async def run_benchmark(
         for reason, detail in failure_reasons.items():
             print(f"  - {reason}: {detail}")
 
-    summary = {
+    # 最终写入完整 summary
+    _save_incremental(output_path, results, len(benchmark_items), successful, failed, NONE)
+    print(f"\n✓ 结果已保存到: {output_path}")
+
+    return {
         "total": len(benchmark_items),
         "successful": successful,
         "failed": failed,
         "NONE": NONE,
-        "results": [asdict(r) for r in results],
+        "results": results,
         "timestamp": datetime.now().isoformat(),
     }
-
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(summary, f, ensure_ascii=False, indent=2)
-    print(f"\n✓ 结果已保存到: {output_path}")
-
-    return summary
 
 
 # ==============================================================================
@@ -450,7 +494,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model_name",
         type=str,
-        default='qwen3-32b',
+        default='qwen3.5-flash',
     )
     args = parser.parse_args()
     if sys.platform == "win32":

@@ -4,9 +4,6 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='gbk', errors='replace')
-
 def extract_date_from_filename(filename):
     """Extract date from report filename in format: XXXXXX_YYYY-MM-DD_title.pdf"""
     try:

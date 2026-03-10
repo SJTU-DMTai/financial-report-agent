@@ -52,13 +52,13 @@ async def search_evidence(query, known_evidence, task_desc, demo_date, segment_t
             f"任务：{task_desc}\n"
             f"当前需要你撰写要点：{segment_topic}\n"
             f"{known_evidence}\n"
-            f"论据还需要的材料：{query}\n\n"
-            f"如果该材料并非可以搜索得到的（例如画图要求）、或者不需要搜索的声明（例如数据来源）、或者已收集材料已覆盖的，可以直接返回“{query}”，不做搜索和修改。否则，可以查看\n\n"
-            + (f"{demo_date}发布了一份历史研报，以下一段内容可能包含所需材料：{reference}\n"
+            f"论据还需要的材料：**{query}**\n\n"
+            f"如果该材料并非可以搜索得到的（例如画图要求）、或者不需要搜索的声明（例如数据来源）、或者已收集材料已覆盖的，可以直接返回“{query}”，不做搜索和修改。"
+            + (f"否则，可以查看{demo_date}发布的一份历史研报，其中一段内容可能包含所需材料：\n<reference>\n{reference}\n</reference>\n"
               f"如果该内容包含所需材料，并且一定不会因时间变化，在当前撰写时间依然成立，则不必调用搜索，摘取出涉及该材料的两三句话作为论据即可，"
               f"并加上 [^cite_id:{demo_date}_reference_report] 作为markdown风格引用。"
-              f"如果没有符合时效性论据，\n\n"
-            if reference else "") +
+              f"如果没有符合时效性论据，"
+            if reference else "\n\n") +
             f"请你调用工具搜索，尽量根据多个信息源交叉验证后给出搜索结果。最终给出的答案需要简洁明了。"
         ),
         role="user",
@@ -82,7 +82,10 @@ async def process_single_segment(segment: Segment, task_desc, demo_date, agent_f
         if '【画图内容要求】' in segment.reference:
             continue
         evidences = [e for e in segment.evidences[:i] if e]
-        known_evidence = ("当前已搜索到的论据：\n" + "\n".join(evidences) + "\n") if evidences else ""
+        if evidences:
+            known_evidence = ("当前已搜索到的论据：\n<evidences>\n" + "\n".join(evidences) + "\n</evidences>\n").replace("\n\n", "\n") + ""
+        else:
+            known_evidence = ""
         segment.evidences[i] = await search_evidence(evidence, known_evidence, task_desc, demo_date, segment.topic, searcher, reference=segment.reference)
         await searcher.memory.clear()
 
@@ -257,7 +260,7 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
     output_pth = PROJECT_ROOT / "data" / "output" / "reports" / cfg.llm_name
     output_pth.mkdir(parents=True, exist_ok=True)
 
-    outline = await process_pdf_to_outline(demo_pdf_path, long_term_dir / "demonstration",
+    outline = await process_pdf_to_outline(demo_pdf_path, long_term_dir / "demonstration" / cfg.llm_name,
                                               llm_reasoning, llm_instruct, formatter,)
     manuscript_path = output_pth / f"{stock_symbol}_{cur_date}.json"
     if manuscript_path.exists():

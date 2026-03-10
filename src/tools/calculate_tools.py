@@ -1281,14 +1281,24 @@ class CalculateTools:
     async def calculate_or_analysis_by_python_code(
         self,
         code: str,
-        material_map: dict[str, str] | None = None,
+        material_map: dict[str, str],
         description: str | None = None,
     ) -> ToolResponse:
         """
-        执行自行编写的 Python 数据分析 / 计算代码，并返回“打印出来的结果”，保存计算结果到Material当中，返回Material标识cite_id。
-        你可以使用自己传入的数据，也可以通过 cite_id 引用之前保存的 Material 中的数值数据，并将其作为变量在代码中使用。
+        当没有其他预定义的计算工具时，读取cite_id 对应 Material 中的数值数据，执行自定义的 Python 数据分析 / 计算代码，并返回打印出来的结果，保存计算结果到Material当中，返回Material标识cite_id。
 
-        1. 你需要编写一段 Python 代码片段，实现数据分析或数值计算逻辑。
+        1. 已预先导入的库（在子进程环境中）：
+               import math
+               import statistics
+               import datetime
+               import numpy as np
+               import pandas as pd
+           你可以直接使用这些库，无需再次导入；重复导入也不会报错。
+           你也可以自行导入其他需要的库，例如sklearn、scipy等。
+
+        2. 根据 material_map 中的映射关系，将对应 cite_id 的Dataframe数据注入到 `code` 的变量中。
+
+        3. 执行你编写的 Python 代码片段`code`，实现数据分析或数值计算逻辑。
            示例（计算某组收益率的均值和标准差）：
 
                import numpy as np
@@ -1305,16 +1315,7 @@ class CalculateTools:
 
            注意：只写核心逻辑，不需要写 if __name__ == "__main__"。
 
-        2. 已预先导入的库（在子进程环境中）：
-               import math
-               import statistics
-               import datetime
-               import numpy as np
-               import pandas as pd
-           你可以直接使用这些库，无需再次导入；重复导入也不会报错。
-           你也可以自行导入其他需要的库，例如sklearn、scipy等。
-
-        3. 结果约定（关键）：
+        4. 结果约定（关键）：
            - 你必须在代码中，将最终要返回的结果赋值给变量 `result`。
            - 本工具会调用：
                  print(result)
@@ -1324,29 +1325,21 @@ class CalculateTools:
         Args:
             code (str):
                 Python 代码片段，仅包含分析/计算逻辑。
-            material_map (dict[str, str] | None):
-                可选，本次计算中需要访问的material映射，可以通过设置此参数将material中的数值数据注入到code中的变量进行访问。
+            material_map (dict[str, str]):
+                本次计算中需要访问的material映射，可以通过设置此参数将material中的Dataframe数据注入到code中的变量进行访问。
                 material_map的构成如下：
-                    - key: 你在代码中使用的变量名
-                    - value: 已有 Material 的 cite_id
-                若为 None，则不注入任何material变量。
-                注意，可以被注入到变量的material必须包含数值数据，比如TABLE会完整加载为dataframe，calculate_*_result会提取其中result字段的数据。
+                - key: 你在代码中使用的变量名
+                - value: 已有 Material 的 cite_id
             description (str | None):
-                可选，对本次计算的补充说明文字，建议简要说明计算对象（如股票名称）、时间范围以及所计算的指标或变换。
+                可选，对本次计算的补充说明文字，比如简要说明计算对象（如股票名称）、时间范围以及所计算的指标或变换。
 
         Returns:
             ToolResponse:
-                content 中包含:
-                - TextBlock:
-                    - 若成功：
-                        - 描述本次计算的含义
-                        - 输出 result 的字符串表示（可能是多行，例如 DataFrame 表格）
-                    - 若失败：
-                        - 错误信息，以及 stdout / stderr 便于调试
-
-                metadata 中包含:
-                - "raw_stdout": 执行子进程的标准输出（包含 result 打印）
-                - "raw_stderr": 执行子进程的标准错误
+                - 若成功：
+                    - 描述本次计算的含义
+                    - 输出 result 的字符串表示（可能是多行，例如 DataFrame 表格）
+                - 若失败：
+                    - 错误信息，以及 stdout / stderr 便于调试
         """
 
 

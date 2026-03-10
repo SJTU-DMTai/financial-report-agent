@@ -40,22 +40,50 @@ async def get_content_from_response(response_msg) -> str:
     except TypeError: pass
     return full_content.strip()
 
-def get_all_evidences_from_section(section: Section) -> List[str]:
-    """递归地从Section对象中收集所有论据文本。"""
+def get_all_evidences_from_section(section: Section, prefix: str = "") -> List[Tuple[str, str]]:
+    """递归地从Section对象中收集所有论据文本，同时返回每条论据所属的段落原文。
+
+    Returns:
+        List of (evidence_text, segment_reference) tuples.
+    """
     evidences = []
-    if section.segments:
-        for segment in section.segments:
+    if prefix and section.segments:
+        for idx, segment in enumerate(section.segments):
             if segment.evidences:
-                evidences.extend([e for e in segment.evidences if e and e.strip()])
+                seg_ref = prefix + str(idx)
+                evidences.extend(
+                    (e, seg_ref)
+                    for e in segment.evidences
+                    if e and e.strip()
+                )
     if section.subsections:
         for subsection in section.subsections:
-            evidences.extend(get_all_evidences_from_section(subsection))
+            if '摘要' not in subsection.title:
+                evidences.extend(get_all_evidences_from_section(subsection, f"{prefix}s{section.section_id}_"))
     return evidences
 
-async def extract_unique_evidences_from_pdf(pdf_path: Path, save_dir: Path, only_evidence: bool = False) -> List[str]:
+
+def build_seg_reference_map(section: Section, prefix: str = "") -> Dict[str, str]:
+    """递归地构建段落ID到原始段落文本（reference）的映射。
+
+    Returns:
+        Dict mapping seg_id → segment.reference (raw text).
+    """
+    mapping: Dict[str, str] = {}
+    if section.segments:
+        for idx, segment in enumerate(section.segments):
+            seg_id = prefix + str(idx)
+            mapping[seg_id] = segment.reference or ""
+    if section.subsections:
+        for subsection in section.subsections:
+            mapping.update(build_seg_reference_map(subsection, f"{prefix}s{section.section_id}_"))
+    return mapping
+
+
+async def extract_unique_evidences_from_pdf(pdf_path: Path, save_dir: Path, only_evidence: bool = False) -> List[Tuple[str, str]]:
     pdf_stem = pdf_path.stem  # 去掉.pdf后缀
     evidence_filename = f"{pdf_stem}_evidences.json"
-    evidence_path = save_dir / evidence_filename
+    evidence_path = save_dir / cfg.llm_name / evidence_filename
     # 尝试直接读取
     if evidence_path.exists():
         print(f"    - 检测到已有的evidences，加载: {evidence_filename}")
@@ -63,13 +91,15 @@ async def extract_unique_evidences_from_pdf(pdf_path: Path, save_dir: Path, only
         return evidences
 
     print(f"\n-> 开始提取并清洗文件: {pdf_path.name}", flush=True)
-    manuscript = await process_pdf_to_outline(pdf_path, save_dir, llm_reasoning, llm_instruct, formatter, only_evidence)
+    manuscript = await process_pdf_to_outline(pdf_path, save_dir / cfg.llm_name, llm_reasoning, llm_instruct, formatter, only_evidence)
     print(f"  - 从 {pdf_path.name} 的结构中提取论据...")
     return await extract_unique_evidences(manuscript, evidence_path)
 
-async def extract_unique_evidences(manuscript: Section, evidence_path: Path) -> List[str]:
+async def extract_unique_evidences(manuscript: Section, evidence_path: Path) -> List[Tuple[str, str]]:
+    if evidence_path.exists():
+        return json.loads(evidence_path.read_text(encoding="utf-8"))
     evidences = get_all_evidences_from_section(manuscript)
-    print(f"  - 对 {len(evidences)} 条原始论据进行语义去重...")
+    print(f"  - 对 {len(evidences)} 条原始论据进行语义去重...", flush=True)
 
     evidences = await drop_duplicate_evidences(evidences)
     # 保存到long_term_dir
@@ -77,47 +107,63 @@ async def extract_unique_evidences(manuscript: Section, evidence_path: Path) -> 
         json.dumps(evidences, ensure_ascii=False, indent=2),
         encoding="utf-8"
     )
-    print(f"    -> Evidence已保存到: {evidence_path}")
+    print(f"    -> Evidence已保存到: {evidence_path}", flush=True)
     return evidences
 
-async def drop_duplicate_evidences(evidences: List[str]) -> List[str]:
+async def drop_duplicate_evidences(evidences: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
+    """对论据列表进行语义去重，保留每条论据及其所属的段落ID。
+
+    Args:
+        evidences: List of (evidence_text, seg_id) tuples.
+
+    Returns:
+        Deduplicated list of (evidence_text, seg_id) tuples.
+    """
+    evidence_texts = [e for e, _ in evidences]
     sys_prompt = f"""你是一名专业的金融分析助手，擅长数据清洗和信息摘要。
-你的任务是对以下从一份研报大纲中提取的“论据（evidences）”列表进行去重。列表中的许多条目可能措辞不同，但表达的是相同或相似的含义。每行是带有id的一条论据。
+你的任务是对以下从一份研报大纲中提取的实体列表进行去重。列表中的许多条目可能措辞不同，但表达的是相同或相似的含义。每行是带有id的一条实体。
 
 ### 流程
-遍历每一个序号对应的论据，然后检查所有论据，找到所有含义相同的论据，该组论据对应的一或多个id用空格隔开，单独放在一行。然后遍历下一个论据，如果该论据已在上文中被划分到某组，则跳过。
+遍历每一个序号对应的实体，然后检查所有实体，找到所有含义相同的实体，该组实体对应的一或多个id用空格隔开，单独放在一行。然后遍历下一个实体，**如果该实体已在上文中被划分到某组，则跳过**。
 最后输出所有组用<ANSWER>和</ANSWER>包裹住，每组一行，只包含数字id和空格。
 
 """ + """
 ### 要求
-1. 完整遍历所有论据，确保没有遗漏。
-2. 忽视论据提及的数据来源，忽视每条论据涉及“查询”等动词，请关注核心实体或指标。如果有时间范围约束，则不同时间的实体属于不同的论据，不应去重。
-3. 如果某条论据本身就是独特的，没有与之重复的项，那么必须将它包含在最终的列表中。
-""" if len(evidences) < 300 else f"""
+- 完整归类所有实体，确保没有遗漏。回答中每个id需出现一次，且只出现一次。
+- 忽视实体提及的数据来源，忽视每条实体涉及"查询"等动词，请关注核心实体或指标。如果有时间范围约束，则不同时间下的是不同的实体，不应去重。
+- 如果某条实体本身就是独特的，没有与之重复的项，那么必须将它包含在最终的列表中。
+""" if len(evidence_texts) < 300 else f"""
 ### 要求
-1. 遍历每条论据。
-2. 忽视论据提及的数据来源，忽视每条论据涉及“查询”等动词，请关注核心实体或指标。如果有时间范围约束，则不同时间的实体属于不同的论据，不应去重。
-3. 如果某条论据本身就是独特的，没有与之重复的项，那么跳过，不必输出该论据id。（即每一组论据至少有两个不同的id）
+- 归类每条实体。回答中每个id需出现一次，且只出现一次，不要反复出现。
+- 忽视实体提及的数据来源，忽视每条实体涉及"查询"等动词，请关注核心实体或指标。如果有时间范围约束，则不同时间的实体属于不同的实体，不应去重。
+- 如果某条实体本身就是独特的，没有与之重复的项，那么跳过，不必输出该实体id。（即每一组实体至少有两个不同的id）
 """ + """
 #### 输出示例
 <ANSWER>
 1 3 6
-2 6 19
+2 6 8
+4 7
+5
 </ANSWER>
 """
-    _evidences = [e.replace("查询", "").replace("确认", "").replace("计算", "")
-                  .replace("获取", "") for e in evidences]
-    evidences = []
-    for e in _evidences:
-        if e not in evidences:
-            evidences.append(e)
-    numbered_evidences = "\n".join(f"{i+1} {e}" for i, e in enumerate(evidences))
-    def _parse(response: str) -> List[str]:
+    _pairs: List[Tuple[str, str]] = []
+    seen_texts: List[str] = []
+    for text, seg_id in evidences:
+        cleaned = text.replace("查询", "").replace("确认", "").replace("计算", "").replace("获取", "")
+        if cleaned not in seen_texts:
+            seen_texts.append(cleaned)
+            _pairs.append((cleaned, seg_id))
+    evidences = _pairs
+
+    numbered_evidences = "\n".join(f"{i+1} {e}" for i, (e, _) in enumerate(evidences))
+
+    def _parse(response: str) -> List[Tuple[str, str]]:
+        print(response)
         response = re.search(r"<ANSWER>(.*?)</ANSWER>", response, re.DOTALL)
         assert response is not None, "没有找到<ANSWER>标签包裹的内容。"
         response = response.group(1).strip()
         groups = []
-        seen_ids = set()
+        seen_ids: set = set()
         for line in response.strip().splitlines():
             ids = line.strip().split()
             for _id in ids: assert re.match(r"^\d+$", _id), f"输出格式错误：输出了数字id之外的其他字符: {_id}"
@@ -126,27 +172,39 @@ async def drop_duplicate_evidences(evidences: List[str]) -> List[str]:
                 groups.append(unique_ids)
                 seen_ids.update(unique_ids)
         unseen_ids = set(range(1, 1 + len(evidences))) - seen_ids
-        unique_evidences = []
+        unique_evidences: List[Tuple[str, str]] = []
         for group in groups:
             first_id = int(group[0]) - 1
-            unique_evidences.append(list(evidences)[first_id])
+            unique_evidences.append(evidences[first_id])
         for unseen_id in unseen_ids:
             first_id = int(unseen_id) - 1
-            unique_evidences.append(list(evidences)[first_id])
+            unique_evidences.append(evidences[first_id])
         return unique_evidences
+
     return await call_chatbot_with_retry(
         llm_instruct, formatter,
-        sys_prompt, f"需要处理的论据列表如下：\n---\n{numbered_evidences}\n---",
+        sys_prompt, f"需要处理的实体列表如下：\n---\n{numbered_evidences}\n---",
         hook=_parse, handle_hook_exceptions=(AssertionError, TypeError), max_retries=3,
     )
 
 
-async def find_best_matches(source_texts: List[str], texts_to_match: List[str]) -> List[Tuple[str, str]]:
+async def find_best_matches(source_evidences: List[Tuple[str, str]], ref_evidences: List[Tuple[str, str]]) -> List[Tuple[str, str, str, str]]:
+    """为参考论据列表中的每一项在源论据列表中找到最佳匹配。
+
+    Args:
+        source_evidences: List of (evidence_text, seg_id) from the source (report).
+        ref_evidences: List of (evidence_text, seg_id) from the reference.
+
+    Returns:
+        List of (source_evidence, ref_evidence, source_seg_id, ref_seg_id) tuples.
+    """
+    source_texts = [e for e, _ in source_evidences]
+    texts_to_match = [e for e, _ in ref_evidences]
     # 为每个列表的项加上唯一ID
     texts_to_match_formatted = "\n".join(f"  R_{i + 1}: {text}" for i, text in enumerate(texts_to_match))
     source_texts_formatted = "\n".join(f"  S_{i + 1}: {text}" for i, text in enumerate(source_texts))
 
-    prompt = f"""你是一个精准的语义匹配引擎。你的任务是从“源列表(S)”中，为“待匹配列表(R)”里的每一项找到与之**完全匹配或语义上非常相似**的匹配项。
+    prompt = f"""你是一个精准的语义匹配引擎。你的任务是从"源列表(S)"中，为"待匹配列表(R)"里的每一项找到与之**完全匹配或语义上非常相似**的匹配项。
 
 ## 任务指令
 1.  仔细阅读下面提供的两个列表：待匹配列表(R)和源列表(S)。
@@ -181,17 +239,17 @@ R_6, S_2
                 f"**源列表(S):**\n---\n{source_texts_formatted}\n---\n\n",
         hook=_parse, handle_hook_exceptions=(AssertionError, ), max_retries=3,
     )
-    evidence_pairs = []
-    for i, r_text in enumerate(texts_to_match):
+    evidence_pairs: List[Tuple[str, str, str, str]] = []
+    for i, (r_text, r_seg_id) in enumerate(ref_evidences):
         r_id = f"R_{i + 1}"
         s_id = match_map_by_id.get(r_id)
 
         if s_id and s_id != "NONE":
             try:
                 s_idx = int(s_id.split('_')[1]) - 1
-                if 0 <= s_idx < len(source_texts):
-                    s_text = source_texts[s_idx]
-                    evidence_pairs.append((s_text, r_text))
+                if 0 <= s_idx < len(source_evidences):
+                    s_text, s_seg_id = source_evidences[s_idx]
+                    evidence_pairs.append((s_text, r_text, s_seg_id, r_seg_id))
             except (ValueError, IndexError) as e:
                 print(e)
                 continue  # 如果ID格式错误，则跳过

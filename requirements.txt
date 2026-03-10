@@ -1,4 +1,4 @@
-agentscope==1.0.7
+agentscope
 akshare==1.17.85
 beautifulsoup4==4.14.3
 dataclasses-json==0.6.7
