@@ -337,7 +337,7 @@ class ShortTermMemoryStore:
             return _truncate(page_text)
 
         # (B) 计算结果：calculate_*
-        if isinstance(cite_id, str) and cite_id.startswith("calculate_"):
+        if isinstance(cite_id, str) and "calculate_" in cite_id:
             params = None
             result = None
             if isinstance(content, list) and content and isinstance(content[0], dict):

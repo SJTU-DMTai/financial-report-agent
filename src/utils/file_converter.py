@@ -86,82 +86,20 @@ def _inject_refs(
     citations: list,
 ) -> str:
     """
-    扫描 md_text 中的cite_id标记，
-    支持以下形式，具有一定容错能力：
-      - [^xxx|yyy]
-      - cite_id:xxx|yyy
-      - cite_id:xxx
-      - [^xxx|yyy；cite_id:zzz]
-      - [^xxx|yyy；zzz]
-
-    其中 yyy 为可选位置描述可缺省。
+    处理 md_text 中的cite_id标记: [^cite_id:xxxxxx]
 
     """
-# ---------- 第一轮：处理显式写出的 cite_id:xxx 或 cite_id:xxx|yyy ----------
-    # 不要求方括号存在，detail(yyy) 可缺省
-    pattern_main = re.compile(
-        r"cite_id[:=]\s*([0-9A-Za-z_\u4e00-\u9fff\-]+)(?:\|([^；\]\s]+))?"
-    )
 
-    text = md_text
-    result_parts = []
-    last_end = 0
+    pattern = re.compile(r"\[\^cite_id[:=]\s*([^\]]+?)\s*\]")
 
-    for m in pattern_main.finditer(text):
-        # 先把上一个匹配之后的原文拼上
-        result_parts.append(text[last_end:m.start()])
-
+    def repl(m):
         cite_id = m.group(1).strip()
-        detail = (m.group(2) or "").strip()
-
-        idx = add_citation(cite_id, detail, short_term, citation_index_map, citations)
-
+        idx = add_citation(cite_id, "", short_term, citation_index_map, citations)
         if idx is None:
-            # 没找到 meta：不要替换，原样保留
-            result_parts.append(text[m.start():m.end()])
-        else:
-            # 用 (1)、(2)… 的形式替换
-            result_parts.append(f'(<a href="#ref-{idx}" class="ref">{idx}</a>)')
+            return m.group(0)
+        return f'(<a href="#ref-{idx}" class="ref">{idx}</a>)'
 
-        last_end = m.end()
-
-    # 拼接剩余部分
-    result_parts.append(text[last_end:])
-    text_after_main = "".join(result_parts)
-
-    # ---------- 第二轮：处理 “(1)；zzz” 这种漏写 cite_id 的情况 ----------
-    # 典型来源：
-    #   原文：[^xxx|yyy；zzz]
-    #   第一轮后：[(1)；zzz]
-    # 这里尝试把 zzz 当作 cite_id 去解析，如果 registry 里没有，就保持原样。
-    pattern_follow = re.compile(
-        r'(\(<a href="#ref-(\d+)" class="ref">\2</a>\))\s*([；;])\s*([0-9A-Za-z_\u4e00-\u9fff\-]+)'
-    )
-
-    text = text_after_main
-    result_parts = []
-    last_end = 0
-
-    for m in pattern_follow.finditer(text):
-        result_parts.append(text[last_end:m.start()])
-
-        anchor = m.group(1)          # 已有的 (1)
-        sep = m.group(3)             # 分号：；或 ;
-        cite_id2 = m.group(4).strip() # 疑似漏写 cite_id: 的部分
-
-        idx2 = add_citation(cite_id2, "", short_term, citation_index_map, citations)
-
-        if idx2 is None:
-            # 第二个“疑似 cite_id”在 registry 中找不到：保持原样，不改
-            result_parts.append(text[m.start():m.end()])
-        else:
-            anchor2 = f'(<a href="#ref-{idx2}" class="ref">{idx2}</a>)'
-            result_parts.append(f"{anchor}{sep}{anchor2}")
-
-        last_end = m.end()
-
-    result_parts.append(text[last_end:])
-    return "".join(result_parts)
+    return pattern.sub(repl, md_text)
 
 def _replace_chart_placeholders(md_text: str, manuscript_dir: Path) -> str:
     """
@@ -900,31 +838,26 @@ def _adjust_content_headers(content: str, min_level: int) -> str:
 
     return '\n'.join(adjusted_lines)
 
-
 def section_to_markdown(section: Section, level: int = 1) -> str:
-    """
-    将 Section 树递归转换为 Markdown 文本
-
-    Args:
-        section: 要转换的 Section 对象
-        level: 当前标题级别（# 的数量）
-
-    Returns:
-        生成的 Markdown 文本
-    """
     lines = [f"{'#' * level} {section.title}\n"]
-    # 添加当前 Section 的所有 segments 内容
-    for seg in section.segments:
-        if seg.content:
-            content = seg.content
-            # 调整content中的标题级别，确保不与section结构冲突
+    # 优先使用章节级润色后的内容
+    if getattr(section, "content", None):
+        content = section.content.strip()
+        if content:
             adjusted_content = _adjust_content_headers(content, level)
             lines.append(adjusted_content + '\n')
+    else:
+        for seg in section.segments:
+            if getattr(seg, "content", None):
+                content = seg.content.strip()
+                if content:
+                    adjusted_content = _adjust_content_headers(content, level)
+                    lines.append(adjusted_content + '\n')
 
-    # 递归处理所有子 Section
     for subsection in section.subsections:
         sub_md = section_to_markdown(subsection, level + 1)
         if sub_md:
             lines.append(sub_md + '\n')
 
     return "\n".join(lines).strip()
+

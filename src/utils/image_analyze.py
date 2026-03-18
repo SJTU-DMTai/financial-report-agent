@@ -239,9 +239,12 @@ async def inject_vlm_into_demo_markdown(
             if "无关插图" in vlm_text:
                 i += 1
                 continue
+
+            if "【实体事件图片】" in vlm_text:
+                i += 1
+                continue
             out_lines.append(format_injected_block(vlm_text).rstrip("\n"))
             changed = True
-
         i += 1
 
     if changed:

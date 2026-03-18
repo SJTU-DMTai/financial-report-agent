@@ -26,11 +26,10 @@ def create_searcher_agent(
         name="Searcher",
         sys_prompt=prompt_dict['searcher_sys_prompt'],
         model=model,
-        # memory=SlidingWindowMemory(),
         formatter=formatter,
         toolkit=toolkit,
         parallel_tool_calls=True,
-        max_iters=10,
+        max_iters=6,
     )
 
 def build_searcher_toolkit(
@@ -46,8 +45,8 @@ def build_searcher_toolkit(
     toolkit.register_tool_function(get_retrieve_fn(short_term, long_term))
     toolkit.register_tool_function(material_tools.fetch_url_page_text)
 
-    # search_tools = SearchTools(short_term=short_term, long_term=long_term)
-    # toolkit.register_tool_function(search_tools.search_engine)
+    search_tools = SearchTools(short_term=short_term, long_term=long_term)
+    toolkit.register_tool_function(search_tools.search_engine)
     # -------- Material Tools --------
 
     # ========================================

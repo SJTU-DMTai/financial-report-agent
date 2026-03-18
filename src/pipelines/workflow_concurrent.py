@@ -18,8 +18,8 @@ from pathlib import Path
 from agentscope.agent import ReActAgent
 from agentscope.message import Msg
 
-from evaluation.eval_content import evaluate_segment
-from pipelines.planning import process_pdf_to_outline
+from src.evaluation.eval_content import evaluate_segment
+from src.pipelines.planning import process_pdf_to_outline
 from src.memory.working import Section, Segment
 from src.prompt import prompt_dict
 from src.utils.instance import create_chat_model, create_agent_formatter
@@ -35,7 +35,6 @@ from src.utils.parse_verdict import parse_verifier_verdict
 from src.utils.call_with_retry import call_agent_with_retry
 from src.utils.get_entity_info import get_entity_info
 from src.utils.file_converter import markdown_to_sections
-from src.utils.multi_source_verification import verify_segment_content
 from src.utils.local_file import STOCK_REPORT_PATHS
 import config
 from src.utils.call_with_retry import call_chatbot_with_retry
@@ -77,9 +76,7 @@ async def process_single_segment(segment: Segment,
                                  demo_date,
                                  agent_factory,
                                  short_term,
-                                 long_term,
-                                 multi_source_verification_enabled,
-                                 max_verify_rounds):
+                                 long_term):
     """并发处理单个 Segment：包含搜索和写作"""
     print(f"[{time.strftime('%H:%M:%S')}]  ✍️ 开始写作: {segment.topic[:15]}...", flush=True)
 
@@ -111,7 +108,7 @@ async def process_single_segment(segment: Segment,
         print("[Writer 初稿输出]")
         print(segment.content, flush=True)
 
-        for _ in range(5):
+        for _ in range(3):
             await searcher.memory.clear()
             suggestions = await evaluate_segment(llm_judge,
                                                  create_agent_formatter(), segment)
@@ -126,30 +123,6 @@ async def process_single_segment(segment: Segment,
                 segment.content = draft_msg.get_text_content()
                 print(f"[Writer] Segment finished: {segment.topic}")
                 print(segment.content, flush=True)
-        
-        if multi_source_verification_enabled:
-            for _ in range(max_verify_rounds):
-                verify_issues = await verify_segment_content(segment, short_term, long_term)
-                if not verify_issues:
-                    break
-
-                verify_feedback = "\n\n".join(verify_issues[:8])  # 防止过长
-                writer_input = Msg(
-                    name="user",
-                    content=(
-                        "以下是对你当前段落的事实核验问题，请你只修正文，不要输出修改说明：\n\n"
-                        f"{verify_feedback}\n\n"
-                        "要求：\n"
-                        "1. 保留能被材料支持的内容；\n"
-                        "2. 删除、降级或改写无法被支持的断言；\n"
-                        "3. 补上正确的 cite_id 引用；\n"
-                        "4. 不要新增无来源数字。"
-                    ),
-                    role="user",
-                )
-                draft_msg = await call_agent_with_retry(writer, writer_input)
-                segment.content = draft_msg.get_text_content()
-
         await writer.memory.clear()
         segment.finished = True
         print(f"[{time.strftime('%H:%M:%S')}] ✅ 完成写作: {segment.topic[:15]}.", flush=True)
@@ -158,8 +131,7 @@ async def process_single_segment(segment: Segment,
         raise e
 
 async def process_section_concurrently(section: Section, parent_id, task_desc, demo_date, cur_date,
-                                       agent_factory, stock_symbol, output_pth, manuscript_root, short_term, long_term,
-                                       multi_source_verification_enabled, max_verify_rounds):
+                                       agent_factory, stock_symbol, output_pth, manuscript_root, short_term, long_term):
     """递归并发处理章节"""
 
     # 1. 处理子章节 (递归) - 优先启动子任务
@@ -170,7 +142,7 @@ async def process_section_concurrently(section: Section, parent_id, task_desc, d
             # 递归调用
             sub_tasks.append(process_section_concurrently(
                 subsection, section_id, task_desc, demo_date, cur_date, agent_factory,
-                stock_symbol, output_pth, manuscript_root, short_term, long_term, multi_source_verification_enabled, max_verify_rounds
+                stock_symbol, output_pth, manuscript_root, short_term, long_term,
             ))
 
     # 2. 处理当前章节的 Segments (并发)
@@ -181,7 +153,7 @@ async def process_section_concurrently(section: Section, parent_id, task_desc, d
             if segment.finished:
                 continue
             seg_tasks.append(process_single_segment(
-                segment, task_desc, demo_date, agent_factory, short_term, long_term, multi_source_verification_enabled, max_verify_rounds
+                segment, task_desc, demo_date, agent_factory, short_term, long_term,
             ))
 
     # 3. 等待所有 Segments 完成
@@ -245,7 +217,7 @@ async def process_section_concurrently(section: Section, parent_id, task_desc, d
     # 6. 保存中间结果 (可选，防止崩溃全丢)
     # 注意：并发写入文件可能冲突，这里简单处理，实际生产建议用单独的 save 协程或锁
     async with SAVE_LOCK:
-        (output_pth / f"{stock_symbol}_{cur_date}.json").write_text(manuscript_root.to_json(ensure_ascii=False))
+        (output_pth / f"{stock_symbol}_{cur_date}.json").write_text(manuscript_root.to_json(ensure_ascii=False) ,encoding="utf-8")
 
 
 async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
@@ -261,20 +233,19 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
     long_term = LongTermMemoryStore(
         base_dir=long_term_dir,
     )
-
-    cfg = config.Config()
-    planner_cfg = cfg.get_planner_cfg()
-    use_demo = planner_cfg.get("use_demonstration", False)
-    multi_source_verification_enabled = cfg.is_multi_source_verification_enabled()
-    max_verify_rounds = cfg.get_max_verify_rounds()
-
+    
     entity = get_entity_info(long_term, task_desc)
     if not entity or not entity.get("code"):
         raise ValueError(f"无法从 task_desc 解析股票实体/代码：{task_desc}")
-
-    stock_symbol = entity["code"]  # 纯数字 6 位代码
+    stock_symbol = entity["code"] if entity else "unknown"
     print("股票代码：", stock_symbol)
+    now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_filename = f"log_{stock_symbol}_{now_str}.txt"
+    log_file = open(log_filename, "w", encoding="utf-8")
+    sys.stdout = log_file
+    sys.stderr = log_file
 
+    cfg = config.Config()
     filename = f"{stock_symbol}_{cur_date}"
     short_term_dir = PROJECT_ROOT / "data" / "memory" / "short_term" / filename
 
@@ -379,8 +350,6 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
             manuscript_root=manuscript,  # 用于在深层递归中保存完整的 json
             short_term=short_term,
             long_term=long_term,
-            multi_source_verification_enabled=multi_source_verification_enabled,
-            max_verify_rounds=max_verify_rounds,
         )
 
     markdown_text = section_to_markdown(manuscript)
