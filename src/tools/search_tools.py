@@ -320,7 +320,7 @@ class SearchTools:
 def get_retrieve_fn(short_term:ShortTermMemoryStore, long_term:LongTermMemoryStore) -> Callable[str]:
     async def retrieve_local_material(query: str) -> ToolResponse:
         """
-        在已保存的本地材料中按关键词（BM25算法）搜索和query最相关的前若干条材料，返回cite_id、来源、简短描述和部分预览内容。
+        在已保存的本地材料中按关键词搜索和query最相关的前若干条材料，返回cite_id、来源、简短描述和部分预览内容。
         Args:
             query (str):
                 搜索内容。
@@ -358,19 +358,19 @@ def get_retrieve_fn(short_term:ShortTermMemoryStore, long_term:LongTermMemorySto
                 # (A) 搜索引擎：search_engine_*
                 if isinstance(cite_id, str) and cite_id.startswith("search_engine_"):
                     page_text_preview = ""
-                    # if isinstance(content, list) and content:
-                    #     first = content[0] if isinstance(content[0], dict) else None
-                    #     if isinstance(first, dict):
-                    #         page_text = first.get("page_text") or ""
-                    #         page_text_preview = page_text[:100]
-                    # preview = short_term.load_material_preview(cite_id=cite_id)
-                    # if preview:
-                    #     lines.append("    部分内容预览：")
-                    #     lines.append(f"   {page_text_preview}")
+                    if isinstance(content, list) and content:
+                        first = content[0] if isinstance(content[0], dict) else None
+                        if isinstance(first, dict):
+                            page_text = first.get("page_text") or ""
+                            page_text_preview = page_text[:100]
+                    preview = short_term.load_material_preview(cite_id=cite_id)
+                    if preview:
+                        lines.append("    部分内容预览：")
+                        lines.append(f"   {page_text_preview}")
 
 
                 # (B) 计算结果：calculate_*
-                elif isinstance(cite_id, str) and cite_id.startswith("calculate_"):
+                elif isinstance(cite_id, str) and "calculate_" in cite_id:
                     params = None
                     result = None
                     if isinstance(content, list) and content:
@@ -383,28 +383,28 @@ def get_retrieve_fn(short_term:ShortTermMemoryStore, long_term:LongTermMemorySto
                     lines.append(f"计算结果: {result}")
 
                 # # (C) 表格：非前缀类时，用 m_type==table 给出前几行
-                # elif m_type == "table":
-                #     preview = ""
-                #     if isinstance(content, pd.DataFrame) and not content.empty:
-                #         # df_preview = content.head(3).copy()
-                #         # MAX_CELL_CHARS = 32
-                #         # SUFFIX = "…[内容过长，已截断]"
-                #         # for col in df_preview.columns:
-                #         #     df_preview[col] = df_preview[col].apply(
-                #         #         lambda v: (
-                #         #             v[:MAX_CELL_CHARS] + SUFFIX
-                #         #             if isinstance(v, str) and len(v) > MAX_CELL_CHARS
-                #         #             else v
-                #         #         )
-                #         #     )
-                #         #
-                #         # preview = df_preview.to_csv(index=False)
-                #         preview = ', '.join(content.columns)
-                #
-                #     lines.append("    列名:")
-                #     lines.append(preview)
-                #     for ln in preview.splitlines():
-                #         lines.append(f"    {ln}")
+                elif m_type == "table":
+                    preview = ""
+                    if isinstance(content, pd.DataFrame) and not content.empty:
+                        df_preview = content.head(3).copy()
+                        MAX_CELL_CHARS = 32
+                        SUFFIX = "…[内容过长，已截断]"
+                        for col in df_preview.columns:
+                            df_preview[col] = df_preview[col].apply(
+                                lambda v: (
+                                    v[:MAX_CELL_CHARS] + SUFFIX
+                                    if isinstance(v, str) and len(v) > MAX_CELL_CHARS
+                                    else v
+                                )
+                            )
+                        
+                        preview = df_preview.to_csv(index=False)
+                        preview = ', '.join(content.columns)
+                
+                    lines.append("    列名:")
+                    lines.append(preview)
+                    for ln in preview.splitlines():
+                        lines.append(f"    {ln}")
 
                 lines.append("</material>\n")  # 空行分隔
 

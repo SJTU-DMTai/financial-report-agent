@@ -121,15 +121,15 @@ class CalculateTools:
             sub_label = subtype_label_map.get(tool_name, {}).get(sub_type, str(sub_type))
 
         if sub_label:
-            base_description = f"{tool_label}（{sub_label}）"
+            base_description = f"调用工具进行{tool_label}：{sub_label}"
         else:
-            base_description = f"{tool_label}"
+            base_description = f"调用工具进行{tool_label}"
 
         extra = (description or "").strip()
         final_description = f"{base_description} {extra}" if extra else base_description
         entity = get_entity_info(self.long_term, final_description)
 
-        cite_id = f"{tool_name}_{final_description}"
+        cite_id = f"{tool_name}_result_{int(time.time())}"
         if entity and 'code' in entity:
             cite_id = f"{entity['code']}_{cite_id}"
 

@@ -3,11 +3,8 @@
 
 log*.txt
 *.out
-data/memory/short_term/history_short_term/*
-data/memory/short_term/manuscript/*
-data/memory/short_term/material/*
-data/memory/short_term/demonstration/*
-data/memory/short_term/outline.md
+data/memory/long_term/demonstration/*
+data/memory/short_term/*
 data/output/reports/*
 data/reports/*
 .idea/

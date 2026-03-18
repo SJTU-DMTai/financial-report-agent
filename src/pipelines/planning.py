@@ -27,9 +27,9 @@ async def process_pdf_to_outline(pdf_path: Path, save_dir: Path,
     outline_json_path2 = save_dir / f'{pdf_path.name.split(".")[0]}_outline.json'
     if outline_json_path.exists() or outline_json_path2.exists():
         if outline_json_path.exists():
-            manuscript = Section.from_json(outline_json_path.read_text())
+            manuscript = Section.from_json(outline_json_path.read_text(encoding="utf-8"))
         else:
-            manuscript = Section.from_json(outline_json_path2.read_text())
+            manuscript = Section.from_json(outline_json_path2.read_text(encoding="utf-8"))
         outline = manuscript.read(read_subsections=True, with_reference=True, with_content=True, with_evidence=True,
                                   fold_other=False)
         print(outline)
@@ -94,5 +94,5 @@ async def process_pdf_to_outline(pdf_path: Path, save_dir: Path,
     #                           fold_other=False)
     # print(outline)
     if not only_evidence:
-        outline_json_path.write_text(manuscript.to_json(ensure_ascii=False))
+        outline_json_path.write_text(manuscript.to_json(ensure_ascii=False), encoding="utf-8")
     return manuscript
