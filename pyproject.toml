@@ -1,0 +1,45 @@
+
+[project]
+name = "finform"
+dynamic = ["version"]
+description = "Agent for financial reporting"
+readme = "README.md"
+authors = [
+    { name = "Yajie Yang" },
+    { name = "Lifan Zhao", email = "mogician233@sjtu.edu.cn" }
+]
+license = "Apache-2.0"
+keywords = ["deep-learning", "multi agents", "agents"]
+classifiers = [
+    "Development Status :: 1 - Planning Copy",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Operating System :: OS Independent",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+requires-python = ">=3.10"
+dependencies = [
+    "agentscope[full]",
+    "akshare",
+    "pdfkit",
+    "fitz",
+    "frontend",
+    "ddgs",
+    "matplotlib",
+    "docling",
+    "markdown",
+    "scikit-learn",
+    "jieba",
+    "trafilatura",
+    "marker-pdf",
+    "dataclasses-json",
+    "seaborn",
+    "PyYAML",
+    "PyMuPDF",
+    "htmldate",
+    "beautifulsoup4",
+    "requests",
+    "Markdown",
+]
