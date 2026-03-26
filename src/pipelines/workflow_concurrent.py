@@ -35,6 +35,7 @@ from src.utils.parse_verdict import parse_verifier_verdict
 from src.utils.call_with_retry import call_agent_with_retry
 from src.utils.get_entity_info import get_entity_info
 from src.utils.file_converter import markdown_to_sections
+from src.utils.multi_types_verification import SegmentVerifier
 from src.utils.local_file import STOCK_REPORT_PATHS
 import config
 from src.utils.call_with_retry import call_chatbot_with_retry
@@ -76,11 +77,13 @@ async def process_single_segment(segment: Segment,
                                  demo_date,
                                  agent_factory,
                                  short_term,
-                                 long_term):
+                                 long_term,
+                                 multi_source_verification_enabled,
+                                 max_verify_rounds):
     """并发处理单个 Segment：包含搜索和写作"""
     print(f"[{time.strftime('%H:%M:%S')}]  ✍️ 开始写作: {segment.topic[:15]}...", flush=True)
 
-    searcher, writer = agent_factory()
+    searcher, writer, verifier = agent_factory()
     for i, evidence in enumerate(segment.evidences):
         if segment.reference and '【画图内容要求】' in segment.reference:
             continue
@@ -123,6 +126,67 @@ async def process_single_segment(segment: Segment,
                 segment.content = draft_msg.get_text_content()
                 print(f"[Writer] Segment finished: {segment.topic}")
                 print(segment.content, flush=True)
+
+
+        if multi_source_verification_enabled:
+
+            prev_issue_set = set()
+            for _ in range(max_verify_rounds):
+
+                verify_issues = await verifier.verify(segment.content)
+
+                # 过滤严重问题
+                verify_issues = [
+                    iss for iss in verify_issues
+                    if iss.severity in ("critical", "major")
+                ]
+                if not verify_issues:
+                    break
+
+                # 收敛检测
+                current_set = {
+                    (iss.type, iss.description)
+                    for iss in verify_issues
+                }
+
+                if current_set == prev_issue_set:
+                    break
+                prev_issue_set = current_set
+
+                # 格式化
+                def format_issues(issues):
+                    lines = []
+                    for i, iss in enumerate(issues[:8], 1):
+                        lines.append(
+                            f"{i}. [{iss.severity.upper()}] {iss.description}\n"
+                            f"   建议: {iss.suggestion}"
+                        )
+                    return "\n\n".join(lines)
+
+                verify_feedback = format_issues(verify_issues)
+
+                # token 控制
+                verify_feedback = verify_feedback[:1500]
+
+                # 生成 rewrite prompt
+                writer_input = Msg(
+                    name="user",
+                    content=(
+                        "以下是对你当前段落的事实核验问题，请你直接修正文：\n\n"
+                        f"{verify_feedback}\n\n"
+                        "要求：\n"
+                        "1. 保留可被 cite_id 支持的内容\n"
+                        "2. 删除或降级无法验证的断言\n"
+                        "3. 必须使用已有 cite_id\n"
+                        "4. 禁止新增未验证数字"
+                    ),
+                    role="user",
+                )
+
+                draft_msg = await call_agent_with_retry(writer, writer_input)
+
+                segment.content = draft_msg.get_text_content()
+
         await writer.memory.clear()
         segment.finished = True
         print(f"[{time.strftime('%H:%M:%S')}] ✅ 完成写作: {segment.topic[:15]}.", flush=True)
@@ -131,7 +195,8 @@ async def process_single_segment(segment: Segment,
         raise e
 
 async def process_section_concurrently(section: Section, parent_id, task_desc, demo_date, cur_date,
-                                       agent_factory, stock_symbol, output_pth, manuscript_root, short_term, long_term):
+                                       agent_factory, stock_symbol, output_pth, manuscript_root, short_term, long_term,
+                                       multi_source_verification_enabled, max_verify_rounds):
     """递归并发处理章节"""
 
     # 1. 处理子章节 (递归) - 优先启动子任务
@@ -142,7 +207,7 @@ async def process_section_concurrently(section: Section, parent_id, task_desc, d
             # 递归调用
             sub_tasks.append(process_section_concurrently(
                 subsection, section_id, task_desc, demo_date, cur_date, agent_factory,
-                stock_symbol, output_pth, manuscript_root, short_term, long_term,
+                stock_symbol, output_pth, manuscript_root, short_term, long_term, multi_source_verification_enabled, max_verify_rounds
             ))
 
     # 2. 处理当前章节的 Segments (并发)
@@ -153,7 +218,7 @@ async def process_section_concurrently(section: Section, parent_id, task_desc, d
             if segment.finished:
                 continue
             seg_tasks.append(process_single_segment(
-                segment, task_desc, demo_date, agent_factory, short_term, long_term,
+                segment, task_desc, demo_date, agent_factory, short_term, long_term, multi_source_verification_enabled, max_verify_rounds
             ))
 
     # 3. 等待所有 Segments 完成
@@ -233,7 +298,11 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
     long_term = LongTermMemoryStore(
         base_dir=long_term_dir,
     )
-    
+
+    cfg = config.Config()
+    multi_source_verification_enabled = cfg.is_multi_source_verification_enabled()
+    max_verify_rounds = cfg.get_max_verify_rounds()
+
     entity = get_entity_info(long_term, task_desc)
     if not entity or not entity.get("code"):
         raise ValueError(f"无法从 task_desc 解析股票实体/代码：{task_desc}")
@@ -316,14 +385,7 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
                         replace_unfinished_sections(subsection, outline.subsections[i])
 
         replace_unfinished_sections(manuscript, outline)
-        verifier_toolkit = build_verifier_toolkit(
-            short_term=short_term,
-            long_term=long_term,
-        )
-        verifier = create_verifier_agent(model=llm_reasoning, formatter=formatter, toolkit=verifier_toolkit)
-
-
-        def create_searcher_writer():
+        def create_searcher_writer_verifier():
             searcher_toolkit = build_searcher_toolkit(
                 short_term=short_term,
                 long_term=long_term,
@@ -335,7 +397,8 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
                 searcher=searcher,
             )
             writer = create_writer_agent(model=llm_reasoning, formatter=formatter, toolkit=writer_toolkit)
-            return searcher, writer
+            verifier = SegmentVerifier(short_term, long_term)
+            return searcher, writer,verifier
 
         # 启动递归并发处理
         await process_section_concurrently(
@@ -344,12 +407,14 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
             task_desc=task_desc,
             demo_date=demo_date,
             cur_date=cur_date,
-            agent_factory=create_searcher_writer,
+            agent_factory=create_searcher_writer_verifier,
             stock_symbol=stock_symbol,
             output_pth=output_pth,
             manuscript_root=manuscript,  # 用于在深层递归中保存完整的 json
             short_term=short_term,
             long_term=long_term,
+            multi_source_verification_enabled=multi_source_verification_enabled,
+            max_verify_rounds=max_verify_rounds,
         )
 
     markdown_text = section_to_markdown(manuscript)
