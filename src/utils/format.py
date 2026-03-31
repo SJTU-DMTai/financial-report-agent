@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 import json
+import re
 import traceback
 import warnings
+from collections import Counter
 
 import pandas as pd
 from agentscope.formatter import OpenAIChatFormatter
@@ -26,6 +28,73 @@ def fmt_yyyymmdd(s: str) -> str:
     except Exception as e:
         warnings.warn(f"DATE_FORMAT_ERROR: {s}")
         return s
+
+def extract_tagged_text(text: str, tag: str = "content") -> str | None:
+    if not text:
+        return None
+
+    pattern = re.compile(
+        rf"<{re.escape(tag)}>\s*(.*?)\s*</{re.escape(tag)}>",
+        re.DOTALL | re.IGNORECASE,
+    )
+    match = pattern.search(text)
+    if match is None:
+        return None
+    return match.group(1).strip()
+
+
+def extract_writer_content(text: str) -> str:
+    tagged_text = extract_tagged_text(text, "content")
+    if tagged_text is not None:
+        return tagged_text
+    return (text or "").strip()
+
+
+def extract_cite_ids(text: str) -> list[str]:
+    if not text:
+        return []
+    pattern = re.compile(r"\[\^cite_id[:=]\s*([^\]]+?)\s*\]")
+    return [m.group(1).strip() for m in pattern.finditer(text)]
+
+
+def extract_chart_ids(text: str) -> list[str]:
+    if not text:
+        return []
+    pattern = re.compile(
+        r'!\[(?P<alt>.*?)\]\(chart:(?P<chart_id>[a-zA-Z0-9_\-]+)\)'
+    )
+    return [m.group("chart_id").strip() for m in pattern.finditer(text)]
+
+
+def print_section_reference_warning(section_title: str, before_text: str, after_text: str) -> None:
+    before_cites = Counter(extract_cite_ids(before_text))
+    after_cites = Counter(extract_cite_ids(after_text))
+    before_charts = Counter(extract_chart_ids(before_text))
+    after_charts = Counter(extract_chart_ids(after_text))
+
+    missing_cites = []
+    for cite_id, count in before_cites.items():
+        if after_cites[cite_id] < count:
+            missing_cites.append(f"{cite_id} x{count - after_cites[cite_id]}")
+
+    missing_charts = []
+    for chart_id, count in before_charts.items():
+        if after_charts[chart_id] < count:
+            missing_charts.append(f"{chart_id} x{count - after_charts[chart_id]}")
+
+    if not missing_cites and not missing_charts:
+        return
+
+    print("\n[WARN] 章节润色后检测到引用或图表被删去", flush=True)
+    print(f"[WARN] 章节: {section_title}", flush=True)
+    if missing_cites:
+        print(f"[WARN] 缺失 cite_id: {missing_cites}", flush=True)
+    if missing_charts:
+        print(f"[WARN] 缺失 chart_id: {missing_charts}", flush=True)
+    print("[WARN] 修改前内容:", flush=True)
+    print(before_text, flush=True)
+    print("[WARN] 修改后内容:", flush=True)
+    print(after_text, flush=True)
 
 
 class PatchedOpenAIChatFormatter(OpenAIChatFormatter):

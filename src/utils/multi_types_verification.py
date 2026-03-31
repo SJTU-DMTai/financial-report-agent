@@ -37,7 +37,7 @@ from src.utils.call_with_retry import call_agent_with_retry
 from src.prompt import prompt_dict
 from pathlib import Path
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
+# logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 logger = logging.getLogger("TripleCheckVerifier")
 
 # ---------------------------------------------------------------------------

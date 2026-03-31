@@ -27,6 +27,7 @@ class MaterialMeta:
     time: Dict[str, str] = field(default_factory=dict)  # {}, {"point":...}, {"start":...,"end":...}
     description: str = ""
     source: str = ""  # 来源标记
+    upstream_cite_ids: List[str] = field(default_factory=list)
 
 @dataclass
 class ShortTermMemoryStore:
@@ -244,7 +245,8 @@ class ShortTermMemoryStore:
         source: str = "",
         entity: Optional[Dict[str, str]] = None,
         time: Optional[Dict[str, str]] = None,
-        forced_ext: str = ""
+        forced_ext: str = "",
+        upstream_cite_ids: Optional[List[str]] = None,
     ) -> None:
         self.ensure_dirs()
         
@@ -271,6 +273,8 @@ class ShortTermMemoryStore:
 
         entity = entity if entity is not None else {"name": "", "code": ""}
         time = time if time is not None else {}
+        upstream_cite_ids = upstream_cite_ids or []
+        upstream_cite_ids = [str(item).strip() for item in upstream_cite_ids if str(item).strip()]
         
         _DESC_SEP_RE = re.compile(r"[，,。.;；:：/\\|()（）\[\]{}<>《》“”\"'!?！？\t\r\n]+")
         _DESC_WS_RE = re.compile(r"\s+")
@@ -289,6 +293,7 @@ class ShortTermMemoryStore:
             time=time,
             description=description,
             source=source,
+            upstream_cite_ids=upstream_cite_ids,
         )
         self._save_registry()
 
@@ -334,7 +339,24 @@ class ShortTermMemoryStore:
             page_text = ""
             if isinstance(content, list) and content and isinstance(content[0], dict):
                 page_text = content[0].get("page_text") or ""
-            return _truncate(page_text)
+                return _truncate(page_text)
+            if isinstance(content, dict):
+                items = content.get("items")
+                if isinstance(items, list):
+                    previews = []
+                    for item in items[:3]:
+                        if not isinstance(item, dict):
+                            continue
+                        title = (item.get("title") or "").strip()
+                        desc = (item.get("description") or "").strip()
+                        if title and desc:
+                            previews.append(f"{title}: {desc}")
+                        elif title:
+                            previews.append(title)
+                        elif desc:
+                            previews.append(desc)
+                    return _truncate("\n".join(previews))
+            return ""
 
         # (B) 计算结果：calculate_*
         if isinstance(cite_id, str) and "calculate_" in cite_id:

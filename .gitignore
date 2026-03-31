@@ -3,6 +3,7 @@
 
 log*.txt
 *.out
+*.png
 data/memory/long_term/demonstration/*
 data/memory/short_term/*
 data/output/reports/*

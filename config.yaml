@@ -9,6 +9,13 @@ models:
     base_url_env: https://openrouter.ai/api/v1
     stream: false
 
+  qwen3.6-plus-preview:
+    provider: openrouter
+    model_name: qwen/qwen3.6-plus-preview:free
+    reasoning_only: true
+    base_url_env: https://openrouter.ai/api/v1
+    stream: false
+
   mimo:
     provider: xiaomi
     model_name: mimo-v2-flash
@@ -56,6 +63,7 @@ models:
   qwen3-235b-thinking:
     provider: openrouter
     model_name: qwen/qwen3-235b-a22b-thinking-2507
+    non_reasoning_model_name: qwen/qwen3-235b-a22b-instruct-2507
     base_url_env: https://openrouter.ai/api/v1
     stream: false
 
@@ -175,5 +183,3 @@ verify_config:
 wkhtmltopdf_path:
   path: /usr/local/bin/wkhtmltopdf
 
-planner:
-  use_demonstration: True
