@@ -33,7 +33,7 @@ from marker.output import text_from_rendered
 import markdown
 import re
 import html
-from typing import Optional, Union, List, Dict, Tuple
+from typing import Optional, Union, List, Dict, Tuple, Any
 import time
 from datetime import datetime
 
@@ -179,9 +179,160 @@ def _remove_external_images(md_text: str) -> str:
     pattern = re.compile(r'!\[.*?\]\(https?://[^\)]+\)')
     return pattern.sub("", md_text)
 
+def _collect_appendix_entries(citations: List[Dict], short_term: ShortTermMemoryStore) -> List[Dict]:
+    entries: List[Dict] = []
+    seen: set[str] = set()
+    next_extra_index = len(citations) + 1
+
+    def append_entry(
+        cite_id: str,
+        detail: str,
+        meta: Optional[Any],
+        is_direct: bool,
+        index: Optional[int] = None,
+    ) -> None:
+        nonlocal next_extra_index
+        if cite_id in seen:
+            return
+        seen.add(cite_id)
+
+        if index is None:
+            index = next_extra_index
+            next_extra_index += 1
+        entries.append(
+            {
+                "index": index,
+                "cite_id": cite_id,
+                "detail": detail,
+                "meta": meta,
+                "is_direct": is_direct,
+            }
+        )
+
+    def collect_upstream(cite_id: str, path: Optional[set[str]] = None) -> None:
+        path = set(path or set())
+        if cite_id in path:
+            return
+        path.add(cite_id)
+
+        meta = short_term.get_material_meta(cite_id) if hasattr(short_term, "get_material_meta") else None
+        if meta is None:
+            return
+
+        for upstream_cite_id in getattr(meta, "upstream_cite_ids", []) or []:
+            upstream_cite_id = str(upstream_cite_id)
+            upstream_meta = short_term.get_material_meta(upstream_cite_id) if hasattr(short_term, "get_material_meta") else None
+            append_entry(
+                cite_id=upstream_cite_id,
+                detail="",
+                meta=upstream_meta,
+                is_direct=False,
+            )
+            collect_upstream(upstream_cite_id, path)
+
+    for c in sorted(citations, key=lambda x: x["index"]):
+        append_entry(
+            cite_id=str(c["cite_id"]),
+            detail=c.get("detail", ""),
+            meta=c.get("meta"),
+            is_direct=True,
+            index=c["index"],
+        )
+
+    for c in sorted(citations, key=lambda x: x["index"]):
+        collect_upstream(str(c["cite_id"]))
+
+    return entries
 
 
-def _build_appendix_md(citations: List[Dict]) -> str:
+def _render_upstream_tree_lines(
+    cite_id: str,
+    short_term: ShortTermMemoryStore,
+    prefix: str = "",
+    is_last: bool = True,
+    is_root: bool = False,
+    path: Optional[set[str]] = None,
+) -> List[str]:
+    path = set(path or set())
+    node_prefix = ""
+    if not is_root:
+        node_prefix = "\\- " if is_last else "|- "
+
+    line = f"{prefix}{node_prefix}{cite_id}"
+    if cite_id in path:
+        return [f"{line} (cycle detected)"]
+
+    meta = short_term.get_material_meta(cite_id) if hasattr(short_term, "get_material_meta") else None
+    if meta is None:
+        return [f"{line} (missing registry metadata)"]
+
+    path.add(cite_id)
+    upstream_cite_ids = getattr(meta, "upstream_cite_ids", []) or []
+    lines = [line]
+    if is_root:
+        next_prefix = ""
+    else:
+        next_prefix = prefix + ("   " if is_last else "|  ")
+    for idx, upstream_cite_id in enumerate(upstream_cite_ids):
+        lines.extend(
+            _render_upstream_tree_lines(
+                upstream_cite_id,
+                short_term=short_term,
+                prefix=next_prefix,
+                is_last=(idx == len(upstream_cite_ids) - 1),
+                is_root=False,
+                path=path,
+            )
+        )
+    return lines
+
+
+def _build_appendix_dag_md(citations: List[Dict], short_term: ShortTermMemoryStore) -> str:
+    if not citations:
+        return ""
+
+    lineage_citations: List[Tuple[Dict, List[str]]] = []
+    for c in sorted(citations, key=lambda x: x["index"]):
+        cite_id = str(c["cite_id"])
+        meta = c.get("meta") or (short_term.get_material_meta(cite_id) if hasattr(short_term, "get_material_meta") else None)
+        upstream_cite_ids = [str(item) for item in (getattr(meta, "upstream_cite_ids", []) or [])]
+        if upstream_cite_ids:
+            lineage_citations.append((c, upstream_cite_ids))
+
+    if not lineage_citations:
+        return ""
+
+    lines: List[str] = []
+    lines.append("## 第二部分：数据溯源附录")
+    lines.append("")
+    lines.append("以下为正文引用的计算结果的溯源关系。")
+    lines.append("")
+
+    for c, upstream_cite_ids in lineage_citations:
+        idx = c["index"]
+        cite_id = str(c["cite_id"])
+        lines.append(f"**[{idx}] `{cite_id}`**")
+        lines.append("")
+        lines.append("```text")
+        for upstream_idx, upstream_cite_id in enumerate(upstream_cite_ids):
+            lines.extend(
+                _render_upstream_tree_lines(
+                    upstream_cite_id,
+                    short_term=short_term,
+                    prefix="",
+                    is_last=(upstream_idx == len(upstream_cite_ids) - 1),
+                    is_root=False,
+                    path={cite_id},
+                )
+            )
+        lines.append("```")
+        lines.append("")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def _build_appendix_md(citations: List[Dict], short_term: ShortTermMemoryStore) -> str:
     """
     根据 citations 构造“附录”的 Markdown 文本。
 
@@ -203,6 +354,7 @@ def _build_appendix_md(citations: List[Dict]) -> str:
     if not citations:
         return ""
 
+    appendix_entries = _collect_appendix_entries(citations, short_term)
     lines: List[str] = []
 
     # 附录大标题
@@ -210,17 +362,18 @@ def _build_appendix_md(citations: List[Dict]) -> str:
     lines.append("")
 
     # 第一部分标题
-    lines.append("## 第一部分：数据来源附录")
+    lines.append("## 第一部分：引用材料清单")
     lines.append("")
-    lines.append("以下为文中引用到的数据及材料来源：")
+    lines.append("以下为正文直接引用或是计算使用到的数据及材料来源：")
     lines.append("")
 
     # 按 index 排序，保证顺序稳定
-    for c in sorted(citations, key=lambda x: x["index"]):
+    for c in appendix_entries:
         idx = c["index"]
         cite_id = c["cite_id"]
         detail = c["detail"]
         meta = c["meta"]
+        is_direct = c["is_direct"]
 
         # 做一下 HTML 转义，避免特殊字符干扰
         esc_cite_id = html.escape(str(cite_id)) if cite_id is not None else ""
@@ -229,7 +382,10 @@ def _build_appendix_md(citations: List[Dict]) -> str:
         # 有序列表项首行：
         # 1. <a id="ref-1"></a>**REF_ID**（引用字段/行：detail）
         # 注意：<a id="ref-1"></a> 是真正的锚点，和正文里的 href="#ref-1" 完全对应
-        first_line = f'1. <a id="ref-{idx}"></a>**{esc_cite_id}**'
+        if is_direct:
+            first_line = f'1. <a id="ref-{idx}"></a>**{esc_cite_id}**'
+        else:
+            first_line = f'1. **{esc_cite_id}**'
         if esc_detail:
             first_line += f'（引用字段/行：{esc_detail}）'
         lines.append(first_line)
@@ -256,6 +412,10 @@ def _build_appendix_md(citations: List[Dict]) -> str:
 
         # 每条引用之间空一行，增强可读性
         lines.append("")
+
+    dag_md = _build_appendix_dag_md(citations, short_term)
+    if dag_md:
+        lines.append(dag_md)
 
     return "\n".join(lines)
 
@@ -369,7 +529,7 @@ def md_to_pdf(
     if not cleaned_sections_md:
         return "[md_to_pdf] 所有章节为空，无法生成 PDF。"
 
-    appendix_md = _build_appendix_md(citations)
+    appendix_md = _build_appendix_md(citations, short_term)
     if appendix_md:
         cleaned_sections_md.append(appendix_md)
 
