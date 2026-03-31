@@ -137,7 +137,6 @@ async def process_single_segment(segment: Segment,
             for _ in range(max_verify_rounds):
 
                 verify_issues = await verifier.verify(segment.content)
-
                 # 过滤严重问题
                 verify_issues = [
                     iss for iss in verify_issues
@@ -145,16 +144,15 @@ async def process_single_segment(segment: Segment,
                 ]
                 if not verify_issues:
                     break
+                # # 收敛检测
+                # current_set = {
+                #     (iss.type, iss.description)
+                #     for iss in verify_issues
+                # }
 
-                # 收敛检测
-                current_set = {
-                    (iss.type, iss.description)
-                    for iss in verify_issues
-                }
-
-                if current_set == prev_issue_set:
-                    break
-                prev_issue_set = current_set
+                # if current_set == prev_issue_set:
+                #     break
+                # prev_issue_set = current_set
 
                 # 格式化
                 def format_issues(issues):
@@ -163,6 +161,7 @@ async def process_single_segment(segment: Segment,
                         lines.append(
                             f"{i}. [{iss.severity.upper()}] {iss.description}\n"
                             f"   建议: {iss.suggestion}"
+                            f"   证据: {iss.evidence}"
                         )
                     return "\n\n".join(lines)
 
