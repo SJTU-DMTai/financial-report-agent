@@ -1,4 +1,6 @@
 """
+Triple-Check Verifier — 论文级三路交叉验证系统
+=================================================
 Architecture:
     Claim Extractor → [FactChecker, NumericChecker, TemporalChecker] → ConsistencyFusion
 
@@ -36,8 +38,9 @@ from src.utils.instance import create_chat_model, create_agent_formatter
 from src.utils.call_with_retry import call_agent_with_retry
 from src.prompt import prompt_dict
 from pathlib import Path
+from src.memory.short_term import MaterialType
 
-# logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 logger = logging.getLogger("TripleCheckVerifier")
 
 # ---------------------------------------------------------------------------
@@ -127,14 +130,12 @@ class ClaimExtractor:
         # 使用 call_agent_with_retry 调用 agent
         response_msg = await call_agent_with_retry(self.agent, msg)
 
-        # 获取文本内容（已正确解码）
+        # 获取文本内容
         raw = response_msg.get_text_content()
 
-        print("\n====== RAW LLM OUTPUT ======")
-        print(type(raw))
-        print(repr(raw[:200]))
-        print("FIXED repr:", repr(fix_encoding(raw[:200])))
-        print("====== END ======\n")
+        # print("\n====== RAW LLM OUTPUT ======")
+        # print(type(raw))
+        # print("====== END ======\n")
 
         # 安全解析 JSON
         try:
@@ -198,12 +199,18 @@ class ClaimExtractor:
 # ---------------------------------------------------------------------------
 
 @dataclass
+class EvidenceSpan:
+    cite_id: str
+    text: str
+    score: Optional[float] = None   # 相关性/置信度
+
+@dataclass
 class ClaimIssue:
     type: str
     description: str
     severity: str
-    suggestion: str
-
+    evidence: List[EvidenceSpan] = field(default_factory=list)
+    suggestion: Dict[str, Any] = field(default_factory=dict)
 
 @dataclass
 class ClaimResult:
@@ -293,9 +300,12 @@ class VerifierRouter:
             response_msg = await call_agent_with_retry(agent, msg)
             text = response_msg.get_text_content()
 
-            print(f"\n====== [{verifier_name.upper()} BATCH RAW OUTPUT] ======")
-            print("TEXT:", text[:500] + "..." if len(text) > 500 else text)
-            print("====================================\n")
+            # print(f"\n====== [{verifier_name.upper()} BATCH RAW OUTPUT] ======")
+            # if text is None:
+            #     print("TEXT: <None>")
+            # else:
+            #     print("TEXT:", text[:500] + "..." if len(text) > 500 else text)
+            # print("====================================\n")
 
             # 安全解析
             data = _safe_parse_json(text)
@@ -314,11 +324,13 @@ class VerifierRouter:
                 cid = item.get("claim_id")
                 if not cid or cid not in result:
                     continue
+
                 result[cid].append(ClaimIssue(
                     type=item.get("type", "unknown"),
                     description=f"[{verifier_name}] {item.get('description', '')}",
                     severity=self._normalize_severity(item.get("severity")),
-                    suggestion=item.get("suggestion", "")
+                    suggestion=item.get("suggestion", {}),
+                    evidence=item.get("evidence", [])
                 ))
             return result
 
@@ -429,43 +441,65 @@ class SegmentVerifier:
 # # ---------------------------------------------------------------------------
 # if __name__ == "__main__":
 #     segment = (
-#         "销量的爆发式增长直接转化为对固定成本的强力摊薄。随着产量从2019年的97.27万辆攀升至2023年的304.52万辆，公司的固定资产折旧、研发费用等固定成本被巨大的销量基数有效稀释。"
-#         "数据显示，公司研发费用从2019年的56.29亿元增长至2023年的395.75亿元，增幅达6.03倍[^cite_id:002594_profit_按年度][^cite_id:002594_balance_按年度_1773318841]。"
-#         "更关键的是，规模扩张显著增强了公司对上游供应商的议价能力。公司应付账款从2019年的361.68亿元激增至2023年的1,984.83亿元，增长4.49倍[^cite_id:002594_balance_按年度_1773318841][^cite_id:002594_profit_按年度]，"
-#         "这直接反映了公司对上游供应商的强势地位，能够有效延长付款周期、压低采购成本。"
+#         """公司已逐步将产业链一体化优势转化为产品力优势。通过实现新能源汽车产业链的全覆盖，有效降低了原材料价格剧烈变化的风险，同时有效降低成本，提高生产效率，并因此拥有了一定的定价主动权 [^cite_id:2024-06-24_reference_report]。
+
+# 从产品策略来看，公司已将成本端与企业运营端优势转化为产品力优势：2024年2月，王朝/海洋系列在短短两周内密集投放五波荣耀版车型，包括秦PLUS、驱逐舰05、海豚、汉、唐以及宋PLUS、宋Pro，覆盖从7.98万元到24.98万元的小型、紧凑型以及中大型车市场，较冠军版起售价最高降低了6万元，实现了"加量还降价" [^cite_id:2024-06-24_reference_report]。其中，秦PLUS荣耀版以"日系省油、德系驾驶、美系智能"的赞誉上市，首周便取得了23,590辆的新车订单 [^cite_id:2024-06-24_reference_report]。
+
+# 2024年5月，公司开启了基于全新混动平台DM5.0的全新车型序列的逐步上市，率先上市的比亚迪秦L与海豹06定位紧凑型级别，但车身尺寸和轴距已经是中型轿车水平 [^cite_id:2024-06-24_reference_report]。该车型序列叠加同级领先的油耗、智能化与电气化水平，在"油电同价"的基础上进一步升级为"电比油低"，充分体现了公司对于10万至20万元细分市场的竞争力与志在必得的决心 [^cite_id:2024-06-24_reference_report]。上市不到2周的时间已经累计获得8万台订单，充分体现了消费者对该系列车型的充分认可 [^cite_id:2024-06-24_reference_report]。
+
+# ![新车型与竞品核心参数对比](chart:chart_1774964357334)
+
+# 数据显示，2026年5月上市的秦L DM-i与海豹06 DM-i在核心参数上显著优于同级别传统燃油竞品：WLTC综合油耗分别为1.11L/100km和1.36L/100km，远低于轩逸2024款经典（5.94L/100km）和朗逸2024款（5.92L/100km）[^cite_id:2024-06-24_reference_report]。车身尺寸方面，秦L与海豹06的轴距达到2790mm，已超过轩逸（2700mm）和朗逸（2688mm）的中型轿车水平 [^cite_id:2024-06-24_reference_report]。智能化配置上，秦L与海豹06标配倒车影像、定速巡航、车载智能系统及完整的手机App远程控制功能，而轩逸和朗逸在同价位车型中上述配置多数缺失 [^cite_id:2024-06-24_reference_report]。
+# """
 #     )
 
-#     short_term = ShortTermMemoryStore(base_dir=Path("D:/code/2026/Agent/financial-report-agent/tests/test_verifier_material"))
+#     # short_term = ShortTermMemoryStore(base_dir=Path("D:/code/2026/Agent/financial-report-agent/tests/test_verifier_material"))
 
-    # # 保存测试材料
-    # short_term.save_material(
-    #     cite_id="002594_profit_按年度",
-    #     content="公司研发费用从2019年的56.29亿元增长至2023年的395.75亿元，增幅达6.03倍。",
-    #     description="研发费用年度数据",
-    #     source="财报"
-    # )
-    # short_term.save_material(
-    #     cite_id="002594_balance_按年度_1773318841",
-    #     content="公司应付账款从2019年的361.68亿元激增至2023年的1,984.83亿元，增长4.49倍。",
-    #     description="应付账款年度数据",
-    #     source="财报"
-    # )
-    # short_term.save_material(
-    #     cite_id="002594_balance_按年度",
-    #     content="2019年产量97.27万辆，2023年产量304.52万辆，固定资产折旧、研发费用被摊薄。",
-    #     description="产量和固定成本数据",
-    #     source="财报"
-    # )
+#     # long_term = LongTermMemoryStore(base_dir=Path("D:/code/2026/Agent/financial-report-agent/tests/long_term"))
+#     PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
-    # long_term = LongTermMemoryStore(base_dir=Path("D:/code/2026/Agent/financial-report-agent/tests/long_term"))
+#     long_term_dir = PROJECT_ROOT / "data" / "memory" / "long_term"
+    
+#     long_term = LongTermMemoryStore(
+#         base_dir=long_term_dir,
+#     )
 
-    # verifier = SegmentVerifier(short_term=short_term, long_term=long_term)
+#     short_term_dir = PROJECT_ROOT / "data" / "memory" / "short_term" / "002594_20260331"
 
-    # async def test():
-    #     issues = await verifier.verify(segment)
-    #     print("\n=== 验证结果 ===")
-    #     for iss in issues:
-    #         print(f"[{iss.severity}] {iss.type} → {iss.description}")
-    #         print(f"  建议: {iss.suggestion}")
+#     short_term = ShortTermMemoryStore(
+#         base_dir=short_term_dir,
+#     )
 
-    # asyncio.run(test())
+#     # # ---- 注册缺失的材料 ----
+#     # cite_id = "2024-06-24_reference_report"
+#     # material_path = short_term_dir / "material" / f"{cite_id}.txt"
+
+#     # # 检查元数据中是否已有
+#     # meta = short_term.get_material_meta(cite_id)
+#     # if not meta:
+#     #     if material_path.exists():
+#     #         with open(material_path, "r", encoding="utf-8") as f:
+#     #             content = f.read()
+#     #         short_term.save_material(
+#     #             cite_id=cite_id,
+#     #             content=content,
+#     #             description="比亚迪首次覆盖报告（2024-06-24）",
+#     #             source="测试材料",
+#     #         )
+#     #         print(f"材料 {cite_id} 已注册")
+#     #     else:
+#     #         print(f"警告：材料文件 {material_path} 不存在，请检查路径")
+#     # else:
+#     #     print(f"材料 {cite_id} 已在元数据中")
+    
+#     verifier = SegmentVerifier(short_term=short_term, long_term=long_term)
+
+#     async def test():
+#         issues = await verifier.verify(segment)
+#         print("\n=== 验证结果 ===")
+#         for iss in issues:
+#             print(f"[{iss.severity}] {iss.type} → {iss.description}")
+#             print(f"  建议: {iss.suggestion}")
+#             print(f" 证据：{iss.evidence}")
+
+#     asyncio.run(test())
