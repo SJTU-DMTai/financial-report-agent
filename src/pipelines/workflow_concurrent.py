@@ -40,6 +40,88 @@ from src.utils.local_file import STOCK_REPORT_PATHS
 import config
 from src.utils.call_with_retry import call_chatbot_with_retry
 from src.utils.instance import llm_reasoning, llm_instruct, llm_judge, formatter
+import logging
+from typing import List, Optional, Dict, Any
+# 假设你在相同目录下运行，导入你定义的 MaterialTools
+from src.tools.material_tools import MaterialTools
+
+async def preload_task_materials(
+    tools: MaterialTools, 
+    symbol: str, 
+    start_date: str, 
+    end_date: Optional[str] = None,
+    news_keywords: Optional[List[str]] = None,
+    disclosure_categories: Optional[List[str]] = None
+) -> Dict[str, Any]:
+    """
+    针对单次任务的前置知识摄取流水线。
+    复用 MaterialTools 中的工具，将长文本材料提前存入 ShortTermMemoryStore。
+    """
+    logging.info(f"[Pre-loader] 🚀 开始为任务预加载知识库: Entity={symbol}, 时间={start_date}至{end_date}")
+    print(f"[Pre-loader] 🚀 开始为任务预加载知识库: Entity={symbol}, 时间={start_date}至{end_date}")
+
+    if tools.short_term and hasattr(tools.short_term, "_registry"):
+            current_registry_size = len(tools.short_term._registry)
+            if current_registry_size > 0:
+                msg = f"检测到本地 Registry 已存在 {current_registry_size} 条材料，跳过网络预加载环节。"
+                logging.info(f"[Pre-loader] ⏭️ {msg}")
+                print(f"[Pre-loader] ⏭️ {msg}")
+                return {
+                    "symbol": symbol,
+                    "news_batches_loaded": 0,
+                    "disclosure_categories_loaded": 0,
+                    "errors": [],
+                    "total_materials_in_memory": current_registry_size,
+                    "skipped": True 
+                }
+
+    news_keywords = news_keywords or [""]
+    disclosure_categories = disclosure_categories or [""] 
+    print("symbol:", symbol)
+    stats = {
+        "symbol": symbol,
+        "news_batches_loaded": 0,
+        "disclosure_categories_loaded": 0,
+        "errors": []
+    }
+    start_date = start_date.replace("-", "")
+    end_date = end_date.replace("-", "") if end_date else None
+    # ==========================================
+    # 阶段 2：预加载并解析 PDF 公告
+    # ==========================================
+    for category in disclosure_categories:
+        try:
+            logging.info(f"[Pre-loader] 📄 正在拉取并解析公告 (类型: '{category}')")
+            print(f"[Pre-loader] 📄 正在拉取并解析公告 (类型: '{category}')")
+            # 触发 _fetch_pdf_text 逻辑，
+            # 并把每篇公告作为独立的 cite_id 存入 registry
+            await tools.fetch_disclosure_material(
+                symbol=symbol,
+                start_date=start_date,
+                end_date=end_date,
+                market="沪深京",
+                keyword="", 
+                category=category
+            )
+            stats["disclosure_categories_loaded"] += 1
+        except Exception as e:
+            err_msg = f"公告预加载失败 (类型:{category}): {str(e)}"
+            logging.error(f"[Pre-loader] ❌ {err_msg}")
+            stats["errors"].append(err_msg)
+            
+    # ==========================================
+    # 阶段 3：缓存对齐与状态确认
+    # ==========================================
+    registry_size = len(tools.short_term._registry) if tools.short_term else 0
+    stats["total_materials_in_memory"] = registry_size
+    
+    logging.info(f"[Pre-loader] ✅ 预加载完成！当前内存池共有 {registry_size} 条独立材料。")
+    print(f"[Pre-loader] ✅ 预加载完成！当前内存池共有 {registry_size} 条独立材料。")
+    
+    if stats["errors"]:
+        logging.warning(f"[Pre-loader] ⚠️ 预加载期间发生了 {len(stats['errors'])} 个错误。")
+        
+    return stats
 
 # 用于保护并发写入文件的锁
 SAVE_LOCK = asyncio.Lock()
@@ -198,6 +280,16 @@ async def process_section_concurrently(section: Section, parent_id, task_desc, d
                                        agent_factory, stock_symbol, output_pth, manuscript_root, short_term, long_term,
                                        multi_source_verification_enabled, max_verify_rounds):
     """递归并发处理章节"""
+
+    tools = MaterialTools(short_term=short_term, long_term=long_term)
+    start_date = f"{int(cur_date[:4]) - 1}-01-01"
+    end_date = f"{cur_date[:4]}-{cur_date[4:6]}-{cur_date[6:]}"
+    stats = await preload_task_materials(
+        tools=tools,
+        symbol=stock_symbol,
+        start_date=start_date,
+        end_date=end_date
+    )
 
     # 1. 处理子章节 (递归) - 优先启动子任务
     sub_tasks = []
