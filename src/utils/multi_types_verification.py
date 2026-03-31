@@ -13,10 +13,9 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-import math
 import logging
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import (
     Any,
@@ -24,128 +23,55 @@ from typing import (
     List,
     Optional,
     Tuple,
-    Union,
 )
-from datetime import datetime, timedelta
 from urllib.parse import urlparse
 
-import numpy as np
-import pandas as pd
 from agentscope.message import Msg
-from agentscope.tool._coding._python import execute_python_code
+from agentscope.agent import ReActAgent  
+from agentscope.memory import InMemoryMemory
+from agentscope.tool import Toolkit
 
-from src.agents.verifier import create_verifier_agent, build_verifier_toolkit
+from src.agents.verifier import create_three_verifiers, build_verifier_toolkit
 from src.memory.short_term import ShortTermMemoryStore, MaterialType
 from src.memory.long_term import LongTermMemoryStore
 from src.utils.instance import create_chat_model, create_agent_formatter
 from src.utils.call_with_retry import call_agent_with_retry
 from src.prompt import prompt_dict
-
-# ---------------------------------------------------------------------------
-# Configuration & Logging
-# ---------------------------------------------------------------------------
+from pathlib import Path
+from src.memory.short_term import MaterialType
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 logger = logging.getLogger("TripleCheckVerifier")
 
-
-
 # ---------------------------------------------------------------------------
-# § 1Memory / Knowledge Context
+# 安全 JSON 解析（统一使用）
 # ---------------------------------------------------------------------------
+def _safe_parse_json(text: str) -> Dict[str, Any]:
+    """移除 markdown 代码块并提取 JSON 对象/数组，然后解析。"""
+    # 移除可能的 markdown 代码块
+    text = re.sub(r'^```(?:json)?\s*\n?', '', text, flags=re.MULTILINE)
+    text = re.sub(r'\n?```\s*$', '', text, flags=re.MULTILINE)
+    text = text.strip()
 
-def material_source_key(
-    short_term,  # ShortTermMemoryStore
-    cite_id: str,
-) -> str:
-    """
-    给定 cite_id，返回“来源归一化 key”，用于判定两个 material 是否来自同一来源。
+    # 提取第一个 JSON 对象或数组
+    match = re.search(r'(\{[\s\S]*\}|\[[\s\S]*\])', text)
+    if not match:
+        raise ValueError("No JSON structure found in response")
+    json_str = match.group(1)
 
-    规则：
-      - search_engine：按 domain 聚合（同域名视为同来源）
-      - 计算工具：每个 cite_id 视为独立来源
-      - AKshare API：按api的数据来源
-      - 其它：按 meta.source 归一化（source 为空则回退到 filename）
+    return json.loads(json_str)
 
-    返回示例：
-      - "web:zhihu.com"
-      - "calc:calculate_financial_ratio_result_1767927143"
-      - "akshare:eastmoney"
-      - "src:xxx"
-      - "file:xxx.csv"
-    """
-    meta = short_term.get_material_meta(cite_id)
-    if meta is None:
-        raise ValueError(f"Material cite_id='{cite_id}' 不存在于 registry。")
+def fix_encoding(s: str) -> str:
+    try:
+        return s.encode('latin-1').decode('utf-8')
+    except Exception:
+        return s
 
-    src_raw = (meta.source or "").strip()
-    src_lower = src_raw.lower()
 
-    # 1) AKshare：api的数据来源，如eastmoney，同花顺等
-    if src_lower.startswith("akshare"):
-        provider = ""
-        if ":" in src_raw:
-            provider = src_raw.split(":", 1)[1].strip().lower()
-        provider = provider or "unknown"
-        return f"akshare:{provider}"
-
-    # 2) 计算工具：每个结果独立算一个来源
-    if cite_id.startswith("calculate_"):
-        return f"calc:{cite_id}"
-
-    # 3) Search engine：按 domain 聚合
-    if cite_id.startswith("search_engine") or ("search engine" in src_lower):
-        domain = None
-        if not src_raw:
-            domain = None
-        _DOMAIN_IN_SOURCE_RE = re.compile(
-            r"(?:来源|source)\s*[：:]\s*([a-z0-9][a-z0-9.-]*\.[a-z]{2,})",
-            flags=re.IGNORECASE,
-        )
-        _URL_RE = re.compile(r"https?://[^\s)\]}>\"']+", flags=re.IGNORECASE)
-        m = _DOMAIN_IN_SOURCE_RE.search(src_raw)
-        if m:
-            domain=m.group(1)
-        um = _URL_RE.search(src_raw)
-        if um:
-            try:
-                domain=urlparse(um.group(0)).netloc
-            except Exception:
-                domain = None
-
-    
-        if not domain:
-            # 从 material 原文解析 link/url
-            obj = short_term.load_material(cite_id)
-            url = obj[0].get("link","")
-            if url:
-                domain = urlparse(url).netloc
-
-        domain = (domain or "").strip().lower()
-        if domain and domain.startswith("www."):
-            domain = domain[4:]
-
-        return f"web:{domain or 'unknown'}"
-
-    # 4) 其它：按 source 归一化；若 source 为空，退化为 filename
-    if src_raw:
-        norm_src = re.sub(r"\s+", " ", src_raw).lower()
-        return f"src:{norm_src}"
-    return f"file:{(meta.filename or '').strip().lower()}"
-    
 # ---------------------------------------------------------------------------
 # §2  Claim Extractor - 完全由 LLM 驱动的原子声明提取器
 # ---------------------------------------------------------------------------
 
-import re
-import json
-import logging
-from typing import Dict, Any, List, Optional, Tuple
-from dataclasses import dataclass, field
-from enum import Enum
-from abc import ABC, abstractmethod
-
-# ---------- 基础类型定义 ----------
 class ClaimType(str, Enum):
     FACTUAL = "factual"
     NUMERIC = "numeric"
@@ -153,6 +79,7 @@ class ClaimType(str, Enum):
     FACTUAL_NUMERIC = "factual_numeric"
     NUMERIC_TEMPORAL = "numeric_temporal"
     COMPOSITE = "composite"
+
 
 @dataclass
 class Claim:
@@ -164,120 +91,58 @@ class Claim:
     source_span: Tuple[int, int] = (0, 0)
     cite_ids: List[str] = field(default_factory=list)
 
-class LLMProvider(ABC):
-    @abstractmethod
-    async def generate(self, prompt: str, system: Optional[str] = None) -> str:
-        pass
-
-class AgentScopeLLM(LLMProvider):
-    def __init__(self, model):
-        self.model = model
-
-    async def generate(self, prompt: str, system: Optional[str] = None) -> str:
-        messages = []
-        if system:
-            messages.append({"role": "system", "content": system})
-        messages.append({"role": "user", "content": prompt})
-
-        response = await self.model(messages)
-
-        # 优先处理 ChatResponse
-        if hasattr(response, "content"):
-            content = response.content
-
-            if isinstance(content, list):
-                for item in content:
-                    if isinstance(item, dict) and item.get("type") == "text":
-                        return item.get("text", "")
-
-            # fallback
-            return str(content)
-
-        # OpenAI 兼容
-        if hasattr(response, "choices"):
-            return response.choices[0].message.content
-
-        if isinstance(response, str):
-            return response
-
-        return str(response)
-
-logger = logging.getLogger(__name__)
+    def to_dict(self) -> Dict[str, Any]:
+        """用于批量验证的序列化方法"""
+        return {
+            "claim_id": self.claim_id,
+            "claim_type": self.claim_type.value,
+            "original_text": self.original_text,
+            "normalized_text": self.normalized_text,
+            "slots": self.slots,
+            "cite_ids": self.cite_ids,
+        }
 
 class ClaimExtractor:
     """
-    从文本片段中提取原子声明（单一事实、单一数值、单一时间）。
-    所有提取逻辑由 LLM 完成，本类只负责调用 LLM、解析 JSON、计算源位置和去重。
+    从文本片段中提取原子声明。
+    使用 ChatAgent（无工具）进行纯文本生成，避免 ReAct 的开销。
     """
     CITE_RE = re.compile(r"\[\^cite_id:([A-Za-z0-9_\-]+)(?:\|[^\]]*)?\]")
 
-    def __init__(self, llm: LLMProvider, system_prompt: str):
+    def __init__(self, agent):
         """
-        :param llm: 大模型接口
-        :param system_prompt: 系统提示词（应要求输出原子声明）
+        :param agent: AgentScope ChatAgent 实例（已配置好系统提示词）
         """
-        self.llm = llm
-        self.system_prompt = system_prompt
-
-    # ---------- JSON 解析 ----------
-    def _safe_json_load(self, raw: str) -> Dict[str, Any]:
-        """健壮的 JSON 解析，处理 markdown 代码块"""
-        raw = re.sub(r'^```(?:json)?\s*\n?', '', raw, flags=re.MULTILINE)
-        raw = re.sub(r'\n?```\s*$', '', raw, flags=re.MULTILINE)
-        raw = raw.strip()
-
-        if not raw:
-            logger.warning("Empty response from LLM")
-            return {"claims": [], "__parse_failed": True}
-
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError:
-            match = re.search(r'(\{[\s\S]*\}|\[[\s\S]*\])', raw)
-            if match:
-                try:
-                    data = json.loads(match.group(1))
-                except json.JSONDecodeError as e:
-                    logger.warning(f"Failed to parse JSON from LLM response: {e}")
-                    return {"claims": [], "__parse_failed": True}
-            else:
-                logger.warning("No JSON structure found in LLM response")
-                return {"claims": [], "__parse_failed": True}
-
-        if isinstance(data, list):
-            data = {"claims": data}
-        elif not isinstance(data, dict):
-            return {"claims": [], "__parse_failed": True}
-        return data
-
-    # ---------- 精确计算原文位置 ----------
-    def _find_span(self, segment: str, text: str, start_pos: int = 0) -> Tuple[Tuple[int, int], int]:
-        """
-        在 segment 中查找 text 的起止位置（精确匹配）。
-        返回 ((start, end), next_start)，用于顺序查找。
-        """
-        if not text:
-            return (0, 0), start_pos
-        idx = segment.find(text, start_pos)
-        if idx != -1:
-            return (idx, idx + len(text)), idx + len(text)
-        # 若未找到，记录警告并返回默认值
-        logger.warning(f"Could not find substring '{text[:50]}...' in segment (start_pos={start_pos})")
-        return (0, 0), start_pos
+        self.agent = agent
 
     # ---------- 主提取方法 ----------
     async def extract(self, text: str) -> List[Claim]:
         if not text.strip():
             return []
 
-        # 调 LLM（注意：不再去掉 cite）
-        raw = await self.llm.generate(text, system=self.system_prompt)
+        # 构建用户消息
+        msg = Msg(
+            name="extractor",
+            role="user",
+            content=text
+        )
 
-        print("\n====== RAW LLM OUTPUT ======")
-        print(raw)
-        print("====== END ======\n")
+        # 使用 call_agent_with_retry 调用 agent
+        response_msg = await call_agent_with_retry(self.agent, msg)
 
-        data = self._safe_json_load(raw)
+        # 获取文本内容
+        raw = response_msg.get_text_content()
+
+        # print("\n====== RAW LLM OUTPUT ======")
+        # print(type(raw))
+        # print("====== END ======\n")
+
+        # 安全解析 JSON
+        try:
+            data = _safe_parse_json(raw)
+        except Exception as e:
+            logger.error(f"Failed to parse JSON: {e}\nRaw text: {raw}")
+            return []
 
         segments = data.get("segments", [])
         if not segments:
@@ -285,15 +150,10 @@ class ClaimExtractor:
             return []
 
         claims: List[Claim] = []
-
-        # 遍历 segments
-        for seg_idx, seg in enumerate(segments):
-            seg_text = seg.get("text", "")
+        for seg in segments:
             seg_cite_ids = seg.get("cite_ids", [])
-
-            for idx, item in enumerate(seg.get("claims", [])):
+            for item in seg.get("claims", []):
                 claim_type_str = item.get("claim_type", "factual")
-
                 try:
                     claim_type = ClaimType(claim_type_str)
                 except ValueError:
@@ -306,24 +166,17 @@ class ClaimExtractor:
                     normalized_text=item.get("normalized_text", ""),
                     slots=item.get("slots", {}),
                     source_span=(0, 0),  # 可选：后面再做
-                    cite_ids=item.get("cite_ids", seg_cite_ids)  #  核心
+                    cite_ids=item.get("cite_ids", seg_cite_ids)
                 )
-
                 claims.append(claim)
 
         return self._post_process(claims)
 
     # ---------- 后处理：去重 + ID 重编号 ----------
     def _post_process(self, claims: List[Claim]) -> List[Claim]:
-        """
-        去重（基于 claim_type + slots 序列化 + original_text 前50字符），
-        并分配连续的 claim_id。
-        """
         filtered = []
         seen = set()
-
         for c in claims:
-            # 构造唯一标识：类型 + slots 序列化 + 原文片段
             key = (
                 c.claim_type,
                 json.dumps(c.slots, sort_keys=True, ensure_ascii=False),
@@ -333,7 +186,6 @@ class ClaimExtractor:
                 continue
             seen.add(key)
 
-            # 过滤过于简短的声明（避免空值或单个字符）
             if len(c.original_text.strip()) < 2:
                 continue
 
@@ -341,23 +193,30 @@ class ClaimExtractor:
             filtered.append(c)
 
         return filtered
-    
+
 # ---------------------------------------------------------------------------
 # §3  Data Structure
 # ---------------------------------------------------------------------------
+
+@dataclass
+class EvidenceSpan:
+    cite_id: str
+    text: str
+    score: Optional[float] = None   # 相关性/置信度
 
 @dataclass
 class ClaimIssue:
     type: str
     description: str
     severity: str
-    suggestion: str
-
+    evidence: List[EvidenceSpan] = field(default_factory=list)
+    suggestion: Dict[str, Any] = field(default_factory=dict)
 
 @dataclass
 class ClaimResult:
     claim_id: str
     issues: List[ClaimIssue]
+
 
 # ---------------------------------------------------------------------------
 # §4  Verifier Router + Issue Fusion
@@ -365,151 +224,155 @@ class ClaimResult:
 
 class VerifierRouter:
     def __init__(self, verifiers: Dict[str, any]):
-        """
-        verifiers:
-        {
-            "fact": agent,
-            "numeric": agent,
-            "temporal": agent
-        }
-        """
+        """verifiers: {"fact": agent, "numeric": agent, "temporal": agent}"""
         self.verifiers = verifiers
 
-    async def verify_claim(self, claim) -> ClaimResult:
+    async def verify_claims(self, claims: List[Claim]) -> List[ClaimResult]:
+        """批量验证所有 claims，每个类型只调用一次 agent。"""
+        # 按类型分组
+        claims_by_type: Dict[ClaimType, List[Claim]] = {}
+        for claim in claims:
+            claims_by_type.setdefault(claim.claim_type, []).append(claim)
+
+        # 需要验证的类型映射（与 agent 类型对应）
+        type_to_verifier = {
+            ClaimType.FACTUAL: "fact",
+            ClaimType.NUMERIC: "numeric",
+            ClaimType.TEMPORAL: "temporal",
+            ClaimType.FACTUAL_NUMERIC: ["fact", "numeric"],  # 需要两个 agent
+            ClaimType.NUMERIC_TEMPORAL: ["numeric", "temporal"],
+            ClaimType.COMPOSITE: ["fact", "numeric", "temporal"],
+        }
+
+        # 收集所有任务（每个 verifier 类型对应一个批量任务）
         tasks = []
+        verifier_to_claims: Dict[str, List[Claim]] = {}
 
-        # ===== 路由逻辑 =====
-        if claim.claim_type in [ClaimType.FACTUAL, ClaimType.FACTUAL_NUMERIC, ClaimType.COMPOSITE]:
-            tasks.append(self._run("fact", claim))
+        for ct, clist in claims_by_type.items():
+            needed = type_to_verifier.get(ct, [])
+            if isinstance(needed, str):
+                needed = [needed]
+            for vname in needed:
+                verifier_to_claims.setdefault(vname, []).extend(clist)
 
-        if claim.claim_type in [ClaimType.NUMERIC, ClaimType.FACTUAL_NUMERIC, ClaimType.NUMERIC_TEMPORAL, ClaimType.COMPOSITE]:
-            tasks.append(self._run("numeric", claim))
+        # 去重（一个 claim 可能被多个 verifier 处理，如 factual_numeric）
+        # 但我们仍要按 verifier 分别批量调用
+        for vname, vclaims in verifier_to_claims.items():
+            tasks.append(self._run_batch(vname, vclaims))
 
-        if claim.claim_type in [ClaimType.TEMPORAL, ClaimType.NUMERIC_TEMPORAL, ClaimType.COMPOSITE]:
-            tasks.append(self._run("temporal", claim))
-
-        if not tasks:
-            return ClaimResult(claim.claim_id, [])
-
+        # 并行执行所有批量任务
         results = await asyncio.gather(*tasks)
 
-        merged_issues = self._merge_results(results)
+        # 合并结果：将 issue 分配回各个 claim
+        claim_issues: Dict[str, List[ClaimIssue]] = {c.claim_id: [] for c in claims}
+        for result in results:  # result 是 {claim_id: [issues]}
+            for cid, issues in result.items():
+                claim_issues[cid].extend(issues)
 
-        return ClaimResult(
-            claim_id=claim.claim_id,
-            issues=merged_issues
-        )
+        # 构建 ClaimResult 列表
+        claim_results = []
+        for c in claims:
+            # 去重合并（同一 claim 可能有来自多个 verifier 的相同类型 issue）
+            merged = self._merge_issues(claim_issues[c.claim_id])
+            claim_results.append(ClaimResult(claim_id=c.claim_id, issues=merged))
 
+        return claim_results
+    
+    #-----------------------------------------------------------------------
+    # 批量执行单个 verifier
     # -----------------------------------------------------------------------
-    # 单个 verifier 执行
-    # -----------------------------------------------------------------------
-    async def _run(self, verifier_name: str, claim):
+    async def _run_batch(self, verifier_name: str, claims: List[Claim]) -> Dict[str, List[ClaimIssue]]:
+        """一次性处理多个 claims，返回 {claim_id: [issues]}"""
         agent = self.verifiers[verifier_name]
 
+        # 构建批量 payload
         payload = {
-            "original_text": claim.original_text,
-            "normalized_text": claim.normalized_text,
-            "slots": claim.slots,
-            "cite_ids": claim.cite_ids
+            "claims": [c.to_dict() for c in claims]
         }
 
         try:
-            response = await agent(payload)
+            msg = Msg(
+                role="user",
+                content=json.dumps(payload, ensure_ascii=False),
+                name="Verifier"
+            )
 
-            print(f"\n====== [{verifier_name.upper()} RAW OUTPUT] ======")
-            print(response)
-            print("====================================\n")
+            response_msg = await call_agent_with_retry(agent, msg)
+            text = response_msg.get_text_content()
 
-            # 统一解析
-            if isinstance(response, str):
-                data = json.loads(response)
-            else:
-                data = response
+            # print(f"\n====== [{verifier_name.upper()} BATCH RAW OUTPUT] ======")
+            # if text is None:
+            #     print("TEXT: <None>")
+            # else:
+            #     print("TEXT:", text[:500] + "..." if len(text) > 500 else text)
+            # print("====================================\n")
 
-            #兼容 list / dict
+            # 安全解析
+            data = _safe_parse_json(text)
+
+            # 期望 data 是一个 dict，包含 issues 列表，每个 issue 有 claim_id
             if isinstance(data, list):
-                issues = data
+                issues_list = data
+            elif isinstance(data, dict):
+                issues_list = data.get("issues", [])
             else:
-                issues = data.get("issues", [])
+                issues_list = []
 
-            # 标准化
-            normalized_issues = []
-            for item in issues:
-                desc = item.get("description", "")
+            # 按 claim_id 分组
+            result: Dict[str, List[ClaimIssue]] = {c.claim_id: [] for c in claims}
+            for item in issues_list:
+                cid = item.get("claim_id")
+                if not cid or cid not in result:
+                    continue
 
-                normalized_issues.append({
-                    "type": item.get("type", "unknown"),
-                    "description": f"[{verifier_name}] {desc}",
-                    "severity": self._normalize_severity(item.get("severity")),
-                    "suggestion": item.get("suggestion", "")
-                })
-
-            return {"issues": normalized_issues}
+                result[cid].append(ClaimIssue(
+                    type=item.get("type", "unknown"),
+                    description=f"[{verifier_name}] {item.get('description', '')}",
+                    severity=self._normalize_severity(item.get("severity")),
+                    suggestion=item.get("suggestion", {}),
+                    evidence=item.get("evidence", [])
+                ))
+            return result
 
         except Exception as e:
-            return {
-                "issues": [
-                    {
-                        "type": "verifier_runtime_error",
-                        "severity": "major",
-                        "description": f"[{verifier_name}] verifier failed: {str(e)}",
-                        "suggestion": "检查 verifier 输出格式"
-                    }
-                ]
-            }
+            import traceback
+            traceback.print_exc()
+            # 出错时，为每个 claim 返回一个错误 issue
+            result = {}
+            for c in claims:
+                result[c.claim_id] = [ClaimIssue(
+                    type="verifier_runtime_error",
+                    severity="major",
+                    description=f"[{verifier_name}] verifier batch failed: {str(e)}",
+                    suggestion="检查 verifier 输出格式（必须是 JSON）"
+                )]
+            return result
 
     # -----------------------------------------------------------------------
-    # Issue Fusion（核心）
+    # Issue 合并（同一 claim 内去重）
     # -----------------------------------------------------------------------
-    def _merge_results(self, results: List[Dict]) -> List[ClaimIssue]:
+    def _merge_issues(self, issues: List[ClaimIssue]) -> List[ClaimIssue]:
         merged = {}
-
-        for r in results:
-            for item in r.get("issues", []):
-                key = (
-                    item.get("type"),
-                    item.get("description")
-                )
-
-                severity = item.get("severity", "minor")
-
-                if key not in merged:
-                    merged[key] = ClaimIssue(
-                        type=item.get("type", "unknown"),
-                        description=item.get("description", ""),
-                        severity=severity,
-                        suggestion=item.get("suggestion", "")
-                    )
-                else:
-                    prev = merged[key]
-
-                    # severity 升级规则
-                    if self._severity_priority(severity) > self._severity_priority(prev.severity):
-                        prev.severity = severity
-
-                    # suggestion 补充
-                    if not prev.suggestion and item.get("suggestion"):
-                        prev.suggestion = item.get("suggestion")
-
-        final_issues = list(merged.values())
-
-        print("\n====== MERGED ISSUES ======")
-        for iss in final_issues:
-            print(f"[{iss.severity}] {iss.type} → {iss.description}")
-        print("===========================\n")
-
-        return final_issues
+        for iss in issues:
+            key = (iss.type, iss.description)
+            if key not in merged:
+                merged[key] = iss
+            else:
+                # 升级 severity
+                if self._severity_priority(iss.severity) > self._severity_priority(merged[key].severity):
+                    merged[key].severity = iss.severity
+                # 补充 suggestion
+                if not merged[key].suggestion and iss.suggestion:
+                    merged[key].suggestion = iss.suggestion
+        return list(merged.values())
 
     # -----------------------------------------------------------------------
     # 工具函数
     # -----------------------------------------------------------------------
-
     def _normalize_severity(self, s: str) -> str:
         if not s:
             return "minor"
-
         s = s.lower()
-
         if s in ["critical", "high"]:
             return "critical"
         if s in ["major", "medium"]:
@@ -518,188 +381,125 @@ class VerifierRouter:
             return "minor"
         if s in ["info"]:
             return "info"
-
         return "minor"
 
     def _severity_priority(self, s: str) -> int:
-        mapping = {
-            "critical": 3,
-            "major": 2,
-            "minor": 1,
-            "info": 0
-        }
+        mapping = {"critical": 3, "major": 2, "minor": 1, "info": 0}
         return mapping.get(s, 1)
 
+
+
+# ---------------------------------------------------------------------------
+# §5  SegmentVerifier — 总控制器
+# ---------------------------------------------------------------------------
+
 class SegmentVerifier:
-    def __init__(self, short_term, long_term):
+    def __init__(self, short_term: ShortTermMemoryStore, long_term: LongTermMemoryStore):
         self.model = create_chat_model()
         self.formatter = create_agent_formatter()
-        self.llm = AgentScopeLLM(self.model)
 
-        self.extractor = ClaimExtractor(
-            llm=self.llm,
-            system_prompt=prompt_dict["claim_extract_sys_prompt"]
+        # ---------- 创建 ClaimExtractor  ----------
+        self.extractor_agent = ReActAgent(
+            name="ClaimExtractor",
+            sys_prompt=prompt_dict["claim_extract_sys_prompt"],
+            model=self.model,
+            memory=InMemoryMemory(),
+            formatter=self.formatter,
+            toolkit=Toolkit(),          
+            max_iters=1,            
         )
+        self.extractor = ClaimExtractor(agent=self.extractor_agent)
 
-        self.verifiers = {}
-
-        for name in ["fact", "numeric", "temporal"]:
-            toolkit = build_verifier_toolkit(
-                short_term=short_term,
-                long_term=long_term
-            )
-
-            agent = create_verifier_agent(
-                model=self.model,
-                formatter=self.formatter,
-                toolkit=toolkit,
-                verifier_type=name
-            )
-
-            self.verifiers[name] = agent
+        # ---------- 创建三个 Verifier Agents ----------
+        self.verifiers = create_three_verifiers(
+            model=self.model,
+            formatter=self.formatter,
+            short_term=short_term,
+            long_term=long_term
+        )
 
         self.router = VerifierRouter(self.verifiers)
 
     async def verify(self, segment: str) -> List[ClaimIssue]:
+        """主入口：segment → claims → batch verification → issues"""
         claims = await self.extractor.extract(segment)
         if not claims:
             return []
+        print("======== claims抽取已完成 =======")
 
-        tasks = [self.router.verify_claim(c) for c in claims]
-        results = await asyncio.gather(*tasks)
+        claim_results = await self.router.verify_claims(claims)
 
+        # 展平所有 issues
         flat = []
-        for r in results:
-            flat.extend(r.issues)
-
+        for cr in claim_results:
+            flat.extend(cr.issues)
         return flat
 
 
-# async def verify_segment_content(
-#     segment: str,
-#     short_term: ShortTermMemoryStore,
-#     long_term: LongTermMemoryStore,
-# ) -> List[ClaimIssue]:
-#     """
-#     外部唯一入口：
+# ---------------------------------------------------------------------------
+# §6  Test / Demo
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    segment = (
+        """公司已逐步将产业链一体化优势转化为产品力优势。通过实现新能源汽车产业链的全覆盖，有效降低了原材料价格剧烈变化的风险，同时有效降低成本，提高生产效率，并因此拥有了一定的定价主动权 [^cite_id:2024-06-24_reference_report]。
 
-#     segment → claim extraction → multi-verifier → issue fusion
+从产品策略来看，公司已将成本端与企业运营端优势转化为产品力优势：2024年2月，王朝/海洋系列在短短两周内密集投放五波荣耀版车型，包括秦PLUS、驱逐舰05、海豚、汉、唐以及宋PLUS、宋Pro，覆盖从7.98万元到24.98万元的小型、紧凑型以及中大型车市场，较冠军版起售价最高降低了6万元，实现了"加量还降价" [^cite_id:2024-06-24_reference_report]。其中，秦PLUS荣耀版以"日系省油、德系驾驶、美系智能"的赞誉上市，首周便取得了23,590辆的新车订单 [^cite_id:2024-06-24_reference_report]。
 
-#     return:
-#         List[ClaimIssue]
-#     """
+2024年5月，公司开启了基于全新混动平台DM5.0的全新车型序列的逐步上市，率先上市的比亚迪秦L与海豹06定位紧凑型级别，但车身尺寸和轴距已经是中型轿车水平 [^cite_id:2024-06-24_reference_report]。该车型序列叠加同级领先的油耗、智能化与电气化水平，在"油电同价"的基础上进一步升级为"电比油低"，充分体现了公司对于10万至20万元细分市场的竞争力与志在必得的决心 [^cite_id:2024-06-24_reference_report]。上市不到2周的时间已经累计获得8万台订单，充分体现了消费者对该系列车型的充分认可 [^cite_id:2024-06-24_reference_report]。
 
-#     # --------------------------------------------------
-#     # 初始化模型 & LLM
-#     # --------------------------------------------------
-#     model = create_chat_model()
-#     formatter = create_agent_formatter()
-#     llm = AgentScopeLLM(model)
+![新车型与竞品核心参数对比](chart:chart_1774964357334)
 
-#     extractor = ClaimExtractor(
-#         llm=llm,
-#         system_prompt=prompt_dict["claim_extract_sys_prompt"]
-#     )
+数据显示，2026年5月上市的秦L DM-i与海豹06 DM-i在核心参数上显著优于同级别传统燃油竞品：WLTC综合油耗分别为1.11L/100km和1.36L/100km，远低于轩逸2024款经典（5.94L/100km）和朗逸2024款（5.92L/100km）[^cite_id:2024-06-24_reference_report]。车身尺寸方面，秦L与海豹06的轴距达到2790mm，已超过轩逸（2700mm）和朗逸（2688mm）的中型轿车水平 [^cite_id:2024-06-24_reference_report]。智能化配置上，秦L与海豹06标配倒车影像、定速巡航、车载智能系统及完整的手机App远程控制功能，而轩逸和朗逸在同价位车型中上述配置多数缺失 [^cite_id:2024-06-24_reference_report]。
+"""
+    )
 
-#     # --------------------------------------------------
-#     # 构建三个 Verifier Agents
-#     # --------------------------------------------------
-#     verifiers = {}
+    # short_term = ShortTermMemoryStore(base_dir=Path("D:/code/2026/Agent/financial-report-agent/tests/test_verifier_material"))
 
-#     for name in ["fact", "numeric", "temporal"]:
-#         toolkit = build_verifier_toolkit(
-#             short_term=short_term,
-#             long_term=long_term
-#         )
+    # long_term = LongTermMemoryStore(base_dir=Path("D:/code/2026/Agent/financial-report-agent/tests/long_term"))
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
-#         agent = create_verifier_agent(
-#             model=model,
-#             formatter=formatter,
-#             toolkit=toolkit,
-#             verifier_type=name
-#         )
+    long_term_dir = PROJECT_ROOT / "data" / "memory" / "long_term"
+    
+    long_term = LongTermMemoryStore(
+        base_dir=long_term_dir,
+    )
 
-#         verifiers[name] = agent
+    short_term_dir = PROJECT_ROOT / "data" / "memory" / "short_term" / "002594_20260331"
 
-#     router = VerifierRouter(verifiers)
+    short_term = ShortTermMemoryStore(
+        base_dir=short_term_dir,
+    )
 
-#     # --------------------------------------------------
-#     # Claim Extraction
-#     # --------------------------------------------------
-#     claims: List[Claim] = await extractor.extract(segment)
+    # # ---- 注册缺失的材料 ----
+    # cite_id = "2024-06-24_reference_report"
+    # material_path = short_term_dir / "material" / f"{cite_id}.txt"
 
-#     if not claims:
-#         return []
+    # # 检查元数据中是否已有
+    # meta = short_term.get_material_meta(cite_id)
+    # if not meta:
+    #     if material_path.exists():
+    #         with open(material_path, "r", encoding="utf-8") as f:
+    #             content = f.read()
+    #         short_term.save_material(
+    #             cite_id=cite_id,
+    #             content=content,
+    #             description="比亚迪首次覆盖报告（2024-06-24）",
+    #             source="测试材料",
+    #         )
+    #         print(f"材料 {cite_id} 已注册")
+    #     else:
+    #         print(f"警告：材料文件 {material_path} 不存在，请检查路径")
+    # else:
+    #     print(f"材料 {cite_id} 已在元数据中")
+    
+    verifier = SegmentVerifier(short_term=short_term, long_term=long_term)
 
-#     # --------------------------------------------------
-#     # Claim-level 并行验证
-#     # --------------------------------------------------
-#     tasks = [router.verify_claim(claim) for claim in claims]
+    async def test():
+        issues = await verifier.verify(segment)
+        print("\n=== 验证结果 ===")
+        for iss in issues:
+            print(f"[{iss.severity}] {iss.type} → {iss.description}")
+            print(f"  建议: {iss.suggestion}")
+            print(f" 证据：{iss.evidence}")
 
-#     results: List[ClaimResult] = await asyncio.gather(*tasks)
-
-#     # flatten
-#     flat_issues: List[ClaimIssue] = []
-
-#     for r in results:
-#         flat_issues.extend(r.issues)
-
-#         if not r.issues:
-#             print("✅ No issues")
-#             continue
-
-#         for iss in r.issues:
-#             print(f"[{iss.severity.upper()}] {iss.type}")
-#             print(f"  描述: {iss.description}")
-#             print(f"  严重性: {iss.severity}")
-#             print(f"  建议: {iss.suggestion}")
-#             print()
-
-
-#     return flat_issues
-
-
-# async def test_extract():
-#     # 1️⃣ 创建模型
-#     model = create_chat_model()
-#     llm = AgentScopeLLM(model)
-
-#     # 2️⃣ prompt
-#     system_prompt = prompt_dict["claim_extract_sys_prompt"]
-
-#     # 3️⃣ extractor
-#     extractor = ClaimExtractor(llm, system_prompt)
-
-#     # 4️⃣ 测试文本（关键：必须带 cite_id）
-#     segment = (
-#         "特斯拉在2025年第一季度销量为41万辆，同比增长12%[^cite_id:tesla_q1_2025]。"
-#     )
-
-#     try:
-#         # 5️⃣ 执行提取（新版接口）
-#         claims = await extractor.extract(segment)
-
-#         # 👉 防御：过滤无 cite（强烈建议）
-#         claims = [c for c in claims if c.cite_ids]
-
-#         # 6️⃣ 打印结果
-#         print(f"\n=== 提取结果：{len(claims)} 条 claims ===")
-
-#         for claim in claims:
-#             print("\n------------------------------")
-#             print(f"ID: {claim.claim_id}")
-#             print(f"Type: {claim.claim_type}")
-#             print(f"Original: {claim.original_text}")
-#             print(f"Normalized: {claim.normalized_text}")
-#             print(f"Cite IDs: {claim.cite_ids}")
-#             print(f"Slots:")
-#             print(json.dumps(claim.slots, ensure_ascii=False, indent=2))
-
-#     except Exception as e:
-#         print(f"❌ 提取失败: {e}")
-#         import traceback
-#         traceback.print_exc()
-
-
-# if __name__ == "__main__":
-#     asyncio.run(test_extract())
+    asyncio.run(test())

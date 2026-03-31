@@ -1,0 +1,1761 @@
+{
+  "2024-06-24_reference_report": {
+    "cite_id": "2024-06-24_reference_report",
+    "m_type": "text",
+    "filename": "2024-06-24_reference_report.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-06-24"
+    },
+    "description": "002594_2024-06-24_首次覆盖报告：新能源车领军企业，剑指海外市场.pdf",
+    "source": ""
+  },
+  "002594_profit_按年度": {
+    "cite_id": "002594_profit_按年度",
+    "m_type": "table",
+    "filename": "002594_profit_按年度.csv",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {},
+    "description": "比亚迪（002594）按年度利润表",
+    "source": "AKshare API:Hithink"
+  },
+  "002594_url_page_text_www.caixin.com-2025-08-15-1024000000000000": {
+    "cite_id": "002594_url_page_text_www.caixin.com-2025-08-15-1024000000000000",
+    "m_type": "text",
+    "filename": "002594_url_page_text_www.caixin.com-2025-08-15-1024000000000000.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2025-08-15"
+    },
+    "description": "网页发布时间：2025-08-15 发布关于比亚迪（002594）的内容:商城 订阅 数据 我闻 机构订阅 会议 promotion 应用下载 帮助 网上有害信息举报专区 首",
+    "source": "web search（来源：caixin.com）"
+  },
+  "002594_history_price_20250901_20250905_period=daily_adjust=qfq": {
+    "cite_id": "002594_history_price_20250901_20250905_period=daily_adjust=qfq",
+    "m_type": "table",
+    "filename": "002594_history_price_20250901_20250905_period=daily_adjust=qfq.csv",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "start": "2025-09-01",
+      "end": "2025-09-05"
+    },
+    "description": "比亚迪（002594）股票历史行情数据（2025-09-01~2025-09-05）",
+    "source": "AKshare API:eastmoney"
+  },
+  "002594_business_description": {
+    "cite_id": "002594_business_description",
+    "m_type": "json",
+    "filename": "002594_business_description.json",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {},
+    "description": "比亚迪（002594）主营业务、产品介绍",
+    "source": "AKshare API:Hithink"
+  },
+  "002594_profit_按报告期": {
+    "cite_id": "002594_profit_按报告期",
+    "m_type": "table",
+    "filename": "002594_profit_按报告期.csv",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {},
+    "description": "比亚迪（002594）按报告期利润表",
+    "source": "AKshare API:Hithink"
+  },
+  "002594_url_page_text_www.autohome.com.cn-news-202508-1234567": {
+    "cite_id": "002594_url_page_text_www.autohome.com.cn-news-202508-1234567",
+    "m_type": "text",
+    "filename": "002594_url_page_text_www.autohome.com.cn-news-202508-1234567.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2026-03-25"
+    },
+    "description": "网页发布时间：2026-03-25 发布关于比亚迪（002594）的内容:热门车 5-8万 8-15万 15-20万 20-30万 30-50万 推荐车 二手车 商用车 摩托",
+    "source": "web search（来源：autohome.com.cn）"
+  },
+  "002594_business_composition": {
+    "cite_id": "002594_business_composition",
+    "m_type": "table",
+    "filename": "002594_business_composition.csv",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {},
+    "description": "比亚迪（002594）主营构成、业务的收入与利润结构",
+    "source": "AKshare API:eastmoney"
+  },
+  "002594_cashflow_按年度": {
+    "cite_id": "002594_cashflow_按年度",
+    "m_type": "table",
+    "filename": "002594_cashflow_按年度.csv",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {},
+    "description": "比亚迪（002594）按年度现金流量表",
+    "source": "AKshare API:Hithink"
+  },
+  "002594_url_page_text_www.autohome.com.cn-news-202509-1234567": {
+    "cite_id": "002594_url_page_text_www.autohome.com.cn-news-202509-1234567",
+    "m_type": "text",
+    "filename": "002594_url_page_text_www.autohome.com.cn-news-202509-1234567.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2026-03-25"
+    },
+    "description": "网页发布时间：2026-03-25 发布关于比亚迪（002594）的内容:热门车 5-8万 8-15万 15-20万 20-30万 30-50万 推荐车 二手车 商用车 摩托",
+    "source": "web search（来源：autohome.com.cn）"
+  },
+  "002594_url_page_text_www.autohome.com.cn-news-202509-1234568": {
+    "cite_id": "002594_url_page_text_www.autohome.com.cn-news-202509-1234568",
+    "m_type": "text",
+    "filename": "002594_url_page_text_www.autohome.com.cn-news-202509-1234568.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2026-03-25"
+    },
+    "description": "网页发布时间：2026-03-25 发布关于比亚迪（002594）的内容:热门车 5-8万 8-15万 15-20万 20-30万 30-50万 推荐车 二手车 商用车 摩托",
+    "source": "web search（来源：autohome.com.cn）"
+  },
+  "002594_balance_按年度_1774447875": {
+    "cite_id": "002594_balance_按年度_1774447875",
+    "m_type": "table",
+    "filename": "002594_balance_按年度_1774447875.csv",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {},
+    "description": "比亚迪（002594）按年度资产负债表",
+    "source": "AKshare API:Hithink"
+  },
+  "002594_url_page_text_www.autohome.com.cn-news-202508-1234568": {
+    "cite_id": "002594_url_page_text_www.autohome.com.cn-news-202508-1234568",
+    "m_type": "text",
+    "filename": "002594_url_page_text_www.autohome.com.cn-news-202508-1234568.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2026-03-25"
+    },
+    "description": "网页发布时间：2026-03-25 发布关于比亚迪（002594）的内容:热门车 5-8万 8-15万 15-20万 20-30万 30-50万 推荐车 二手车 商用车 摩托",
+    "source": "web search（来源：autohome.com.cn）"
+  },
+  "002594_top10_20250630_1774447949": {
+    "cite_id": "002594_top10_20250630_1774447949",
+    "m_type": "table",
+    "filename": "002594_top10_20250630_1774447949.csv",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2025-06-30"
+    },
+    "description": "比亚迪（002594）报告期2025-06-30的十大股东",
+    "source": "AKshare API:eastmoney"
+  },
+  "002594_shareholder_count_detail_1774447962": {
+    "cite_id": "002594_shareholder_count_detail_1774447962",
+    "m_type": "table",
+    "filename": "002594_shareholder_count_detail_1774447962.csv",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {},
+    "description": "比亚迪（002594）股东户数详情",
+    "source": "AKshare API:eastmoney"
+  },
+  "002594_history_price_20240905_20250905_period=daily_adjust=qfq": {
+    "cite_id": "002594_history_price_20240905_20250905_period=daily_adjust=qfq",
+    "m_type": "table",
+    "filename": "002594_history_price_20240905_20250905_period=daily_adjust=qfq.csv",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "start": "2024-09-05",
+      "end": "2025-09-05"
+    },
+    "description": "比亚迪（002594）股票历史行情数据（2024-09-05~2025-09-05）",
+    "source": "AKshare API:eastmoney"
+  },
+  "002594_disclosure_2025-09-02_0": {
+    "cite_id": "002594_disclosure_2025-09-02_0",
+    "m_type": "text",
+    "filename": "002594_disclosure_2025-09-02_0.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2025-09-02"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2025年8月<em>产销</em>快报 | date=2025-09-02 | market=沪深京 | keyword=产销 | url=https://static.cninfo.com.cn/finalpage/2025-09-02/1224632702.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2025-08-02_1": {
+    "cite_id": "002594_disclosure_2025-08-02_1",
+    "m_type": "text",
+    "filename": "002594_disclosure_2025-08-02_1.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2025-08-02"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2025年7月<em>产销</em>快报 | date=2025-08-02 | market=沪深京 | keyword=产销 | url=https://static.cninfo.com.cn/finalpage/2025-08-02/1224368797.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2025-07-02_2": {
+    "cite_id": "002594_disclosure_2025-07-02_2",
+    "m_type": "text",
+    "filename": "002594_disclosure_2025-07-02_2.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2025-07-02"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2025年6月<em>产销</em>快报 | date=2025-07-02 | market=沪深京 | keyword=产销 | url=https://static.cninfo.com.cn/finalpage/2025-07-02/1224058406.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2025-04-02_5": {
+    "cite_id": "002594_disclosure_2025-04-02_5",
+    "m_type": "text",
+    "filename": "002594_disclosure_2025-04-02_5.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2025-04-02"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2025年3月<em>产销</em>快报 | date=2025-04-02 | market=沪深京 | keyword=产销 | url=https://static.cninfo.com.cn/finalpage/2025-04-02/1222982953.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2025-08-30_0": {
+    "cite_id": "002594_disclosure_2025-08-30_0",
+    "m_type": "text",
+    "filename": "002594_disclosure_2025-08-30_0.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2025-08-30"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=半年报董事会决议公告 | date=2025-08-30 | market=沪深京 | category=董事会 | url=https://static.cninfo.com.cn/finalpage/2025-08-30/1224626651.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2025-08-30_1": {
+    "cite_id": "002594_disclosure_2025-08-30_1",
+    "m_type": "text",
+    "filename": "002594_disclosure_2025-08-30_1.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2025-08-30"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2025年半年度报告摘要 | date=2025-08-30 | market=沪深京 | category=半年报 | url=https://static.cninfo.com.cn/finalpage/2025-08-30/1224626650.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_url_page_text_www.sohu.com-a-823456789_123456": {
+    "cite_id": "002594_url_page_text_www.sohu.com-a-823456789_123456",
+    "m_type": "text",
+    "filename": "002594_url_page_text_www.sohu.com-a-823456789_123456.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2016-01-01"
+    },
+    "description": "网页发布时间：2016-01-01 发布关于比亚迪（002594）的内容:搜狐首页 新闻 体育 汽车 房产 旅游 教育 时尚 科技 财经 娱乐 更多 母婴 健康 历史 军事",
+    "source": "web search（来源：sohu.com）"
+  },
+  "002594_disclosure_2021-08-28_15": {
+    "cite_id": "002594_disclosure_2021-08-28_15",
+    "m_type": "text",
+    "filename": "002594_disclosure_2021-08-28_15.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2021-08-28"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=半<em>年报</em>董事会决议公告 | date=2021-08-28 | market=沪深京 | keyword=年度报告 | url=https://static.cninfo.com.cn/finalpage/2021-08-28/1210897752.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2020-07-24_21": {
+    "cite_id": "002594_disclosure_2020-07-24_21",
+    "m_type": "text",
+    "filename": "002594_disclosure_2020-07-24_21.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2020-07-24"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=关于深圳证券交易所2019年<em>年报</em>问询函回复的公告 | date=2020-07-24 | market=沪深京 | keyword=年度报告 | url=https://static.cninfo.com.cn/finalpage/2020-07-24/1208062177.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2020-08-29_19": {
+    "cite_id": "002594_disclosure_2020-08-29_19",
+    "m_type": "text",
+    "filename": "002594_disclosure_2020-08-29_19.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2020-08-29"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2020年半<em>年度报告</em> | date=2020-08-29 | market=沪深京 | keyword=年度报告 | url=https://static.cninfo.com.cn/finalpage/2020-08-29/1208325162.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2019-03-28_33": {
+    "cite_id": "002594_disclosure_2019-03-28_33",
+    "m_type": "text",
+    "filename": "002594_disclosure_2019-03-28_33.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2019-03-28"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=独立董事关于第六届董事会第二十六次会议及2018年<em>年度报告</em>相关事项的独立意见 | date=2019-03-28 | market=沪深京 | keyword=年度报告 | url=https://static.cninfo.com.cn/finalpage/2019-03-28/1205949210.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2021-08-28_11": {
+    "cite_id": "002594_disclosure_2021-08-28_11",
+    "m_type": "text",
+    "filename": "002594_disclosure_2021-08-28_11.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2021-08-28"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2021年半<em>年度报告</em> | date=2021-08-28 | market=沪深京 | keyword=年度报告 | url=https://static.cninfo.com.cn/finalpage/2021-08-28/1210897778.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2022-08-30_7": {
+    "cite_id": "002594_disclosure_2022-08-30_7",
+    "m_type": "text",
+    "filename": "002594_disclosure_2022-08-30_7.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2022-08-30"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2022年半<em>年度报告</em>摘要 | date=2022-08-30 | market=沪深京 | keyword=年度报告 | url=https://static.cninfo.com.cn/finalpage/2022-08-30/1214448625.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2021-08-28_12": {
+    "cite_id": "002594_disclosure_2021-08-28_12",
+    "m_type": "text",
+    "filename": "002594_disclosure_2021-08-28_12.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2021-08-28"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=<em>年报</em>信息披露重大差错责任追究制度（2021年8月） | date=2021-08-28 | market=沪深京 | keyword=年度报告 | url=https://static.cninfo.com.cn/finalpage/2021-08-28/1210897769.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2020-04-22_22": {
+    "cite_id": "002594_disclosure_2020-04-22_22",
+    "m_type": "text",
+    "filename": "002594_disclosure_2020-04-22_22.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2020-04-22"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=h股<em>年报</em> | date=2020-04-22 | market=沪深京 | keyword=年度报告 | url=https://static.cninfo.com.cn/finalpage/2020-04-22/1207553424.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2023-08-29_1": {
+    "cite_id": "002594_disclosure_2023-08-29_1",
+    "m_type": "text",
+    "filename": "002594_disclosure_2023-08-29_1.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2023-08-29"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2023年半<em>年度报告</em> | date=2023-08-29 | market=沪深京 | keyword=年度报告 | url=https://static.cninfo.com.cn/finalpage/2023-08-29/1217680503.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2022-03-26_10": {
+    "cite_id": "002594_disclosure_2022-03-26_10",
+    "m_type": "text",
+    "filename": "002594_disclosure_2022-03-26_10.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2022-03-26"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=关于举行2021年<em>年度报告</em>网上说明会的通知 | date=2022-03-26 | market=沪深京 | keyword=年度报告 | url=https://static.cninfo.com.cn/finalpage/2022-03-26/1212684377.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2023-03-29_0": {
+    "cite_id": "002594_disclosure_2023-03-29_0",
+    "m_type": "text",
+    "filename": "002594_disclosure_2023-03-29_0.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2023-03-29"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2022年年度报告 | date=2023-03-29 | market=沪深京 | category=年报 | url=https://static.cninfo.com.cn/finalpage/2023-03-29/1216246589.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2023-03-29_1": {
+    "cite_id": "002594_disclosure_2023-03-29_1",
+    "m_type": "text",
+    "filename": "002594_disclosure_2023-03-29_1.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2023-03-29"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2022年年度报告摘要 | date=2023-03-29 | market=沪深京 | category=年报 | url=https://static.cninfo.com.cn/finalpage/2023-03-29/1216246586.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2022-03-30_2": {
+    "cite_id": "002594_disclosure_2022-03-30_2",
+    "m_type": "text",
+    "filename": "002594_disclosure_2022-03-30_2.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2022-03-30"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2021年年度报告 | date=2022-03-30 | market=沪深京 | category=年报 | url=https://static.cninfo.com.cn/finalpage/2022-03-30/1212730520.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2022-03-30_3": {
+    "cite_id": "002594_disclosure_2022-03-30_3",
+    "m_type": "text",
+    "filename": "002594_disclosure_2022-03-30_3.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2022-03-30"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2021年年度报告摘要 | date=2022-03-30 | market=沪深京 | category=年报 | url=https://static.cninfo.com.cn/finalpage/2022-03-30/1212730519.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2021-03-30_4": {
+    "cite_id": "002594_disclosure_2021-03-30_4",
+    "m_type": "text",
+    "filename": "002594_disclosure_2021-03-30_4.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2021-03-30"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2020年年度报告 | date=2021-03-30 | market=沪深京 | category=年报 | url=https://static.cninfo.com.cn/finalpage/2021-03-30/1209476375.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2021-03-30_5": {
+    "cite_id": "002594_disclosure_2021-03-30_5",
+    "m_type": "text",
+    "filename": "002594_disclosure_2021-03-30_5.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2021-03-30"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2020年年度报告摘要 | date=2021-03-30 | market=沪深京 | category=年报 | url=https://static.cninfo.com.cn/finalpage/2021-03-30/1209476370.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2020-04-22_6": {
+    "cite_id": "002594_disclosure_2020-04-22_6",
+    "m_type": "text",
+    "filename": "002594_disclosure_2020-04-22_6.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2020-04-22"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2019年年度报告摘要 | date=2020-04-22 | market=沪深京 | category=年报 | url=https://static.cninfo.com.cn/finalpage/2020-04-22/1207552330.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2020-04-22_7": {
+    "cite_id": "002594_disclosure_2020-04-22_7",
+    "m_type": "text",
+    "filename": "002594_disclosure_2020-04-22_7.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2020-04-22"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2019年年度报告 | date=2020-04-22 | market=沪深京 | category=年报 | url=https://static.cninfo.com.cn/finalpage/2020-04-22/1207552329.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2019-03-28_8": {
+    "cite_id": "002594_disclosure_2019-03-28_8",
+    "m_type": "text",
+    "filename": "002594_disclosure_2019-03-28_8.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2019-03-28"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2018年年度报告摘要 | date=2019-03-28 | market=沪深京 | category=年报 | url=https://static.cninfo.com.cn/finalpage/2019-03-28/1205949230.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2019-03-28_9": {
+    "cite_id": "002594_disclosure_2019-03-28_9",
+    "m_type": "text",
+    "filename": "002594_disclosure_2019-03-28_9.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2019-03-28"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2018年年度报告 | date=2019-03-28 | market=沪深京 | category=年报 | url=https://static.cninfo.com.cn/finalpage/2019-03-28/1205949227.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2024-03-27_0": {
+    "cite_id": "002594_disclosure_2024-03-27_0",
+    "m_type": "text",
+    "filename": "002594_disclosure_2024-03-27_0.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-03-27"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2023年年度报告摘要 | date=2024-03-27 | market=沪深京 | category=年报 | url=https://static.cninfo.com.cn/finalpage/2024-03-27/1219412041.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2024-03-27_1": {
+    "cite_id": "002594_disclosure_2024-03-27_1",
+    "m_type": "text",
+    "filename": "002594_disclosure_2024-03-27_1.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-03-27"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2023年年度报告 | date=2024-03-27 | market=沪深京 | category=年报 | url=https://static.cninfo.com.cn/finalpage/2024-03-27/1219412018.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "url_page_text_www.geely.com-": {
+    "cite_id": "url_page_text_www.geely.com-",
+    "m_type": "text",
+    "filename": "url_page_text_www.geely.com-.txt",
+    "entity": {
+      "name": "",
+      "code": ""
+    },
+    "time": {
+      "point": "2023-01-01"
+    },
+    "description": "网页发布时间：2023-01-01 关于吉利 科技吉利4.0时代 秉承“因快乐而伟大”的价值主张，吉利汽车始终坚持为每一个吉利用户、员工",
+    "source": "web search（来源：geely.com）"
+  },
+  "002594_disclosure_2024-02-01_151": {
+    "cite_id": "002594_disclosure_2024-02-01_151",
+    "m_type": "text",
+    "filename": "002594_disclosure_2024-02-01_151.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-02-01"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=关于持股5%以上股东部分股份质押的公告 | date=2024-02-01 | market=沪深京 | url=https://static.cninfo.com.cn/finalpage/2024-02-01/1219055207.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2024-03-09_135": {
+    "cite_id": "002594_disclosure_2024-03-09_135",
+    "m_type": "text",
+    "filename": "002594_disclosure_2024-03-09_135.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-03-09"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=关于持股5%以上股东部分股份解除质押的公告 | date=2024-03-09 | market=沪深京 | url=https://static.cninfo.com.cn/finalpage/2024-03-09/1219264829.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2024-11-06_7": {
+    "cite_id": "002594_disclosure_2024-11-06_7",
+    "m_type": "text",
+    "filename": "002594_disclosure_2024-11-06_7.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-11-06"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=公司章程（2024年11月） | date=2024-11-06 | market=沪深京 | url=https://static.cninfo.com.cn/finalpage/2024-11-06/1221638068.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2024-11-06_8": {
+    "cite_id": "002594_disclosure_2024-11-06_8",
+    "m_type": "text",
+    "filename": "002594_disclosure_2024-11-06_8.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-11-06"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=关于比亚迪股份有限公司2024年第二次临时股东会的法律意见书 | date=2024-11-06 | market=沪深京 | url=https://static.cninfo.com.cn/finalpage/2024-11-06/1221638067.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2024-11-02_9": {
+    "cite_id": "002594_disclosure_2024-11-02_9",
+    "m_type": "text",
+    "filename": "002594_disclosure_2024-11-02_9.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-11-02"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2024年10月产销快报 | date=2024-11-02 | market=沪深京 | url=https://static.cninfo.com.cn/finalpage/2024-11-02/1221604106.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2024-07-20_47": {
+    "cite_id": "002594_disclosure_2024-07-20_47",
+    "m_type": "text",
+    "filename": "002594_disclosure_2024-07-20_47.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-07-20"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2023年度权益分派实施公告 | date=2024-07-20 | market=沪深京 | url=https://static.cninfo.com.cn/finalpage/2024-07-20/1220689427.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2024-05-14_66": {
+    "cite_id": "002594_disclosure_2024-05-14_66",
+    "m_type": "text",
+    "filename": "002594_disclosure_2024-05-14_66.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-05-14"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=关于2024年回购股份注销完成暨股份变动的公告 | date=2024-05-14 | market=沪深京 | url=https://static.cninfo.com.cn/finalpage/2024-05-14/1220039687.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2024-08-03_43": {
+    "cite_id": "002594_disclosure_2024-08-03_43",
+    "m_type": "text",
+    "filename": "002594_disclosure_2024-08-03_43.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-08-03"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=h股公告（股份发行人及根据《上市规则》第十九b章上市的香港预托证券发行人的证券变动月报表） | date=2024-08-03 | market=沪深京 | url=https://static.cninfo.com.cn/finalpage/2024-08-03/1220788640.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2024-04-13_90": {
+    "cite_id": "002594_disclosure_2024-04-13_90",
+    "m_type": "text",
+    "filename": "002594_disclosure_2024-04-13_90.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-04-13"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=h股公告（董事会会议通告） | date=2024-04-13 | market=沪深京 | url=https://static.cninfo.com.cn/finalpage/2024-04-13/1219596861.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2024-03-27_118": {
+    "cite_id": "002594_disclosure_2024-03-27_118",
+    "m_type": "text",
+    "filename": "002594_disclosure_2024-03-27_118.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-03-27"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=比亚迪关于对会计师事务所履职情况的评估报告 | date=2024-03-27 | market=沪深京 | url=https://static.cninfo.com.cn/finalpage/2024-03-27/1219412014.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2024-12-02_0": {
+    "cite_id": "002594_disclosure_2024-12-02_0",
+    "m_type": "text",
+    "filename": "002594_disclosure_2024-12-02_0.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-12-02"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2024年11月<em>产销</em>快报 | date=2024-12-02 | market=沪深京 | keyword=产销 | url=https://static.cninfo.com.cn/finalpage/2024-12-02/1221902564.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2024-11-02_1": {
+    "cite_id": "002594_disclosure_2024-11-02_1",
+    "m_type": "text",
+    "filename": "002594_disclosure_2024-11-02_1.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-11-02"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2024年10月<em>产销</em>快报 | date=2024-11-02 | market=沪深京 | keyword=产销 | url=https://static.cninfo.com.cn/finalpage/2024-11-02/1221604106.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2024-10-19_9": {
+    "cite_id": "002594_disclosure_2024-10-19_9",
+    "m_type": "text",
+    "filename": "002594_disclosure_2024-10-19_9.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-10-19"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=第八届董事会第十次会议决议公告 | date=2024-10-19 | market=沪深京 | category=董事会 | url=https://static.cninfo.com.cn/finalpage/2024-10-19/1221432589.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2025-03-25_4": {
+    "cite_id": "002594_disclosure_2025-03-25_4",
+    "m_type": "text",
+    "filename": "002594_disclosure_2025-03-25_4.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2025-03-25"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=董事会决议公告 | date=2025-03-25 | market=沪深京 | category=董事会 | url=https://static.cninfo.com.cn/finalpage/2025-03-25/1222881493.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2024-05-29_10": {
+    "cite_id": "002594_disclosure_2024-05-29_10",
+    "m_type": "text",
+    "filename": "002594_disclosure_2024-05-29_10.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-05-29"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=第八届董事会第八次会议决议公告 | date=2024-05-29 | market=沪深京 | category=董事会 | url=https://static.cninfo.com.cn/finalpage/2024-05-29/1220185490.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2024-03-07_12": {
+    "cite_id": "002594_disclosure_2024-03-07_12",
+    "m_type": "text",
+    "filename": "002594_disclosure_2024-03-07_12.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-03-07"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=第八届董事会第五次会议决议公告 | date=2024-03-07 | market=沪深京 | category=董事会 | url=https://static.cninfo.com.cn/finalpage/2024-03-07/1219249360.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2025-04-23_3": {
+    "cite_id": "002594_disclosure_2025-04-23_3",
+    "m_type": "text",
+    "filename": "002594_disclosure_2025-04-23_3.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2025-04-23"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=第八届董事会第十七次会议决议公告 | date=2025-04-23 | market=沪深京 | category=董事会 | url=https://static.cninfo.com.cn/finalpage/2025-04-23/1223212683.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2024-02-02_13": {
+    "cite_id": "002594_disclosure_2024-02-02_13",
+    "m_type": "text",
+    "filename": "002594_disclosure_2024-02-02_13.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-02-02"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=第八届董事会第四次会议决议公告 | date=2024-02-02 | market=沪深京 | category=董事会 | url=https://static.cninfo.com.cn/finalpage/2024-02-02/1219066833.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2025-01-25_7": {
+    "cite_id": "002594_disclosure_2025-01-25_7",
+    "m_type": "text",
+    "filename": "002594_disclosure_2025-01-25_7.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2025-01-25"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=第八届董事会第十三次会议决议公告 | date=2025-01-25 | market=沪深京 | category=董事会 | url=https://static.cninfo.com.cn/finalpage/2025-01-25/1222430443.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2024-03-27_156": {
+    "cite_id": "002594_disclosure_2024-03-27_156",
+    "m_type": "text",
+    "filename": "002594_disclosure_2024-03-27_156.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-03-27"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=董事会审核委员会对会计师事务所履行监督职责的情况报告 | date=2024-03-27 | market=沪深京 | category=日常经营 | url=https://static.cninfo.com.cn/finalpage/2024-03-27/1219412026.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2024-11-06_83": {
+    "cite_id": "002594_disclosure_2024-11-06_83",
+    "m_type": "text",
+    "filename": "002594_disclosure_2024-11-06_83.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-11-06"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2024年员工持股计划 | date=2024-11-06 | market=沪深京 | category=日常经营 | url=https://static.cninfo.com.cn/finalpage/2024-11-06/1221638070.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2024-02-02_187": {
+    "cite_id": "002594_disclosure_2024-02-02_187",
+    "m_type": "text",
+    "filename": "002594_disclosure_2024-02-02_187.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-02-02"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=关于开展外汇衍生品套期保值交易业务的公告 | date=2024-02-02 | market=沪深京 | category=日常经营 | url=https://static.cninfo.com.cn/finalpage/2024-02-02/1219066834.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2025-04-26_31": {
+    "cite_id": "002594_disclosure_2025-04-26_31",
+    "m_type": "text",
+    "filename": "002594_disclosure_2025-04-26_31.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2025-04-26"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=关于增加外汇衍生品套期保值交易业务额度的公告 | date=2025-04-26 | market=沪深京 | category=日常经营 | url=https://static.cninfo.com.cn/finalpage/2025-04-26/1223309383.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2025-01-25_76": {
+    "cite_id": "002594_disclosure_2025-01-25_76",
+    "m_type": "text",
+    "filename": "002594_disclosure_2025-01-25_76.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2025-01-25"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=关于开展外汇衍生品交易的可行性分析报告 | date=2025-01-25 | market=沪深京 | category=日常经营 | url=https://static.cninfo.com.cn/finalpage/2025-01-25/1222430442.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2024-03-21_172": {
+    "cite_id": "002594_disclosure_2024-03-21_172",
+    "m_type": "text",
+    "filename": "002594_disclosure_2024-03-21_172.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-03-21"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=h股公告（通函） | date=2024-03-21 | market=沪深京 | category=日常经营 | url=https://static.cninfo.com.cn/finalpage/2024-03-21/1219358761.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2025-03-25_45": {
+    "cite_id": "002594_disclosure_2025-03-25_45",
+    "m_type": "text",
+    "filename": "002594_disclosure_2025-03-25_45.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2025-03-25"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2025年度日常关联交易预计公告 | date=2025-03-25 | market=沪深京 | category=日常经营 | url=https://static.cninfo.com.cn/finalpage/2025-03-25/1222881512.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2025-08-30_4": {
+    "cite_id": "002594_disclosure_2025-08-30_4",
+    "m_type": "text",
+    "filename": "002594_disclosure_2025-08-30_4.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2025-08-30"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=h股公告（2025年中期报告） | date=2025-08-30 | market=沪深京 | category=日常经营 | url=https://static.cninfo.com.cn/finalpage/2025-08-30/1224626655.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2024-05-06_127": {
+    "cite_id": "002594_disclosure_2024-05-06_127",
+    "m_type": "text",
+    "filename": "002594_disclosure_2024-05-06_127.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-05-06"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2024年4月产销快报 | date=2024-05-06 | market=沪深京 | category=日常经营 | url=https://static.cninfo.com.cn/finalpage/2024-05-06/1219973138.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2025-04-10_36": {
+    "cite_id": "002594_disclosure_2025-04-10_36",
+    "m_type": "text",
+    "filename": "002594_disclosure_2025-04-10_36.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2025-04-10"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=北京市中伦（深圳）律师事务所关于比亚迪股份有限公司2025年员工持股计划的法律意见书 | date=2025-04-10 | market=沪深京 | category=日常经营 | url=https://static.cninfo.com.cn/finalpage/2025-04-10/1223042458.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2021-03-30_0": {
+    "cite_id": "002594_disclosure_2021-03-30_0",
+    "m_type": "text",
+    "filename": "002594_disclosure_2021-03-30_0.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2021-03-30"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2020年年度报告 | date=2021-03-30 | market=沪深京 | category=年报 | url=https://static.cninfo.com.cn/finalpage/2021-03-30/1209476375.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2021-03-30_1": {
+    "cite_id": "002594_disclosure_2021-03-30_1",
+    "m_type": "text",
+    "filename": "002594_disclosure_2021-03-30_1.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2021-03-30"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2020年年度报告摘要 | date=2021-03-30 | market=沪深京 | category=年报 | url=https://static.cninfo.com.cn/finalpage/2021-03-30/1209476370.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2022-03-30_0": {
+    "cite_id": "002594_disclosure_2022-03-30_0",
+    "m_type": "text",
+    "filename": "002594_disclosure_2022-03-30_0.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2022-03-30"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2021年年度报告 | date=2022-03-30 | market=沪深京 | category=年报 | url=https://static.cninfo.com.cn/finalpage/2022-03-30/1212730520.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2022-03-30_1": {
+    "cite_id": "002594_disclosure_2022-03-30_1",
+    "m_type": "text",
+    "filename": "002594_disclosure_2022-03-30_1.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2022-03-30"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2021年年度报告摘要 | date=2022-03-30 | market=沪深京 | category=年报 | url=https://static.cninfo.com.cn/finalpage/2022-03-30/1212730519.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2024-04-02_17": {
+    "cite_id": "002594_disclosure_2024-04-02_17",
+    "m_type": "text",
+    "filename": "002594_disclosure_2024-04-02_17.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-04-02"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2024年3月<em>产销</em>快报 | date=2024-04-02 | market=沪深京 | keyword=产销 | category=日常经营 | url=https://static.cninfo.com.cn/finalpage/2024-04-02/1219491915.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2024-09-02_12": {
+    "cite_id": "002594_disclosure_2024-09-02_12",
+    "m_type": "text",
+    "filename": "002594_disclosure_2024-09-02_12.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-09-02"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2024年8月<em>产销</em>快报 | date=2024-09-02 | market=沪深京 | keyword=产销 | category=日常经营 | url=https://static.cninfo.com.cn/finalpage/2024-09-02/1221107186.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2024-02-02_19": {
+    "cite_id": "002594_disclosure_2024-02-02_19",
+    "m_type": "text",
+    "filename": "002594_disclosure_2024-02-02_19.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-02-02"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2024年1月<em>产销</em>快报 | date=2024-02-02 | market=沪深京 | keyword=产销 | category=日常经营 | url=https://static.cninfo.com.cn/finalpage/2024-02-02/1219066887.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2024-11-02_10": {
+    "cite_id": "002594_disclosure_2024-11-02_10",
+    "m_type": "text",
+    "filename": "002594_disclosure_2024-11-02_10.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-11-02"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2024年10月<em>产销</em>快报 | date=2024-11-02 | market=沪深京 | keyword=产销 | category=日常经营 | url=https://static.cninfo.com.cn/finalpage/2024-11-02/1221604106.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "url_page_text_www.geely.com": {
+    "cite_id": "url_page_text_www.geely.com",
+    "m_type": "text",
+    "filename": "url_page_text_www.geely.com.txt",
+    "entity": {
+      "name": "",
+      "code": ""
+    },
+    "time": {
+      "point": "2023-01-01"
+    },
+    "description": "网页发布时间：2023-01-01 关于吉利 科技吉利4.0时代 秉承“因快乐而伟大”的价值主张，吉利汽车始终坚持为每一个吉利用户、员工",
+    "source": "web search（来源：geely.com）"
+  },
+  "002594_url_page_text_www.sohu.com-a-823456789": {
+    "cite_id": "002594_url_page_text_www.sohu.com-a-823456789",
+    "m_type": "text",
+    "filename": "002594_url_page_text_www.sohu.com-a-823456789.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2016-01-01"
+    },
+    "description": "网页发布时间：2016-01-01 发布关于比亚迪（002594）的内容:搜狐首页 新闻 体育 汽车 房产 旅游 教育 时尚 科技 财经 娱乐 更多 母婴 健康 历史 军事",
+    "source": "web search（来源：sohu.com）"
+  },
+  "002594_url_page_text_www.youku.com-video-id_XMTY4NzY4NzY4": {
+    "cite_id": "002594_url_page_text_www.youku.com-video-id_XMTY4NzY4NzY4",
+    "m_type": "text",
+    "filename": "002594_url_page_text_www.youku.com-video-id_XMTY4NzY4NzY4.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2025-05-09"
+    },
+    "description": "网页发布时间：2025-05-09 发布关于比亚迪（002594）的内容:续费会员 筛选 历史 客户端 登录 首页 电视剧 动漫 电影 综艺 短剧 少儿 会员中心 纪录片 体",
+    "source": "web search（来源：youku.com）"
+  },
+  "002594_balance_按年度_1774448509": {
+    "cite_id": "002594_balance_按年度_1774448509",
+    "m_type": "table",
+    "filename": "002594_balance_按年度_1774448509.csv",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {},
+    "description": "比亚迪（002594）按年度资产负债表",
+    "source": "AKshare API:Hithink"
+  },
+  "002594_history_price_20241230_20241231_period=daily_adjust=qfq": {
+    "cite_id": "002594_history_price_20241230_20241231_period=daily_adjust=qfq",
+    "m_type": "table",
+    "filename": "002594_history_price_20241230_20241231_period=daily_adjust=qfq.csv",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "start": "2024-12-30",
+      "end": "2024-12-31"
+    },
+    "description": "比亚迪（002594）股票历史行情数据（2024-12-30~2024-12-31）",
+    "source": "AKshare API:eastmoney"
+  },
+  "002594_disclosure_2024-04-30_70": {
+    "cite_id": "002594_disclosure_2024-04-30_70",
+    "m_type": "text",
+    "filename": "002594_disclosure_2024-04-30_70.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-04-30"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=关于2024年回购股份方案实施完毕暨股份变动的公告 | date=2024-04-30 | market=沪深京 | url=https://static.cninfo.com.cn/finalpage/2024-04-30/1219909909.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2024-04-30_69": {
+    "cite_id": "002594_disclosure_2024-04-30_69",
+    "m_type": "text",
+    "filename": "002594_disclosure_2024-04-30_69.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-04-30"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2024年一季度报告 | date=2024-04-30 | market=沪深京 | url=https://static.cninfo.com.cn/finalpage/2024-04-30/1219909910.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2024-04-08_93": {
+    "cite_id": "002594_disclosure_2024-04-08_93",
+    "m_type": "text",
+    "filename": "002594_disclosure_2024-04-08_93.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-04-08"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=关于持股5%以上股东部分股份解除质押的公告 | date=2024-04-08 | market=沪深京 | url=https://static.cninfo.com.cn/finalpage/2024-04-08/1219528535.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2024-03-21_127": {
+    "cite_id": "002594_disclosure_2024-03-21_127",
+    "m_type": "text",
+    "filename": "002594_disclosure_2024-03-21_127.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-03-21"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=h股公告（h股类别股东大会适用的代表委任表格） | date=2024-03-21 | market=沪深京 | url=https://static.cninfo.com.cn/finalpage/2024-03-21/1219358763.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2024-03-27_100": {
+    "cite_id": "002594_disclosure_2024-03-27_100",
+    "m_type": "text",
+    "filename": "002594_disclosure_2024-03-27_100.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-03-27"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=监事会关于2023年度内部控制自我评价报告的核查意见 | date=2024-03-27 | market=沪深京 | url=https://static.cninfo.com.cn/finalpage/2024-03-27/1219412068.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2024-10-31_13": {
+    "cite_id": "002594_disclosure_2024-10-31_13",
+    "m_type": "text",
+    "filename": "002594_disclosure_2024-10-31_13.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-10-31"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2024年三季度报告 | date=2024-10-31 | market=沪深京 | url=https://static.cninfo.com.cn/finalpage/2024-10-31/1221574602.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2024-03-27_108": {
+    "cite_id": "002594_disclosure_2024-03-27_108",
+    "m_type": "text",
+    "filename": "002594_disclosure_2024-03-27_108.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-03-27"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=监事会决议公告 | date=2024-03-27 | market=沪深京 | url=https://static.cninfo.com.cn/finalpage/2024-03-27/1219412027.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2024-02-26_143": {
+    "cite_id": "002594_disclosure_2024-02-26_143",
+    "m_type": "text",
+    "filename": "002594_disclosure_2024-02-26_143.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-02-26"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=关于收到董事长提议增加回购公司股份金额的提示性公告 | date=2024-02-26 | market=沪深京 | url=https://static.cninfo.com.cn/finalpage/2024-02-26/1219171246.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2024-03-22_121": {
+    "cite_id": "002594_disclosure_2024-03-22_121",
+    "m_type": "text",
+    "filename": "002594_disclosure_2024-03-22_121.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-03-22"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=关于持股5%以上股东参与转融通证券出借业务期限届满的公告 | date=2024-03-22 | market=沪深京 | url=https://static.cninfo.com.cn/finalpage/2024-03-22/1219373799.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2024-02-19_144": {
+    "cite_id": "002594_disclosure_2024-02-19_144",
+    "m_type": "text",
+    "filename": "002594_disclosure_2024-02-19_144.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-02-19"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=关于“质量回报双提升”行动方案的公告 | date=2024-02-19 | market=沪深京 | url=https://static.cninfo.com.cn/finalpage/2024-02-19/1219137500.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2025-11-03_1": {
+    "cite_id": "002594_disclosure_2025-11-03_1",
+    "m_type": "text",
+    "filename": "002594_disclosure_2025-11-03_1.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2025-11-03"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2025年10月<em>产销</em><em>快报</em> | date=2025-11-03 | market=沪深京 | keyword=产销快报 | url=https://static.cninfo.com.cn/finalpage/2025-11-03/1224781922.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2025-09-02_3": {
+    "cite_id": "002594_disclosure_2025-09-02_3",
+    "m_type": "text",
+    "filename": "002594_disclosure_2025-09-02_3.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2025-09-02"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2025年8月<em>产销</em><em>快报</em> | date=2025-09-02 | market=沪深京 | keyword=产销快报 | url=https://static.cninfo.com.cn/finalpage/2025-09-02/1224632702.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2025-12-02_0": {
+    "cite_id": "002594_disclosure_2025-12-02_0",
+    "m_type": "text",
+    "filename": "002594_disclosure_2025-12-02_0.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2025-12-02"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2025年11月<em>产销</em><em>快报</em> | date=2025-12-02 | market=沪深京 | keyword=产销快报 | url=https://static.cninfo.com.cn/finalpage/2025-12-02/1224841562.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2025-10-09_2": {
+    "cite_id": "002594_disclosure_2025-10-09_2",
+    "m_type": "text",
+    "filename": "002594_disclosure_2025-10-09_2.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2025-10-09"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2025年9月<em>产销</em><em>快报</em> | date=2025-10-09 | market=沪深京 | keyword=产销快报 | url=https://static.cninfo.com.cn/finalpage/2025-10-09/1224697528.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2025-07-02_5": {
+    "cite_id": "002594_disclosure_2025-07-02_5",
+    "m_type": "text",
+    "filename": "002594_disclosure_2025-07-02_5.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2025-07-02"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2025年6月<em>产销</em><em>快报</em> | date=2025-07-02 | market=沪深京 | keyword=产销快报 | url=https://static.cninfo.com.cn/finalpage/2025-07-02/1224058406.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2025-04-02_8": {
+    "cite_id": "002594_disclosure_2025-04-02_8",
+    "m_type": "text",
+    "filename": "002594_disclosure_2025-04-02_8.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2025-04-02"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2025年3月<em>产销</em><em>快报</em> | date=2025-04-02 | market=沪深京 | keyword=产销快报 | url=https://static.cninfo.com.cn/finalpage/2025-04-02/1222982953.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2025-04-25_0": {
+    "cite_id": "002594_disclosure_2025-04-25_0",
+    "m_type": "text",
+    "filename": "002594_disclosure_2025-04-25_0.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2025-04-25"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=h股公告（截至2024年<em>12月</em>31日止年度之红股） | date=2025-04-25 | market=沪深京 | keyword=12月 | url=https://static.cninfo.com.cn/finalpage/2025-04-25/1223266505.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2025-04-25_1": {
+    "cite_id": "002594_disclosure_2025-04-25_1",
+    "m_type": "text",
+    "filename": "002594_disclosure_2025-04-25_1.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2025-04-25"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=h股公告（截至2024年<em>12月</em>31日止年度之末期股息） | date=2025-04-25 | market=沪深京 | keyword=12月 | url=https://static.cninfo.com.cn/finalpage/2025-04-25/1223266504.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_balance_按报告期_1774448735": {
+    "cite_id": "002594_balance_按报告期_1774448735",
+    "m_type": "table",
+    "filename": "002594_balance_按报告期_1774448735.csv",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {},
+    "description": "比亚迪（002594）按报告期资产负债表",
+    "source": "AKshare API:Hithink"
+  },
+  "002594_disclosure_2025-03-25_0": {
+    "cite_id": "002594_disclosure_2025-03-25_0",
+    "m_type": "text",
+    "filename": "002594_disclosure_2025-03-25_0.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2025-03-25"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2024年年度报告摘要 | date=2025-03-25 | market=沪深京 | category=年报 | url=https://static.cninfo.com.cn/finalpage/2025-03-25/1222881505.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2025-03-25_1": {
+    "cite_id": "002594_disclosure_2025-03-25_1",
+    "m_type": "text",
+    "filename": "002594_disclosure_2025-03-25_1.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2025-03-25"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2024年年度报告 | date=2025-03-25 | market=沪深京 | category=年报 | url=https://static.cninfo.com.cn/finalpage/2025-03-25/1222881496.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "url_page_text_www.xiaopeng.com": {
+    "cite_id": "url_page_text_www.xiaopeng.com",
+    "m_type": "text",
+    "filename": "url_page_text_www.xiaopeng.com.txt",
+    "entity": {
+      "name": "",
+      "code": ""
+    },
+    "time": {
+      "point": "2026-01-01"
+    },
+    "description": "网页发布时间：2026-01-01 超2000站点，覆盖全国420余城；东西南北中，小鹏都能充 s5液冷超快充，充电1秒钟，不止1公里。",
+    "source": "web search（来源：xiaopeng.com）"
+  },
+  "002594_top10_free_20250331_1774448941": {
+    "cite_id": "002594_top10_free_20250331_1774448941",
+    "m_type": "table",
+    "filename": "002594_top10_free_20250331_1774448941.csv",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2025-03-31"
+    },
+    "description": "比亚迪（002594）报告期2025-03-31的十大流通股东",
+    "source": "AKshare API:eastmoney"
+  },
+  "002594_disclosure_2025-04-02_2": {
+    "cite_id": "002594_disclosure_2025-04-02_2",
+    "m_type": "text",
+    "filename": "002594_disclosure_2025-04-02_2.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2025-04-02"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2025年3月<em>产销</em>快报 | date=2025-04-02 | market=沪深京 | keyword=产销 | url=https://static.cninfo.com.cn/finalpage/2025-04-02/1222982953.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_balance_按报告期_1774449093": {
+    "cite_id": "002594_balance_按报告期_1774449093",
+    "m_type": "table",
+    "filename": "002594_balance_按报告期_1774449093.csv",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {},
+    "description": "比亚迪（002594）按报告期资产负债表",
+    "source": "AKshare API:Hithink"
+  },
+  "002594_url_page_text_www.autohome.com.cn-news-201009-1234567": {
+    "cite_id": "002594_url_page_text_www.autohome.com.cn-news-201009-1234567",
+    "m_type": "text",
+    "filename": "002594_url_page_text_www.autohome.com.cn-news-201009-1234567.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2026-03-25"
+    },
+    "description": "网页发布时间：2026-03-25 发布关于比亚迪（002594）的内容:热门车 5-8万 8-15万 15-20万 20-30万 30-50万 推荐车 二手车 商用车 摩托",
+    "source": "web search（来源：autohome.com.cn）"
+  },
+  "002594_url_page_text_www.sohu.com-a-123456789_123456": {
+    "cite_id": "002594_url_page_text_www.sohu.com-a-123456789_123456",
+    "m_type": "text",
+    "filename": "002594_url_page_text_www.sohu.com-a-123456789_123456.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2016-01-01"
+    },
+    "description": "网页发布时间：2016-01-01 发布关于比亚迪（002594）的内容:搜狐首页 新闻 体育 汽车 房产 旅游 教育 时尚 科技 财经 娱乐 更多 母婴 健康 历史 军事",
+    "source": "web search（来源：sohu.com）"
+  },
+  "002594_url_page_text_finance.eastmoney.com-a-202603233680285097": {
+    "cite_id": "002594_url_page_text_finance.eastmoney.com-a-202603233680285097",
+    "m_type": "text",
+    "filename": "002594_url_page_text_finance.eastmoney.com-a-202603233680285097.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2026-03-23"
+    },
+    "description": "网页发布时间：2026-03-23 发布关于比亚迪（002594）的内容:刚刚，比亚迪总市值重回1万亿元 3月23日，比亚迪a股股价逆市大涨，总市值一度重回1万亿元。截至午间",
+    "source": "web search（来源：finance.eastmoney.com）"
+  },
+  "002594_url_page_text_www.tfzq.com-": {
+    "cite_id": "002594_url_page_text_www.tfzq.com-",
+    "m_type": "text",
+    "filename": "002594_url_page_text_www.tfzq.com-.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2026-03-11"
+    },
+    "description": "网页发布时间：2026-03-11 发布关于比亚迪（002594）的内容:了解更多 天风证券助力无锡产业集团发行全国首单存算一体科技创新债券 创历史新低！天风证券助力周口市投",
+    "source": "web search（来源：tfzq.com）"
+  },
+  "002594_url_page_text_www.tfzq.com-research-": {
+    "cite_id": "002594_url_page_text_www.tfzq.com-research-",
+    "m_type": "text",
+    "filename": "002594_url_page_text_www.tfzq.com-research-.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2026-03-11"
+    },
+    "description": "网页发布时间：2026-03-11 发布关于比亚迪（002594）的内容:了解更多 天风证券助力无锡产业集团发行全国首单存算一体科技创新债券 创历史新低！天风证券助力周口市投",
+    "source": "web search（来源：tfzq.com）"
+  },
+  "002594_url_page_text_www.tfzq.com-research-detail-": {
+    "cite_id": "002594_url_page_text_www.tfzq.com-research-detail-",
+    "m_type": "text",
+    "filename": "002594_url_page_text_www.tfzq.com-research-detail-.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2026-03-11"
+    },
+    "description": "网页发布时间：2026-03-11 发布关于比亚迪（002594）的内容:了解更多 天风证券助力无锡产业集团发行全国首单存算一体科技创新债券 创历史新低！天风证券助力周口市投",
+    "source": "web search（来源：tfzq.com）"
+  },
+  "002594_disclosure_2024-11-02_0": {
+    "cite_id": "002594_disclosure_2024-11-02_0",
+    "m_type": "text",
+    "filename": "002594_disclosure_2024-11-02_0.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-11-02"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2024年10月<em>产销</em>快报 | date=2024-11-02 | market=沪深京 | keyword=产销 | url=https://static.cninfo.com.cn/finalpage/2024-11-02/1221604106.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2025-01-25_0": {
+    "cite_id": "002594_disclosure_2025-01-25_0",
+    "m_type": "text",
+    "filename": "002594_disclosure_2025-01-25_0.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2025-01-25"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=关于开展外汇衍生品套期保值交易业务的公告 | date=2025-01-25 | market=沪深京 | url=https://static.cninfo.com.cn/finalpage/2025-01-25/1222430444.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2025-01-25_1": {
+    "cite_id": "002594_disclosure_2025-01-25_1",
+    "m_type": "text",
+    "filename": "002594_disclosure_2025-01-25_1.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2025-01-25"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=第八届董事会第十三次会议决议公告 | date=2025-01-25 | market=沪深京 | url=https://static.cninfo.com.cn/finalpage/2025-01-25/1222430443.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2025-01-25_2": {
+    "cite_id": "002594_disclosure_2025-01-25_2",
+    "m_type": "text",
+    "filename": "002594_disclosure_2025-01-25_2.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2025-01-25"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=关于开展外汇衍生品交易的可行性分析报告 | date=2025-01-25 | market=沪深京 | url=https://static.cninfo.com.cn/finalpage/2025-01-25/1222430442.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2025-01-08_3": {
+    "cite_id": "002594_disclosure_2025-01-08_3",
+    "m_type": "text",
+    "filename": "002594_disclosure_2025-01-08_3.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2025-01-08"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=h股公告（股份发行人及根据《上市规则》第十九b章上市的香港预托证券发行人的证券变动月报表） | date=2025-01-08 | market=沪深京 | url=https://static.cninfo.com.cn/finalpage/2025-01-08/1222257663.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2024-06-03_0": {
+    "cite_id": "002594_disclosure_2024-06-03_0",
+    "m_type": "text",
+    "filename": "002594_disclosure_2024-06-03_0.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-06-03"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2024年5月<em>产销</em>快报 | date=2024-06-03 | market=沪深京 | keyword=产销 | url=https://static.cninfo.com.cn/finalpage/2024-06-03/1220237186.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_disclosure_2024-05-06_1": {
+    "cite_id": "002594_disclosure_2024-05-06_1",
+    "m_type": "text",
+    "filename": "002594_disclosure_2024-05-06_1.txt",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {
+      "point": "2024-05-06"
+    },
+    "description": "fetch_disclosure_material | source=比亚迪 (002594) 信息披露公告 | title=2024年4月<em>产销</em>快报 | date=2024-05-06 | market=沪深京 | keyword=产销 | url=https://static.cninfo.com.cn/finalpage/2024-05-06/1219973138.pdf",
+    "source": "AKshare API:CNINFO"
+  },
+  "002594_profit_按单季度": {
+    "cite_id": "002594_profit_按单季度",
+    "m_type": "table",
+    "filename": "002594_profit_按单季度.csv",
+    "entity": {
+      "code": "002594",
+      "name": "比亚迪"
+    },
+    "time": {},
+    "description": "比亚迪（002594）按单季度利润表",
+    "source": "AKshare API:Hithink"
+  }
+}

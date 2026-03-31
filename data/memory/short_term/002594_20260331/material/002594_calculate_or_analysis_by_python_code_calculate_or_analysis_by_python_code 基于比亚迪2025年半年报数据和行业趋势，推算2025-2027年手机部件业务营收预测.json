@@ -1,0 +1,18 @@
+[
+  {
+    "description": "calculate_or_analysis_by_python_code 基于比亚迪2025年半年报数据和行业趋势，推算2025-2027年手机部件业务营收预测",
+    "tool": "calculate_or_analysis_by_python_code",
+    "sub_type": null,
+    "parameters": {},
+    "code": "# 基于2025年半年报数据和2024年研报预测趋势，推算2025-2027年营收预测\n# 2025年上半年收入687.44亿元，同比下滑5.54%\n# 2024年实际营收1596.09亿元\n# 假设下半年环比改善，全年预计略低于2024年\n\nh1_2025 = 687.44  # 2025年上半年收入（亿元）\nfull_year_2024 = 1596.09  # 2024年全年收入（亿元）\n\n# 基于上半年表现和行业复苏趋势，假设下半年环比增长15%\nh2_2025_estimate = h1_2025 * 1.15\nfull_year_2025_estimate = h1_2025 + h2_2025_estimate\n\n# 2026年、2027年基于行业复苏和收购协同效应，假设增速分别为8%、7%\ngrowth_2026 = 0.08\ngrowth_2027 = 0.07\n\nfull_year_2026_estimate = full_year_2025_estimate * (1 + growth_2026)\nfull_year_2027_estimate = full_year_2026_estimate * (1 + growth_2027)\n\n# 计算增速\nyoy_2025 = (full_year_2025_estimate / full_year_2024) - 1\nyoy_2026 = growth_2026\nyoy_2027 = growth_2027\n\nresult = {\n    \"2025_revenue\": round(full_year_2025_estimate, 2),\n    \"2026_revenue\": round(full_year_2026_estimate, 2),\n    \"2027_revenue\": round(full_year_2027_estimate, 2),\n    \"2025_yoy\": round(yoy_2025 * 100, 2),\n    \"2026_yoy\": round(yoy_2026 * 100, 2),\n    \"2027_yoy\": round(yoy_2027 * 100, 2)\n}\n\nprint(result)",
+    "result_type": "dict",
+    "result": {
+      "2025_revenue": 1478.0,
+      "2026_revenue": 1596.24,
+      "2027_revenue": 1707.97,
+      "2025_yoy": -7.4,
+      "2026_yoy": 8.0,
+      "2027_yoy": 7.0
+    }
+  }
+]

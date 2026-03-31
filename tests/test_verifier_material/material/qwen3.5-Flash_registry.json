@@ -1,0 +1,38 @@
+{
+  "002594_profit_按年度": {
+    "cite_id": "002594_profit_按年度",
+    "m_type": "text",
+    "filename": "002594_profit_按年度.txt",
+    "entity": {
+      "name": "",
+      "code": ""
+    },
+    "time": {},
+    "description": "研发费用年度数据",
+    "source": "财报"
+  },
+  "002594_balance_按年度_1773318841": {
+    "cite_id": "002594_balance_按年度_1773318841",
+    "m_type": "text",
+    "filename": "002594_balance_按年度_1773318841.txt",
+    "entity": {
+      "name": "",
+      "code": ""
+    },
+    "time": {},
+    "description": "应付账款年度数据",
+    "source": "财报"
+  },
+  "002594_balance_按年度": {
+    "cite_id": "002594_balance_按年度",
+    "m_type": "text",
+    "filename": "002594_balance_按年度.txt",
+    "entity": {
+      "name": "",
+      "code": ""
+    },
+    "time": {},
+    "description": "产量和固定成本数据",
+    "source": "财报"
+  }
+}
