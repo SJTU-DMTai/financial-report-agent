@@ -1,3 +1,3 @@
 ```bash
-python -u run_benchmark.py
+python -X utf8 -m src.utils.multi_types_verification *> test.txt
 ```
