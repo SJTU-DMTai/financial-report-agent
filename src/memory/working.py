@@ -2,10 +2,19 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field # [修改] 导入 field
 from dataclasses_json import dataclass_json
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Optional # [修改] 导入 Optional
+
+
+# [新] 定义一个专门的 Evidence 数据类
+@dataclass_json
+@dataclass
+class Evidence:
+    text: str
+    is_static: bool = False
+    value: Optional[str] = None # 存储静态证据的具体值
 
 @dataclass_json
 @dataclass
@@ -16,7 +25,8 @@ class Segment:
     reference: str = None
     content: str = None
     template: str = None
-    evidences: List[str] = None
+    # [修改] evidences 现在是一个 Evidence 对象的列表
+    evidences: Optional[List[Evidence]] = field(default_factory=list)
 
     def __str__(self, with_requirements=True, with_reference=False, with_content=True, with_evidence=True):
         ctx = ""
@@ -41,9 +51,10 @@ class Segment:
             )
             ctx += f"\t+ **写作要求**\n{requirements}\n\n"
         if with_evidence and self.evidences is not None:
+            # [修改] 从 Evidence 对象中提取 text
             evidence_text = "\n".join(
-                "\t\t- " + e.replace("\n\n", "\n")
-                for e in self.evidences if e
+                f"\t\t- {e.text} (静态: {e.is_static})" # 可以在打印时显示 is_static
+                for e in self.evidences if e and e.text
             )
             ctx += f"\t+ **论据材料**\n{evidence_text}\n\n"
 
@@ -99,16 +110,35 @@ class Section:
         print(contents, flush=True)
         res = re.findall(r"<evidence>(.+?)(?:</evidence>)?\s*<template>(.+?)(?:</template>)?\s*<requirement>(.+?)(?:</requirement>)?\s*<topic>(.+?)</topic>", contents, re.DOTALL)
         assert len(res) > 0, "Format error. You did not correctly warp template, evidence, requirement, or topic with the corresponding blocks and put them in order. Please Retry."
-        evidences, template, requirements, topic = [s.strip() for s in res[0]]
-        evidences = evidences.replace("\n", "").replace(";", "；").split("；")
-        evidences = [e.strip() for e in evidences if e.strip() != ""]
-        _evidences = []
-        for e in evidences:
-            if e not in _evidences:
-                _evidences.append(e)
-        evidences = None if len(_evidences) == 0 else _evidences
-        return Segment(template=template, requirements=requirements, topic=topic, evidences=evidences)
+        evidences_text, template, requirements, topic = [s.strip() for s in res[0]]
+        
+        # [新逻辑] 解析带有 is_static 标志的 evidences
+        parsed_evidences: List[Evidence] = []
+        raw_evidences = evidences_text.replace("\n", "").replace(";", "；").split("；")
+        for e_str in raw_evidences:
+            e_str = e_str.strip()
+            if not e_str: continue
+            
+            is_static = False
+            static_value = None # 默认无值
+            # 检查是否有 (static)[value] 标记
+            static_match = re.search(r'\s*\((static|静态)\)\s*\[(.*?)\]\s*$', e_str, flags=re.IGNORECASE)
+            if static_match:
+                is_static = True
+                static_value = static_match.group(2).strip() # 提取方括号里的值
+                e_str = re.sub(r'\s*\((static|静态)\)\s*\[.*?\]\s*$', '', e_str, flags=re.IGNORECASE).strip()
+            # 如果只有 (static) 没有值，也标记为静态
+            elif e_str.lower().endswith("(static)") or e_str.endswith("(静态)"):
+                is_static = True
+                e_str = re.sub(r'\s*\((static|静态)\)\s*$', '', e_str, flags=re.IGNORECASE).strip()
 
+            # 避免重复添加完全相同的文本
+            if e_str and not any(e.text == e_str for e in parsed_evidences):
+                # [修改] 传入 static_value
+                parsed_evidences.append(Evidence(text=e_str, is_static=is_static, value=static_value))
+
+        return Segment(template=template, requirements=requirements, topic=topic, evidences=parsed_evidences)
+    
     @staticmethod
     def parse_evidence(contents: str) -> Segment:
         keys = ['evidence', 'topic']
@@ -121,13 +151,26 @@ class Section:
         print(contents, flush=True)
         res = re.findall(r"<evidence>(.+?)(?:</evidence>)?\s*<topic>(.+?)</topic>", contents, re.DOTALL)
         assert len(res) > 0, "Format error. You did not correctly warp evidence or topic with the corresponding blocks and put them in order. Please Retry."
-        evidences, topic = [s.strip() for s in res[0]]
-        evidences = evidences.replace("\n", "").replace(";", "；").split("；")
-        evidences = [e.strip() for e in evidences if e.strip() != ""]
-        _evidences = []
-        for e in evidences:
-            if e not in _evidences:
-                _evidences.append(e)
-        evidences = None if len(_evidences) == 0 else _evidences
-        return Segment(template=None, requirements=None, topic=topic, evidences=evidences)
+        evidences_text, topic = [s.strip() for s in res]
+    
+        parsed_evidences: List[Evidence] = []
+        raw_evidences = evidences_text.replace("\n", "").replace(";", "；").split("；")
+        for e_str in raw_evidences:
+            e_str = e_str.strip()
+            if not e_str: continue
+            is_static = False
+            static_value = None
 
+            static_match = re.search(r'\s*\((static|静态)\)\s*\[(.*?)\]\s*$', e_str, flags=re.IGNORECASE)
+            if static_match:
+                is_static = True
+                static_value = static_match.group(2).strip()
+                e_str = re.sub(r'\s*\((static|静态)\)\s*\[.*?\]\s*$', '', e_str, flags=re.IGNORECASE).strip()
+            elif e_str.lower().endswith("(static)") or e_str.endswith("(静态)"):
+                is_static = True
+                e_str = re.sub(r'\s*\((static|静态)\)\s*$', '', e_str, flags=re.IGNORECASE).strip()
+
+            if e_str and not any(e.text == e_str for e in parsed_evidences):
+                parsed_evidences.append(Evidence(text=e_str, is_static=is_static, value=static_value))
+
+        return Segment(template=None, requirements=None, topic=topic, evidences=parsed_evidences)
