@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-import logging
+import traceback
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
@@ -40,8 +40,91 @@ from src.prompt import prompt_dict
 from pathlib import Path
 from src.memory.short_term import MaterialType
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
-logger = logging.getLogger("TripleCheckVerifier")
+# ---------------------------------------------------------------------------
+# Verifier Trace
+# ---------------------------------------------------------------------------
+VERIFIER_TRACE_LOCK = asyncio.Lock()
+VERIFIER_TRACE_PATH: Optional[Path] = None
+
+
+def set_verifier_trace_path(path: Optional[Path]) -> None:
+    global VERIFIER_TRACE_PATH
+    VERIFIER_TRACE_PATH = path
+    if VERIFIER_TRACE_PATH is not None:
+        VERIFIER_TRACE_PATH.write_text("", encoding="utf-8")
+
+
+async def append_verifier_trace(
+    topic,
+    round_idx,
+    checked_text,
+    verify_feedback=None,
+    rewritten_text=None,
+    issue_count=None,
+    status="issues_found",
+):
+    if VERIFIER_TRACE_PATH is None:
+        return
+
+    sections = [
+        "=" * 80,
+        f"[Verifier Trace] topic={topic}",
+        f"round={round_idx}",
+        f"status={status}",
+    ]
+    if issue_count is not None:
+        sections.append(f"issue_count={issue_count}")
+    sections.extend(
+        [
+            "",
+            "[Checked Text]",
+            checked_text or "",
+        ]
+    )
+    if verify_feedback is not None:
+        sections.extend(
+            [
+                "",
+                "[Feedback To Writer]",
+                verify_feedback,
+            ]
+        )
+    if rewritten_text is not None:
+        sections.extend(
+            [
+                "",
+                "[Writer Rewritten Text]",
+                rewritten_text,
+            ]
+        )
+    sections.append("\n")
+
+    async with VERIFIER_TRACE_LOCK:
+        with open(VERIFIER_TRACE_PATH, "a", encoding="utf-8") as trace_file:
+            trace_file.write("\n".join(sections))
+
+
+async def append_verifier_trace_log(title: str, message: str, payload: Optional[str] = None):
+    if VERIFIER_TRACE_PATH is None:
+        return
+
+    sections = [
+        "-" * 80,
+        f"[{title}]",
+        message,
+    ]
+    if payload is not None:
+        sections.extend(
+            [
+                "",
+                payload,
+            ]
+        )
+    sections.append("\n")
+
+    async with VERIFIER_TRACE_LOCK:
+        with open(VERIFIER_TRACE_PATH, "a", encoding="utf-8") as trace_file:
+            trace_file.write("\n".join(sections))
 
 # ---------------------------------------------------------------------------
 # 安全 JSON 解析（统一使用）
@@ -66,6 +149,18 @@ def fix_encoding(s: str) -> str:
         return s.encode('latin-1').decode('utf-8')
     except Exception:
         return s
+
+
+def _extract_text_response(response_msg: Any) -> str:
+    if response_msg is None:
+        raise ValueError("Agent returned None response")
+    if not hasattr(response_msg, "get_text_content"):
+        raise TypeError(f"Agent returned unsupported response type: {type(response_msg).__name__}")
+
+    text = response_msg.get_text_content()
+    if text is None or not str(text).strip():
+        raise ValueError("Agent returned empty text content")
+    return str(text)
 
 
 # ---------------------------------------------------------------------------
@@ -127,11 +222,25 @@ class ClaimExtractor:
             content=text
         )
 
-        # 使用 call_agent_with_retry 调用 agent
-        response_msg = await call_agent_with_retry(self.agent, msg)
+        # 使用 call_agent_with_retry 调用 agent，并额外校验文本响应
+        last_exc: Exception | None = None
+        raw = ""
 
-        # 获取文本内容
-        raw = response_msg.get_text_content()
+        try:
+            response_msg = await call_agent_with_retry(self.agent, msg)
+            raw = _extract_text_response(response_msg)
+        except Exception as e:
+            last_exc = e
+            await append_verifier_trace_log(
+                "ClaimExtractor",
+                f"[ClaimExtractor] invalid text response after call_agent_with_retry: "
+                f"{type(e).__name__}: {e}"
+            )
+            if hasattr(self.agent, "memory") and self.agent.memory is not None:
+                await self.agent.memory.clear()
+
+        if last_exc is not None and not raw:
+            raise last_exc
 
         # print("\n====== RAW LLM OUTPUT ======")
         # print(type(raw))
@@ -141,12 +250,20 @@ class ClaimExtractor:
         try:
             data = _safe_parse_json(raw)
         except Exception as e:
-            logger.error(f"Failed to parse JSON: {e}\nRaw text: {raw}")
+            await append_verifier_trace_log(
+                "ClaimExtractor",
+                f"[ClaimExtractor] Failed to parse JSON: {e}",
+                payload=f"Raw text:\n{raw}",
+            )
             return []
 
         segments = data.get("segments", [])
         if not segments:
-            logger.error("No segments returned from LLM")
+            await append_verifier_trace_log(
+                "ClaimExtractor",
+                "[ClaimExtractor] No segments returned from LLM",
+                payload=f"Raw text:\n{raw}",
+            )
             return []
 
         claims: List[Claim] = []
@@ -297,8 +414,24 @@ class VerifierRouter:
                 name="Verifier"
             )
 
-            response_msg = await call_agent_with_retry(agent, msg)
-            text = response_msg.get_text_content()
+            last_exc: Exception | None = None
+            text = ""
+            try:
+                response_msg = await call_agent_with_retry(agent, msg)
+                text = _extract_text_response(response_msg)
+            except Exception as e:
+                last_exc = e
+
+                await append_verifier_trace_log(
+                    f"{verifier_name.upper()} verifier",
+                    f"[{verifier_name} verifier] invalid text response after "
+                    f"call_agent_with_retry: {type(e).__name__}: {e}"
+                )
+                if hasattr(agent, "memory") and agent.memory is not None:
+                    await agent.memory.clear()
+
+            if last_exc is not None and not text:
+                raise last_exc
 
             # print(f"\n====== [{verifier_name.upper()} BATCH RAW OUTPUT] ======")
             # if text is None:
@@ -320,9 +453,11 @@ class VerifierRouter:
 
             # 按 claim_id 分组
             result: Dict[str, List[ClaimIssue]] = {c.claim_id: [] for c in claims}
+            skipped_items = []
             for item in issues_list:
                 cid = item.get("claim_id")
                 if not cid or cid not in result:
+                    skipped_items.append(item)
                     continue
 
                 result[cid].append(ClaimIssue(
@@ -332,21 +467,22 @@ class VerifierRouter:
                     suggestion=item.get("suggestion", {}),
                     evidence=item.get("evidence", [])
                 ))
+            if skipped_items:
+                await append_verifier_trace_log(
+                    f"{verifier_name.upper()} verifier",
+                    f"[{verifier_name} verifier] dropped {len(skipped_items)} "
+                    f"issue items without valid claim_id",
+                    payload=json.dumps(skipped_items, ensure_ascii=False, indent=2),
+                )
             return result
 
         except Exception as e:
-            import traceback
-            traceback.print_exc()
-            # 出错时，为每个 claim 返回一个错误 issue
-            result = {}
-            for c in claims:
-                result[c.claim_id] = [ClaimIssue(
-                    type="verifier_runtime_error",
-                    severity="major",
-                    description=f"[{verifier_name}] verifier batch failed: {str(e)}",
-                    suggestion="检查 verifier 输出格式（必须是 JSON）"
-                )]
-            return result
+            await append_verifier_trace_log(
+                f"{verifier_name.upper()} BATCH ERROR",
+                f"[{verifier_name.upper()} BATCH ERROR] {type(e).__name__}: {e}",
+                payload=traceback.format_exc(),
+            )
+            return {c.claim_id: [] for c in claims}
 
     # -----------------------------------------------------------------------
     # Issue 合并（同一 claim 内去重）
@@ -425,7 +561,15 @@ class SegmentVerifier:
         claims = await self.extractor.extract(segment)
         if not claims:
             return []
-        print("======== claims抽取已完成 =======")
+        await append_verifier_trace_log(
+            "SegmentVerifier",
+            "======== claims抽取已完成 ========",
+            payload=json.dumps(
+                [claim.to_dict() for claim in claims],
+                ensure_ascii=False,
+                indent=2,
+            ),
+        )
 
         claim_results = await self.router.verify_claims(claims)
 
