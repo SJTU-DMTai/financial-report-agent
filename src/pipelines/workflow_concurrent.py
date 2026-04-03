@@ -6,7 +6,6 @@ import os
 import time
 import json
 import pickle
-import re
 import sys
 import traceback
 import warnings
@@ -32,8 +31,20 @@ from src.utils.parse_verdict import parse_verifier_verdict
 from src.utils.call_with_retry import call_agent_with_retry
 from src.utils.get_entity_info import get_entity_info
 from src.utils.file_converter import markdown_to_sections
-from src.utils.format import print_section_reference_warning, extract_tagged_text, extract_writer_content
-from src.utils.multi_types_verification import SegmentVerifier
+from src.utils.format import (
+    _infer_report_title,
+    _normalize_report_title,
+    _normalize_section_titles,
+    _strip_section_number_prefix,
+    extract_tagged_text,
+    extract_writer_content,
+    print_section_reference_warning,
+)
+from src.utils.multi_types_verification import (
+    SegmentVerifier,
+    append_verifier_trace,
+    set_verifier_trace_path,
+)
 from src.utils.local_file import STOCK_REPORT_PATHS
 import config
 from src.utils.call_with_retry import call_chatbot_with_retry
@@ -134,15 +145,34 @@ async def process_single_segment(segment: Segment,
         if multi_source_verification_enabled:
 
             prev_issue_set = set()
-            for _ in range(max_verify_rounds):
+            for round_idx in range(max_verify_rounds):
+                current_text = segment.content
 
+                print(
+                    f"[Verifier Loop] round={round_idx + 1}/{max_verify_rounds} "
+                    f"topic={segment.topic}",
+                    flush=True,
+                )
+                print("[Verifier Checked Text]", flush=True)
+                print(current_text, flush=True)
                 verify_issues = await verifier.verify(segment.content)
                 # 过滤严重问题
                 verify_issues = [
                     iss for iss in verify_issues
                     if iss.severity in ("critical", "major")
                 ]
+                print(
+                    f"[Verifier Loop] major_or_critical_issues={len(verify_issues)}",
+                    flush=True,
+                )
                 if not verify_issues:
+                    await append_verifier_trace(
+                        topic=segment.topic,
+                        round_idx=round_idx + 1,
+                        checked_text=current_text,
+                        issue_count=0,
+                        status="passed",
+                    )
                     break
                 # # 收敛检测
                 # current_set = {
@@ -166,6 +196,12 @@ async def process_single_segment(segment: Segment,
                     return "\n\n".join(lines)
 
                 verify_feedback = format_issues(verify_issues)
+                print(
+                    f"[Verifier Loop] feedback_chars={len(verify_feedback)}",
+                    flush=True,
+                )
+                print("[Verifier Feedback To Writer]", flush=True)
+                print(verify_feedback, flush=True)
 
                 # token 控制
                 verify_feedback = verify_feedback[:1500]
@@ -189,6 +225,16 @@ async def process_single_segment(segment: Segment,
                 draft_msg = await call_agent_with_retry(writer, writer_input)
 
                 segment.content = extract_writer_content(draft_msg.get_text_content())
+                print("[Writer Rewritten After Verifier]", flush=True)
+                print(segment.content, flush=True)
+                await append_verifier_trace(
+                    topic=segment.topic,
+                    round_idx=round_idx + 1,
+                    checked_text=current_text,
+                    verify_feedback=verify_feedback,
+                    rewritten_text=segment.content,
+                    issue_count=len(verify_issues),
+                )
 
         await writer.memory.clear()
         segment.finished = True
@@ -252,7 +298,7 @@ async def process_section_concurrently(section: Section, parent_id, task_desc, d
                 title = extract_tagged_text(text, "title")
                 content = extract_tagged_text(text, "content")
                 assert title is not None and content is not None, "输出格式不对，答案没有被合适的标签包裹住。"
-                title = title.strip().strip("#").strip()
+                title = _strip_section_number_prefix(title.strip().strip("#").strip())
                 return title, content
             title, content = await call_chatbot_with_retry(
                 llm_instruct, formatter,
@@ -311,6 +357,8 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
     print("股票代码：", stock_symbol)
     now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_filename = f"log_{stock_symbol}_{now_str}.txt"
+    verifier_trace_filename = f"verifier_trace_{stock_symbol}_{now_str}.txt"
+    set_verifier_trace_path(PROJECT_ROOT / verifier_trace_filename)
     log_file = open(log_filename, "w", encoding="utf-8")
     sys.stdout = log_file
     sys.stderr = log_file
@@ -334,6 +382,7 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
 
     outline = await process_pdf_to_outline(demo_pdf_path, long_term_dir / "demonstration",
                                               llm_reasoning, llm_instruct, formatter,)
+    _normalize_section_titles(outline)
     manuscript_path = output_pth / f"{stock_symbol}_{cur_date}.json"
     if manuscript_path.exists():
         manuscript = Section.from_json(manuscript_path.read_text(encoding='utf-8'))
@@ -348,6 +397,7 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
             entity=entity,
             time={"point": str(demo_date)},
         )
+    _normalize_section_titles(manuscript)
 
     def unfinished(section: Section) -> bool:
         if section.segments:
@@ -419,6 +469,14 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
             max_verify_rounds=max_verify_rounds,
         )
 
+    _normalize_section_titles(manuscript)
+    _normalize_report_title(manuscript, entity, task_desc)
+    (output_pth / f"{filename}.json").write_text(manuscript.to_json(ensure_ascii=False), encoding="utf-8")
     markdown_text = section_to_markdown(manuscript)
     (output_pth / f"{filename}.md").write_text(markdown_text, encoding="utf-8")
-    md_to_pdf(markdown_text, short_term=short_term, pdf_path=output_pth / f"{filename}.pdf")
+    md_to_pdf(
+        markdown_text,
+        short_term=short_term,
+        pdf_path=output_pth / f"{filename}.pdf",
+        header_title=_infer_report_title(task_desc, entity),
+    )

@@ -28,7 +28,7 @@ import requests
 
 def grep_file_with_context(
     filepath: str,
-    keyword: str,
+    keyword: str | list[str],
     context_lines: int = 40,
     case_sensitive: bool = False,
     regex: bool = False,
@@ -38,7 +38,7 @@ def grep_file_with_context(
 
     Args:
         filepath: Path to the file to search
-        keyword: The keyword or regex pattern to search for
+        keyword: The keyword / keywords or regex pattern(s) to search for
         context_lines: Number of lines to show before and after match (default 100)
         case_sensitive: Whether search should be case sensitive
         regex: Whether keyword is a regex pattern
@@ -59,25 +59,33 @@ def grep_file_with_context(
         return [{"error": f"Failed to read file: {str(e)}"}]
 
     results = []
+    keywords = [kw for kw in ([keyword] if isinstance(keyword, str) else keyword) if kw]
+    if not keywords:
+        return results
 
     # Compile regex if needed
     if regex:
         try:
-            pattern = re.compile(keyword, 0 if case_sensitive else re.IGNORECASE)
+            patterns = [
+                re.compile(kw, 0 if case_sensitive else re.IGNORECASE)
+                for kw in keywords
+            ]
         except Exception as e:
             return [{"error": f"Invalid regex pattern: {str(e)}"}]
     else:
         if not case_sensitive:
-            keyword_lower = keyword.lower()
+            keywords_lower = [kw.lower() for kw in keywords]
 
     # Search through lines
     for line_idx, line in enumerate(lines):
-        match_found = False
-
         if regex:
-            match_found = bool(pattern.search(line))
+            matched_terms = [bool(pattern.search(line)) for pattern in patterns]
         else:
-            match_found = keyword_lower in line.lower() if not case_sensitive else keyword in line
+            line_to_match = line if case_sensitive else line.lower()
+            terms_to_match = keywords if case_sensitive else keywords_lower
+            matched_terms = [term in line_to_match for term in terms_to_match]
+
+        match_found = any(matched_terms)
 
         if match_found:
             # Calculate context window
@@ -284,7 +292,7 @@ class MaterialTools:
             query_key (str | None):
                 - 对于 JSON list：可选，用于对每个条目提取该字段。
                 - 对于表格：可选，用于筛选特定列（如 "Date,Close"）。
-                - 对于文本：可选，用于在内容中搜索特定关键词，返回匹配结果及若干行上下文。类似于grep的精确匹配，不支持空格、AND、OR等语法。
+                - 对于文本：可选，用于在内容中搜索特定关键词，返回匹配结果及若干行上下文。类似于grep的精确匹配，不支持AND、OR等语法。
             context_lines (int):
                 - 关键词搜索时的上下文行数（关键词前后各显示该行数）。
                 - 默认为50行。只在使用keyword参数时有效。
@@ -347,12 +355,13 @@ class MaterialTools:
                 )
 
             # 使用grep_file_with_context进行搜索
+            query_terms = [term.strip() for term in keyword.split() if term.strip()]
             results = grep_file_with_context(
                 filepath=str(material_file),
-                keyword=keyword,
+                keyword=query_terms,
                 context_lines=context_lines,
                 case_sensitive=False,
-                regex=False
+                regex=False,
             )
 
             if not results:
@@ -1279,8 +1288,8 @@ class MaterialTools:
         df = pd.concat(dfs)
         df.sort_values("发布时间", inplace=True, ascending=False)
 
-        # self._save_df_to_material(df=df, cite_id=cite_id, source="AKshare API:eastmoney", entity=entity,
-        #                           description=description)
+        self._save_df_to_material(df=df, cite_id=cite_id, source="AKshare API:eastmoney", entity=entity,
+                                  description=description)
         header = f"[fetch_stock_news_material] 股票新闻资讯（新闻内容大于156字的部分被省略，如需全文请根据url搜索）"
         return _build_tool_response_from_df(
             df=df,
