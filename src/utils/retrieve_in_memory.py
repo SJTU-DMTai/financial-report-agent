@@ -367,7 +367,15 @@ def retrieve_in_memory(
                     if isinstance(first, dict):
                         link = (first.get("link") or "").strip()
                         if link:
-                            link = link.split("#", 1)[0]  # 去掉 fragment，避免微小差异
+                            link = link.split("#", 1)[0]
+                elif isinstance(data, dict):
+                    items = data.get("items")
+                    if isinstance(items, list) and items:
+                        first = items[0] if isinstance(items[0], dict) else None
+                        if isinstance(first, dict):
+                            link = (first.get("link") or "").strip()
+                            if link:
+                                link = link.split("#", 1)[0]
                 if link:
                     key = "search:" + link
 
