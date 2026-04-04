@@ -19,7 +19,7 @@ prompt_dict['searcher_sys_prompt'] = """
 """
 
 prompt_dict['writer_sys_prompt'] = """
-你是 Writer agent，负责根据给定的大纲撰写金融深度研报的某个**中文**片段。
+你是 Writer agent，负责根据给定的大纲撰写金融深度研报的某个**中文**片段，并将你撰写的研报片段使用<content>和</content>包裹住并输出。
 - 检查**论据材料**是否充足、逻辑是否通顺。如果需要获取更多信息，请调用 Searcher 工具收集支撑观点的材料和数据。
 - 如果需要获取材料的具体内容或者原文，可以通过调用 read_material 工具。
 - 如果论据材料本身或工具返回的结果带有 [^cite_id:xxxxxx] 形式的引用，请务必在正文中保留这些引用标志。对于搜索结果，xxxxxx的取值请根据tool response中提及的cite_id赋值，**一定不要用纯序号等没有辨识力的id**。
@@ -492,7 +492,6 @@ prompt_dict["verifier_fact_prompt"] = """
 【核心规则（必须遵守）】
 
 1. 只允许使用 claim.cite_ids 对应的材料
-   - 不允许读取其它 cite_id
    - 不允许使用外部知识
 
 2. 必须调用 read_material 获取证据
@@ -503,36 +502,49 @@ prompt_dict["verifier_fact_prompt"] = """
    - 不允许“拼接多个材料”得到结论
    - 不允许基于推理或常识补全事实
 
-4. 判定逻辑：
-   - TRUE：材料中明确支持该事实
-   - FALSE：材料与 claim 矛盾
+4. **语义等价与容差规则（重要）**
+   - 同义词、近义词视为一致。例如：“公司”与“企业”、“上涨”与“增长”。
+   - 非核心修饰词（如程度副词“很”、“非常”，语气词“或许”、“可能”，限定词“主要”、“部分”）的差异不影响事实真值，不应作为错误报告。
+   - 时间范围的微小差异（如“2023年” vs “2023全年”）可视为一致，除非材料明确区分。
+
+5. 判定逻辑：
+   - TRUE：材料明确支持该事实（允许语义等价、容差）
+   - FALSE：材料与 claim 核心事实矛盾
    - UNCERTAIN：材料未明确提及或证据不足
 
 --------------------------------
 【常见错误类型】
 
-- unsupported_fact：材料未提及该事实
-- contradiction：材料与 claim 矛盾
-- subject_mismatch：主体错误
-- predicate_mismatch：关系错误
-- object_mismatch：对象错误
+- unsupported_fact：材料未提及该事实（核心事实完全缺失）
+- contradiction：材料与 claim 核心事实矛盾
+- subject_mismatch：主体错误（核心实体不同）
+- predicate_mismatch：关系错误（核心关系不同）
+- object_mismatch：对象错误（核心客体不同）
 - cross_source_inference：跨材料拼接推理（严重错误）
 
-【severity 判定标准（必须遵守）】
+**注意**：因同义词、上下位、非核心修饰词差异而产生的轻微表述不严谨，不应归类为上述错误，应视为正确（无问题）。
 
+【severity 判定标准（必须遵守）】
 - critical：
   - 明确事实错误（与材料直接矛盾）
-
+  - 跨材料拼接推理
 - major：
-  - 可能错误（材料不支持或不完整）
-  - 推断过度
-
+  - 核心事实缺失或主体/客体明显错误
+  - 推断过度（材料部分支持但 claim 过度演绎）
 - minor：
-  - 表述不严谨
+  - 表述不严谨（如用词不够精确但核心事实正确）
   - 信息不完整但不影响核心结论
 
-- info：
-  - 建议优化（非错误）
+--------------------------------
+【suggestion 撰写要求（重要）】
+suggestion 必须为字符串，仅在判定为 major/critical 或存在 minor 但需要提醒时提供。
+- 如果事实正确但表述可优化，建议给出“可改为更贴近材料的表述”。
+- 如果核心事实错误，给出正确的表述和依据。
+- 如果材料不支持，说明应补充材料或删除 claim。
+
+示例：
+- 事实正确但表述有细微差异（同义词）：无问题 → 返回 []。
+- 核心事实错误： “材料中主体为‘新能源汽车’，claim 误为‘汽车’，建议修正，依据 [^cite_id:xxx] 原文：‘新能源汽车...’”
 
 --------------------------------
 【输出格式（严格）】
@@ -540,17 +552,23 @@ prompt_dict["verifier_fact_prompt"] = """
 返回 JSON 数组：
 [
   {
+    "claim_id": "c0",
     "type": "...",
     "description": "...",
-    "severity": " ",
-    "suggestion": "..."
+    "severity": "...",
+    "evidence": [
+      {
+        "cite_id": "...",
+        "text": "原文片段"
+      }
+    ],
+    "suggestion": "具体的修改建议字符串"
   }
 ]
 
 规则：
-- 如果完全正确，返回 []
-- 不要输出解释
-- 不要输出多余字段
+- 完全正确或仅存在语义等价差异 → 返回 []
+- 不允许输出任何解释性文字（只输出 JSON）
 - 必须是合法 JSON
 """
 
@@ -583,14 +601,13 @@ prompt_dict["verifier_numeric_prompt"] = """
    - period 必须严格对齐（如 2025-Q1）
    - comparison（同比/环比）必须计算验证
 
-4. 涉及计算时：
-   - 必须基于材料中的数值进行计算
-   - 不允许直接相信 claim 中的结果
-
+4. **口径一致性检查**：
+  - 在比较数值前，必须先确认 claim 的统计口径（如“累计出口”、“合计”、“部分国家加总”）与材料中数值的口径是否一致。
+  - “材料中未提供该数值，无法验证，建议补充材料或删除该 claim”
 --------------------------------
 【重点检查项】
 
-- value_mismatch：数值不一致
+- value_mismatch：数值不一致（口径一致时）
 - unit_error：单位错误或未换算
 - period_mismatch：时间区间不一致
 - calculation_error：同比/环比计算错误
@@ -598,23 +615,25 @@ prompt_dict["verifier_numeric_prompt"] = """
 - rounding_issue：四舍五入问题
 - unsupported_number：材料中不存在该数值
 - cross_source_calculation：跨材料计算（禁止）
+- **inconsistent_dimension：统计口径不一致（新增）**
 
 --------------------------------
-
 【severity 判定标准（必须遵守）】
+- critical：数值错误、口径不一致、计算错误等核心问题
+- major：单位错误、时间区间模糊等
+- minor：四舍五入问题等
 
-- critical：
-  - 数值错误（差异明显）
+--------------------------------
+【suggestion 撰写要求（重要）】
+suggestion 必须为字符串，应包含以下要素：
+- 正确的数值、单位、时间范围（如果错误）
+- 正确的计算方式（如果涉及比较）
+- 依据的 cite_id 和原文片段
+- 如果需要四舍五入，说明合理的取舍规则
+- **若口径不一致，应明确指出两种口径的差异，并建议统一口径或说明该差异**
 
-- major：
-  - 数值缺少关键条件（单位缺失等）
-
-- minor：
-  - 表述不严谨
-  - 信息不完整但不影响核心结论
-
-- info：
-  - 建议优化（非错误）
+示例：
+- “建议将 claim 中的 '440万辆' 改为 '443万辆'，依据材料 [^cite_id:xxx] 原文：‘2023年中国汽车出口量443万辆’”
 
 --------------------------------
 【输出格式（严格）】
@@ -622,18 +641,25 @@ prompt_dict["verifier_numeric_prompt"] = """
 返回 JSON 数组：
 [
   {
+    "claim_id": "c0",
     "type": "...",
     "description": "...",
-    "severity": "",
-    "suggestion": "..."
+    "severity": "...",
+    "evidence": [
+      {
+        "cite_id": "...",
+        "text": "包含数值的原文句子"
+      }
+    ],
+    "suggestion": "具体的修改建议字符串"
   }
 ]
 
 规则：
-- 如果无问题，返回 []
+- 无问题 → []
 - 不要解释
 - 不要输出多余字段
-- 必须是合法 JSON
+- 你必须输出合法 JSON，不允许任何解释性文字
 """
 
 prompt_dict["verifier_temporal_prompt"] = """
@@ -675,19 +701,20 @@ prompt_dict["verifier_temporal_prompt"] = """
 
 --------------------------------
 【severity 判定标准（必须遵守）】
+时间错误全部判定为 “critical”
 
-- critical：
-  - 时间错误（年份/季度错误）
+--------------------------------
+【suggestion 撰写要求（重要）】
+suggestion 必须为字符串，应包含以下要素：
+- 正确的时间表达（如果错误）
+- 事件与时间的正确对应关系
+- 依据的 cite_id 和原文片段
+- 如果时间范围模糊，建议明确范围
 
-- major：
-  - 数值缺少关键条件（时间缺失）
-
-- minor：
-  - 表述不严谨
-  - 信息不完整但不影响核心结论
-
-- info：
-  - 建议优化（非错误）
+示例：
+-  “建议将 claim 中的 '2023年' 改为 '2023年第一季度'，依据材料 [^cite_id:xxx] 原文：‘2023年Q1...’”
+-  “材料中事件发生在 '2023年10月'，claim 中的 '2023年' 范围过大，建议缩小时间范围”
+- “材料中未提及该时间，无法验证，建议补充材料或删除该 claim”
 
 --------------------------------
 【输出格式（严格）】
@@ -695,10 +722,17 @@ prompt_dict["verifier_temporal_prompt"] = """
 返回 JSON 数组：
 [
   {
+    "claim_id": "c0",
     "type": "...",
     "description": "...",
-    "severity": "",
-    "suggestion": "..."
+    "severity": "critical",
+    "evidence": [
+      {
+        "cite_id": "...",
+        "text": "原文片段"
+      }
+    ],
+    "suggestion": "具体的修改建议字符串"
   }
 ]
 
@@ -706,9 +740,8 @@ prompt_dict["verifier_temporal_prompt"] = """
 - 如果无问题，返回 []
 - 不要解释
 - 不要输出多余字段
-- 必须是合法 JSON
+- 你必须输出合法 JSON，不允许任何解释性文字
 """
-
 
 prompt_dict["claim_extract_sys_prompt"] = """
 你是金融研报系统的结构化事实抽取引擎。
