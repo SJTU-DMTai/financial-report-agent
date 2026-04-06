@@ -25,6 +25,7 @@ tool_label_map = {
     "calculate_timeseries_transform": "时间序列变换",
     "calculate_forecast_metric": "预测辅助计算",
     "calculate_math_metric": "数学计算",
+    "calculate_or_analysis_by_python_code": "自定义 Python 数据分析/计算",
 }
 
 subtype_label_map = {
@@ -106,6 +107,7 @@ class CalculateTools:
         sub_type: str | None,           # 如 metric_type / ratio_type / forecast_type 等
         result: Any,
         result_type: str | None,
+        upstream_cite_ids: List[str],
         params: Dict[str, Any] | None = None,
         code: str | None = None,
         description: str | None = None,
@@ -121,15 +123,15 @@ class CalculateTools:
             sub_label = subtype_label_map.get(tool_name, {}).get(sub_type, str(sub_type))
 
         if sub_label:
-            base_description = f"{tool_label}（{sub_label}）"
+            base_description = f"调用工具进行{tool_label}：{sub_label}"
         else:
-            base_description = f"{tool_label}"
+            base_description = f"调用工具进行{tool_label}"
 
         extra = (description or "").strip()
         final_description = f"{base_description} {extra}" if extra else base_description
         entity = get_entity_info(self.long_term, final_description)
 
-        cite_id = f"{tool_name}_{final_description}"
+        cite_id = f"{tool_name}_result_{int(time.time())}"
         if entity and 'code' in entity:
             cite_id = f"{entity['code']}_{cite_id}"
 
@@ -152,17 +154,41 @@ class CalculateTools:
                 description=final_description,
                 entity=entity,
                 source=source,
+                upstream_cite_ids=upstream_cite_ids,
             )
         except Exception:
             return ""
 
         return cite_id
 
+    def _normalize_upstream_cite_ids(
+        self,
+        upstream_cite_ids: List[str],
+        extra_cite_ids: Optional[List[str]] = None,
+    ) -> List[str]:
+        if not isinstance(upstream_cite_ids, list):
+            raise ValueError("upstream_cite_ids 必须是 cite_id 字符串列表。")
+
+        normalized: List[str] = []
+        for raw_id in list(upstream_cite_ids) + list(extra_cite_ids or []):
+            cite_id = str(raw_id).strip()
+            if not cite_id or cite_id in normalized:
+                continue
+            if self.short_term.get_material_meta(cite_id) is None:
+                raise ValueError(f"upstream_cite_ids 中含有不存在的 cite_id: {cite_id}")
+            normalized.append(cite_id)
+
+        if not normalized:
+            raise ValueError("upstream_cite_ids 不能为空，且必须引用已存在的 material cite_id。")
+
+        return normalized
+
     # --------- 1. 估值类工具 ---------
     async def calculate_valuation_metric(
         self,
         stock: str,
         date: str,
+        upstream_cite_ids: List[str],
         metric_type: Literal[
             "pe",
             "peg",
@@ -184,6 +210,7 @@ class CalculateTools:
             {
               "stock": "<必填，股票代码或名称>",
               "date": "<必填，时间范围，如2025Q3、2025第三季度、2025财年、20250101-20251231等>",
+              "upstream_cite_ids": ["<必填，本次计算使用的数据来源的material的 cite_id，可多个>"],
               "metric_type": "<见下方枚举之一>",
               "params": { ... 对应该类型的参数 ... }
             }
@@ -292,6 +319,7 @@ class CalculateTools:
             }
         """
         try:
+            upstream_cite_ids = self._normalize_upstream_cite_ids(upstream_cite_ids)
             # 生成 description：将 stock 和 date 拼接，并清理空格、换行、制表符
             description = f"{stock}_{date}"
             description = re.sub(r'[\s\n\t]+', '_', description)
@@ -393,6 +421,7 @@ class CalculateTools:
                 params=params,
                 result=result,
                 result_type="float",
+                upstream_cite_ids=upstream_cite_ids,
                 description=description,
             )
 
@@ -420,6 +449,7 @@ class CalculateTools:
         self,
         stock: str,
         date: str,
+        upstream_cite_ids: List[str],
         ratio_type: Literal[
             "roe",
             "roic",
@@ -441,6 +471,7 @@ class CalculateTools:
             {
               "stock": "<必填，股票代码或名称>",
               "date": "<必填，时间范围，如2025Q3、2025第三季度、2025财年、20250101-20251231等>",
+              "upstream_cite_ids": ["<必填，本次计算使用的数据来源的material的 cite_id，可多个>"],
               "ratio_type": "<见下方枚举之一>",
               "params": { ... 对应该类型的参数 ... }
             }
@@ -536,6 +567,7 @@ class CalculateTools:
 
         """
         try:
+            upstream_cite_ids = self._normalize_upstream_cite_ids(upstream_cite_ids)
             # 生成 description：将 stock 和 date 拼接，并清理空格、换行、制表符
             description = f"{stock}_{date}"
             description = re.sub(r'[\s\n\t]+', '_', description)
@@ -613,6 +645,7 @@ class CalculateTools:
                 params=params,
                 result=result,
                 result_type="float",
+                upstream_cite_ids=upstream_cite_ids,
                 description=description,
             )
 
@@ -641,6 +674,7 @@ class CalculateTools:
         self,
         stock: str,
         date: str,
+        upstream_cite_ids: List[str],
         metric_type: Literal["fcf", "nopat", "fcff", "ttm"],
         params: Dict[str, Any],
     ) -> ToolResponse:
@@ -651,6 +685,7 @@ class CalculateTools:
             {
               "stock": "<必填，股票代码或名称>",
               "date": "<必填，时间范围，如2025Q3、2025第三季度、2025财年、20250101-20251231等>",
+              "upstream_cite_ids": ["<必填，本次计算使用的数据来源的material的 cite_id，可多个>"],
               "metric_type": "<见下方枚举之一>",
               "params": { ... 对应该类型的参数 ... }
             }
@@ -704,6 +739,7 @@ class CalculateTools:
 
         """
         try:
+            upstream_cite_ids = self._normalize_upstream_cite_ids(upstream_cite_ids)
             # 生成 description：将 stock 和 date 拼接，并清理空格、换行、制表符
             description = f"{stock}_{date}"
             description = re.sub(r'[\s\n\t]+', '_', description)
@@ -745,6 +781,7 @@ class CalculateTools:
                 params=params,
                 result=result,
                 result_type="float",
+                upstream_cite_ids=upstream_cite_ids,
                 description=description,
             )
 
@@ -773,6 +810,7 @@ class CalculateTools:
         self,
         stock: str,
         date: str,
+        upstream_cite_ids: List[str],
         transform_type: Literal[
             "align_quarterly_to_annual",
             "rolling_average",
@@ -787,6 +825,7 @@ class CalculateTools:
             {
               "stock": "<必填，股票代码或名称>",
               "date": "<必填，时间范围，如2025Q3、2025第三季度、2025财年、20250101-20251231等>",
+              "upstream_cite_ids": ["<必填，本次计算使用的数据来源的material的 cite_id，可多个>"],
               "transform_type": "<见下方枚举之一>",
               "params": { ... 对应该类型的参数 ... }
             }
@@ -839,6 +878,7 @@ class CalculateTools:
 
         """
         try:
+            upstream_cite_ids = self._normalize_upstream_cite_ids(upstream_cite_ids)
             # 生成 description：将 stock 和 date 拼接，并清理空格、换行、制表符
             description = f"{stock}_{date}"
             description = re.sub(r'[\s\n\t]+', '_', description)
@@ -885,6 +925,7 @@ class CalculateTools:
                 params=params,
                 result=result,
                 result_type="float",
+                upstream_cite_ids=upstream_cite_ids,
                 description=description,
             )
 
@@ -912,6 +953,7 @@ class CalculateTools:
         self,
         stock: str,
         date: str,
+        upstream_cite_ids: List[str],
         forecast_type: Literal["project_revenue", "project_margin", "discount_series"],
         params: Dict[str, Any],
     ) -> ToolResponse:
@@ -922,6 +964,7 @@ class CalculateTools:
             {
               "stock": "<必填，股票代码或名称>",
               "date": "<必填，时间范围，如2025Q3、2025第三季度、2025财年、20250101-20251231等>",
+              "upstream_cite_ids": ["<必填，本次计算使用的数据来源的material的 cite_id，可多个>"],
               "forecast_type": "<见下方枚举之一>",
               "params": { ... 对应该类型的参数 ... }
             }
@@ -980,6 +1023,7 @@ class CalculateTools:
 
         """
         try:
+            upstream_cite_ids = self._normalize_upstream_cite_ids(upstream_cite_ids)
             # 生成 description：将 stock 和 date 拼接，并清理空格、换行、制表符
             description = f"{stock}_{date}"
             description = re.sub(r'[\s\n\t]+', '_', description)
@@ -1027,6 +1071,7 @@ class CalculateTools:
                 params=params,
                 result=result,
                 result_type="float",
+                upstream_cite_ids=upstream_cite_ids,
                 description=description,
             )
 
@@ -1054,6 +1099,7 @@ class CalculateTools:
         self,
         stock: str,
         date: str,
+        upstream_cite_ids: List[str],
         metric_type: Literal["npv", "linear_regression"],
         params: Dict[str, Any],
     ) -> ToolResponse:
@@ -1067,6 +1113,7 @@ class CalculateTools:
             {
               "stock": "<必填，股票代码或名称>",
               "date": "<必填，时间范围，如2025Q3、2025第三季度、2025财年、20250101-20251231等>",
+              "upstream_cite_ids": ["<必填，本次计算使用的数据来源的material的 cite_id，可多个>"],
               "metric_type": "<见下方枚举之一>",
               "params": { ... 对应该类型的参数 ... }
             }
@@ -1162,6 +1209,7 @@ class CalculateTools:
 
         """
         try:
+            upstream_cite_ids = self._normalize_upstream_cite_ids(upstream_cite_ids)
             # 生成 description：将 stock 和 date 拼接，并清理空格、换行、制表符
             description = f"{stock}_{date}"
             description = re.sub(r'[\s\n\t]+', '_', description)
@@ -1250,6 +1298,7 @@ class CalculateTools:
                 params=params,
                 result=result,
                 result_type="float",
+                upstream_cite_ids=upstream_cite_ids,
                 description=description,
             )
 
@@ -1281,24 +1330,15 @@ class CalculateTools:
     async def calculate_or_analysis_by_python_code(
         self,
         code: str,
-        material_map: dict[str, str],
+        upstream_cite_ids: List[str],
+        material_map: dict[str, str] | None = None,
         description: str | None = None,
     ) -> ToolResponse:
         """
-        当没有其他预定义的计算工具时，读取cite_id 对应 Material 中的数值数据，执行自定义的 Python 数据分析 / 计算代码，并返回打印出来的结果，保存计算结果到Material当中，返回Material标识cite_id。
+        执行自行编写的 Python 数据分析 / 计算代码，并返回“打印出来的结果”，保存计算结果到Material当中，返回Material标识cite_id。
+        你可以使用自己传入的数据，也可以通过 cite_id 引用之前保存的 Material 中的数值数据，并将其作为变量在代码中使用。
 
-        1. 已预先导入的库（在子进程环境中）：
-               import math
-               import statistics
-               import datetime
-               import numpy as np
-               import pandas as pd
-           你可以直接使用这些库，无需再次导入；重复导入也不会报错。
-           你也可以自行导入其他需要的库，例如sklearn、scipy等。
-
-        2. 根据 material_map 中的映射关系，将对应 cite_id 的Dataframe数据注入到 `code` 的变量中。
-
-        3. 执行你编写的 Python 代码片段`code`，实现数据分析或数值计算逻辑。
+        1. 你需要编写一段 Python 代码片段，实现数据分析或数值计算逻辑。
            示例（计算某组收益率的均值和标准差）：
 
                import numpy as np
@@ -1315,7 +1355,16 @@ class CalculateTools:
 
            注意：只写核心逻辑，不需要写 if __name__ == "__main__"。
 
-        4. 结果约定（关键）：
+        2. 已预先导入的库（在子进程环境中）：
+               import math
+               import statistics
+               import datetime
+               import numpy as np
+               import pandas as pd
+           你可以直接使用这些库，无需再次导入；重复导入也不会报错。
+           你也可以自行导入其他需要的库，例如sklearn、scipy等。
+
+        3. 结果约定（关键）：
            - 你必须在代码中，将最终要返回的结果赋值给变量 `result`。
            - 本工具会调用：
                  print(result)
@@ -1325,25 +1374,39 @@ class CalculateTools:
         Args:
             code (str):
                 Python 代码片段，仅包含分析/计算逻辑。
-            material_map (dict[str, str]):
-                本次计算中需要访问的material映射，可以通过设置此参数将material中的Dataframe数据注入到code中的变量进行访问。
+            upstream_cite_ids (List[str]):
+                必填，本次计算使用的数据来源的material的 cite_id 列表。若同时传入 material_map，二者会合并去重。
+            material_map (dict[str, str] | None):
+                可选，本次计算中需要访问的material映射，可以通过设置此参数将material中的数值数据注入到code中的变量进行访问。
                 material_map的构成如下：
-                - key: 你在代码中使用的变量名
-                - value: 已有 Material 的 cite_id
+                    - key: 你在代码中使用的变量名
+                    - value: 已有 material 的 cite_id
+                若为 None，则不注入任何material变量。
+                注意，可以被注入到变量的material必须包含数值数据，比如TABLE会完整加载为dataframe，calculate_*_result会提取其中result字段的数据。
             description (str | None):
-                可选，对本次计算的补充说明文字，比如简要说明计算对象（如股票名称）、时间范围以及所计算的指标或变换。
+                可选，对本次计算的补充说明文字，建议简要说明计算对象（如股票名称）、时间范围以及所计算的指标或变换。
 
         Returns:
             ToolResponse:
-                - 若成功：
-                    - 描述本次计算的含义
-                    - 输出 result 的字符串表示（可能是多行，例如 DataFrame 表格）
-                - 若失败：
-                    - 错误信息，以及 stdout / stderr 便于调试
+                content 中包含:
+                - TextBlock:
+                    - 若成功：
+                        - 描述本次计算的含义
+                        - 输出 result 的字符串表示（可能是多行，例如 DataFrame 表格）
+                    - 若失败：
+                        - 错误信息，以及 stdout / stderr 便于调试
+
+                metadata 中包含:
+                - "raw_stdout": 执行子进程的标准输出（包含 result 打印）
+                - "raw_stderr": 执行子进程的标准错误
         """
 
 
         material_map = material_map or {}
+        upstream_cite_ids = self._normalize_upstream_cite_ids(
+            upstream_cite_ids,
+            extra_cite_ids=list(material_map.values()),
+        )
         material_injection_lines: list[str] = []
         for var_name, cite_id in material_map.items():
             if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", var_name):
@@ -1597,6 +1660,7 @@ else:
                 sub_type=None,
                 result=structured_result,
                 result_type=result_type,
+                upstream_cite_ids=upstream_cite_ids,
                 code=code,
                 description=description,
             )

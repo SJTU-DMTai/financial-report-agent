@@ -7,6 +7,7 @@ from agentscope.formatter import DashScopeChatFormatter
 from agentscope.tool import Toolkit
 
 from ..tools.material_tools import MaterialTools
+from ..tools.search_tools import SearchTools
 from ..memory.short_term import ShortTermMemoryStore
 from ..memory.long_term import LongTermMemoryStore
 from ..prompt import prompt_dict
@@ -27,7 +28,10 @@ def create_verifier_agent(
     - final: 最终质量审核
     """
     sys_prompt_map = {
+        "fact": prompt_dict['verifier_fact_prompt'],
         "numeric": prompt_dict['verifier_numeric_prompt'],
+        "temporal": prompt_dict['verifier_temporal_prompt'],
+
         "reference": prompt_dict['verifier_reference_prompt'],
         "logic": prompt_dict['verifier_logic_prompt'],
         "quality": prompt_dict['verifier_quality_prompt'],
@@ -46,7 +50,7 @@ def create_verifier_agent(
         formatter=formatter,
         toolkit=toolkit,
         parallel_tool_calls=False,
-        max_iters=15,
+        max_iters=10,
     )
 
 
@@ -54,7 +58,6 @@ def create_verifier_agent(
 def build_verifier_toolkit(
     short_term: ShortTermMemoryStore,
     long_term: LongTermMemoryStore,
-    multi_source_verification : bool = False,
 ) -> Toolkit:
     toolkit = Toolkit()
 
@@ -62,8 +65,8 @@ def build_verifier_toolkit(
     # toolkit.register_tool_function(manuscript_tools.read_manuscript_section)
     # toolkit.register_tool_function(manuscript_tools.count_manuscript_words)
     material_tools = MaterialTools(short_term=short_term, long_term=long_term)
+    search_tools = SearchTools(short_term=short_term, long_term=long_term)
     toolkit.register_tool_function(material_tools.read_material)
-
     return toolkit
 
 
@@ -74,6 +77,17 @@ def create_all_verifiers(model, formatter, short_term: ShortTermMemoryStore, lon
         # 每个 verifier 用独立 toolkit
         toolkit = build_verifier_toolkit(short_term,long_term)
         verifiers[verifier_name] = create_verifier_agent(model, formatter, toolkit, verifier_name)
+
+    return verifiers
+
+def create_three_verifiers(model, formatter, short_term: ShortTermMemoryStore, long_term: LongTermMemoryStore):
+    verifiers = {}
+
+    for name in ["fact", "numeric", "temporal"]:
+        toolkit = build_verifier_toolkit(short_term, long_term)
+        verifiers[name] = create_verifier_agent(
+            model, formatter, toolkit, verifier_type=name
+        )
 
     return verifiers
 

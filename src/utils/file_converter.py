@@ -17,7 +17,7 @@ from marker.output import text_from_rendered
 import markdown
 import re
 import html
-from typing import Optional, Union, List, Dict, Tuple
+from typing import Optional, Union, List, Dict, Tuple, Any
 import time
 from datetime import datetime
 
@@ -25,6 +25,7 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 import config
+from src.utils.format import _has_renderable_content, _strip_section_number_prefix
 
 def add_citation(
     cite_id: str,
@@ -70,82 +71,20 @@ def _inject_refs(
     citations: list,
 ) -> str:
     """
-    扫描 md_text 中的cite_id标记，
-    支持以下形式，具有一定容错能力：
-      - [^xxx|yyy]
-      - cite_id:xxx|yyy
-      - cite_id:xxx
-      - [^xxx|yyy；cite_id:zzz]
-      - [^xxx|yyy；zzz]
-
-    其中 yyy 为可选位置描述可缺省。
+    处理 md_text 中的cite_id标记: [^cite_id:xxxxxx]
 
     """
-# ---------- 第一轮：处理显式写出的 cite_id:xxx 或 cite_id:xxx|yyy ----------
-    # 不要求方括号存在，detail(yyy) 可缺省
-    pattern_main = re.compile(
-        r"cite_id[:=]\s*([0-9A-Za-z_\u4e00-\u9fff\-]+)(?:\|([^；\]\s]+))?"
-    )
 
-    text = md_text
-    result_parts = []
-    last_end = 0
+    pattern = re.compile(r"\[\^cite_id[:=]\s*([^\]]+?)\s*\]")
 
-    for m in pattern_main.finditer(text):
-        # 先把上一个匹配之后的原文拼上
-        result_parts.append(text[last_end:m.start()])
-
+    def repl(m):
         cite_id = m.group(1).strip()
-        detail = (m.group(2) or "").strip()
-
-        idx = add_citation(cite_id, detail, short_term, citation_index_map, citations)
-
+        idx = add_citation(cite_id, "", short_term, citation_index_map, citations)
         if idx is None:
-            # 没找到 meta：不要替换，原样保留
-            result_parts.append(text[m.start():m.end()])
-        else:
-            # 用 (1)、(2)… 的形式替换
-            result_parts.append(f'(<a href="#ref-{idx}" class="ref">{idx}</a>)')
+            return m.group(0)
+        return f'(<a href="#ref-{idx}" class="ref">{idx}</a>)'
 
-        last_end = m.end()
-
-    # 拼接剩余部分
-    result_parts.append(text[last_end:])
-    text_after_main = "".join(result_parts)
-
-    # ---------- 第二轮：处理 “(1)；zzz” 这种漏写 cite_id 的情况 ----------
-    # 典型来源：
-    #   原文：[^xxx|yyy；zzz]
-    #   第一轮后：[(1)；zzz]
-    # 这里尝试把 zzz 当作 cite_id 去解析，如果 registry 里没有，就保持原样。
-    pattern_follow = re.compile(
-        r'(\(<a href="#ref-(\d+)" class="ref">\2</a>\))\s*([；;])\s*([0-9A-Za-z_\u4e00-\u9fff\-]+)'
-    )
-
-    text = text_after_main
-    result_parts = []
-    last_end = 0
-
-    for m in pattern_follow.finditer(text):
-        result_parts.append(text[last_end:m.start()])
-
-        anchor = m.group(1)          # 已有的 (1)
-        sep = m.group(3)             # 分号：；或 ;
-        cite_id2 = m.group(4).strip() # 疑似漏写 cite_id: 的部分
-
-        idx2 = add_citation(cite_id2, "", short_term, citation_index_map, citations)
-
-        if idx2 is None:
-            # 第二个“疑似 cite_id”在 registry 中找不到：保持原样，不改
-            result_parts.append(text[m.start():m.end()])
-        else:
-            anchor2 = f'(<a href="#ref-{idx2}" class="ref">{idx2}</a>)'
-            result_parts.append(f"{anchor}{sep}{anchor2}")
-
-        last_end = m.end()
-
-    result_parts.append(text[last_end:])
-    return "".join(result_parts)
+    return pattern.sub(repl, md_text)
 
 def _replace_chart_placeholders(md_text: str, manuscript_dir: Path) -> str:
     """
@@ -225,9 +164,160 @@ def _remove_external_images(md_text: str) -> str:
     pattern = re.compile(r'!\[.*?\]\(https?://[^\)]+\)')
     return pattern.sub("", md_text)
 
+def _collect_appendix_entries(citations: List[Dict], short_term: ShortTermMemoryStore) -> List[Dict]:
+    entries: List[Dict] = []
+    seen: set[str] = set()
+    next_extra_index = len(citations) + 1
+
+    def append_entry(
+        cite_id: str,
+        detail: str,
+        meta: Optional[Any],
+        is_direct: bool,
+        index: Optional[int] = None,
+    ) -> None:
+        nonlocal next_extra_index
+        if cite_id in seen:
+            return
+        seen.add(cite_id)
+
+        if index is None:
+            index = next_extra_index
+            next_extra_index += 1
+        entries.append(
+            {
+                "index": index,
+                "cite_id": cite_id,
+                "detail": detail,
+                "meta": meta,
+                "is_direct": is_direct,
+            }
+        )
+
+    def collect_upstream(cite_id: str, path: Optional[set[str]] = None) -> None:
+        path = set(path or set())
+        if cite_id in path:
+            return
+        path.add(cite_id)
+
+        meta = short_term.get_material_meta(cite_id) if hasattr(short_term, "get_material_meta") else None
+        if meta is None:
+            return
+
+        for upstream_cite_id in getattr(meta, "upstream_cite_ids", []) or []:
+            upstream_cite_id = str(upstream_cite_id)
+            upstream_meta = short_term.get_material_meta(upstream_cite_id) if hasattr(short_term, "get_material_meta") else None
+            append_entry(
+                cite_id=upstream_cite_id,
+                detail="",
+                meta=upstream_meta,
+                is_direct=False,
+            )
+            collect_upstream(upstream_cite_id, path)
+
+    for c in sorted(citations, key=lambda x: x["index"]):
+        append_entry(
+            cite_id=str(c["cite_id"]),
+            detail=c.get("detail", ""),
+            meta=c.get("meta"),
+            is_direct=True,
+            index=c["index"],
+        )
+
+    for c in sorted(citations, key=lambda x: x["index"]):
+        collect_upstream(str(c["cite_id"]))
+
+    return entries
 
 
-def _build_appendix_md(citations: List[Dict]) -> str:
+def _render_upstream_tree_lines(
+    cite_id: str,
+    short_term: ShortTermMemoryStore,
+    prefix: str = "",
+    is_last: bool = True,
+    is_root: bool = False,
+    path: Optional[set[str]] = None,
+) -> List[str]:
+    path = set(path or set())
+    node_prefix = ""
+    if not is_root:
+        node_prefix = "\\- " if is_last else "|- "
+
+    line = f"{prefix}{node_prefix}{cite_id}"
+    if cite_id in path:
+        return [f"{line} (cycle detected)"]
+
+    meta = short_term.get_material_meta(cite_id) if hasattr(short_term, "get_material_meta") else None
+    if meta is None:
+        return [f"{line} (missing registry metadata)"]
+
+    path.add(cite_id)
+    upstream_cite_ids = getattr(meta, "upstream_cite_ids", []) or []
+    lines = [line]
+    if is_root:
+        next_prefix = ""
+    else:
+        next_prefix = prefix + ("   " if is_last else "|  ")
+    for idx, upstream_cite_id in enumerate(upstream_cite_ids):
+        lines.extend(
+            _render_upstream_tree_lines(
+                upstream_cite_id,
+                short_term=short_term,
+                prefix=next_prefix,
+                is_last=(idx == len(upstream_cite_ids) - 1),
+                is_root=False,
+                path=path,
+            )
+        )
+    return lines
+
+
+def _build_appendix_dag_md(citations: List[Dict], short_term: ShortTermMemoryStore) -> str:
+    if not citations:
+        return ""
+
+    lineage_citations: List[Tuple[Dict, List[str]]] = []
+    for c in sorted(citations, key=lambda x: x["index"]):
+        cite_id = str(c["cite_id"])
+        meta = c.get("meta") or (short_term.get_material_meta(cite_id) if hasattr(short_term, "get_material_meta") else None)
+        upstream_cite_ids = [str(item) for item in (getattr(meta, "upstream_cite_ids", []) or [])]
+        if upstream_cite_ids:
+            lineage_citations.append((c, upstream_cite_ids))
+
+    if not lineage_citations:
+        return ""
+
+    lines: List[str] = []
+    lines.append("## 第二部分：数据溯源附录")
+    lines.append("")
+    lines.append("以下为正文引用的计算结果的溯源关系。")
+    lines.append("")
+
+    for c, upstream_cite_ids in lineage_citations:
+        idx = c["index"]
+        cite_id = str(c["cite_id"])
+        lines.append(f"**[{idx}] `{cite_id}`**")
+        lines.append("")
+        lines.append("```text")
+        for upstream_idx, upstream_cite_id in enumerate(upstream_cite_ids):
+            lines.extend(
+                _render_upstream_tree_lines(
+                    upstream_cite_id,
+                    short_term=short_term,
+                    prefix="",
+                    is_last=(upstream_idx == len(upstream_cite_ids) - 1),
+                    is_root=False,
+                    path={cite_id},
+                )
+            )
+        lines.append("```")
+        lines.append("")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def _build_appendix_md(citations: List[Dict], short_term: ShortTermMemoryStore) -> str:
     """
     根据 citations 构造“附录”的 Markdown 文本。
 
@@ -249,6 +339,7 @@ def _build_appendix_md(citations: List[Dict]) -> str:
     if not citations:
         return ""
 
+    appendix_entries = _collect_appendix_entries(citations, short_term)
     lines: List[str] = []
 
     # 附录大标题
@@ -256,17 +347,18 @@ def _build_appendix_md(citations: List[Dict]) -> str:
     lines.append("")
 
     # 第一部分标题
-    lines.append("## 第一部分：数据来源附录")
+    lines.append("## 第一部分：引用材料清单")
     lines.append("")
-    lines.append("以下为文中引用到的数据及材料来源：")
+    lines.append("以下为正文直接引用或是计算使用到的数据及材料来源：")
     lines.append("")
 
     # 按 index 排序，保证顺序稳定
-    for c in sorted(citations, key=lambda x: x["index"]):
+    for c in appendix_entries:
         idx = c["index"]
         cite_id = c["cite_id"]
         detail = c["detail"]
         meta = c["meta"]
+        is_direct = c["is_direct"]
 
         # 做一下 HTML 转义，避免特殊字符干扰
         esc_cite_id = html.escape(str(cite_id)) if cite_id is not None else ""
@@ -275,7 +367,10 @@ def _build_appendix_md(citations: List[Dict]) -> str:
         # 有序列表项首行：
         # 1. <a id="ref-1"></a>**REF_ID**（引用字段/行：detail）
         # 注意：<a id="ref-1"></a> 是真正的锚点，和正文里的 href="#ref-1" 完全对应
-        first_line = f'1. <a id="ref-{idx}"></a>**{esc_cite_id}**'
+        if is_direct:
+            first_line = f'1. <a id="ref-{idx}"></a>**{esc_cite_id}**'
+        else:
+            first_line = f'1. **{esc_cite_id}**'
         if esc_detail:
             first_line += f'（引用字段/行：{esc_detail}）'
         lines.append(first_line)
@@ -302,6 +397,10 @@ def _build_appendix_md(citations: List[Dict]) -> str:
 
         # 每条引用之间空一行，增强可读性
         lines.append("")
+
+    dag_md = _build_appendix_dag_md(citations, short_term)
+    if dag_md:
+        lines.append(dag_md)
 
     return "\n".join(lines)
 
@@ -382,6 +481,7 @@ def md_to_pdf(
         md_text: str,
         short_term : ShortTermMemoryStore,
         pdf_path: str | Path,
+        header_title: str | None = None,
     ):
     """将所有 Manuscript 章节按顺序合并并导出为 PDF 文件。
     """
@@ -415,7 +515,7 @@ def md_to_pdf(
     if not cleaned_sections_md:
         return "[md_to_pdf] 所有章节为空，无法生成 PDF。"
 
-    appendix_md = _build_appendix_md(citations)
+    appendix_md = _build_appendix_md(citations, short_term)
     if appendix_md:
         cleaned_sections_md.append(appendix_md)
 
@@ -507,8 +607,8 @@ def md_to_pdf(
     c_light1 = pal["theme"]["light1"]
     c_light2 = pal["theme"]["light2"]
 
-    header_title = _safe_trim_title(main_title, max_len=50)
-    header_html = _build_header_html(header_title, rule_color=c_dark1, subtle_text=c_dark2, font_face_css=font_face_css, font_family=body_family)
+    page_header_title = _safe_trim_title((header_title or main_title).strip(), max_len=50)
+    header_html = _build_header_html(page_header_title, rule_color=c_dark1, subtle_text=c_dark2, font_face_css=font_face_css, font_family=body_family)
     footer_html = _build_footer_html(rule_color=c_dark1, subtle_text=c_dark2, font_face_css=font_face_css, font_family=body_family)
 
 
@@ -638,6 +738,13 @@ def md_to_pdf(
     text = f"[md_to_pdf] 已输出 PDF: {pdf_path}"
     return text
 
+def _compose_section_heading(title: str, number_path: Tuple[int, ...]) -> str:
+    plain_title = _strip_section_number_prefix(title)
+    if not number_path:
+        return plain_title
+    prefix = ".".join(str(part) for part in number_path)
+    return f"{prefix} {plain_title}" if plain_title else prefix
+
 
 def detect_section(line: str, has_section_number: bool = False, has_chinese_h2: bool = False) -> Tuple[int, str, bool, bool]:
     """
@@ -648,16 +755,15 @@ def detect_section(line: str, has_section_number: bool = False, has_chinese_h2: 
     match = re.match(pattern1, line)
     if match:
         section_num = match.group(1)
-        title = match.group(2).strip()
+        title = _strip_section_number_prefix(match.group(2).strip())
         cnt_dot = section_num.strip('.').count('.')
         level = 3 if cnt_dot == 0 and has_chinese_h2 else min(cnt_dot + 2, 6)
-        title = f"{section_num}{'.' if section_num.strip('、').count('.') == 0 else ''} {title}"
         return level, title, True, has_chinese_h2 or re.search(r'[一二三四五六七八九十]', section_num) is not None
 
     pattern2 = r'#+\s+<span id=.+></span>\s*(.+)$'
     match = re.match(pattern2, line)
     if match and re.search(r"[图表][\s*]?\d", line) is None:
-        title = match.group(1).strip()
+        title = _strip_section_number_prefix(match.group(1).strip())
         level = line.split(" ")[0].count("#")
         return level, title, True, has_chinese_h2
 
@@ -666,20 +772,18 @@ def detect_section(line: str, has_section_number: bool = False, has_chinese_h2: 
     match = re.match(pattern3, line)
     if match:
         section_num = match.group(1)
-        title = match.group(2).strip()
+        title = _strip_section_number_prefix(match.group(2).strip())
         cnt_dot = section_num.strip('.').count('.')
         level = 3 if cnt_dot == 0 and has_chinese_h2 else min(cnt_dot + 2, 6)
-        title = f"{section_num}{'.' if section_num.strip('、').count('.') == 0 else ''} {title}"
         return level, title, True, has_chinese_h2 or re.search(r'[一二三四五六七八九十]', section_num) is not None
 
     pattern3 = r'#+\s+([1-9一二三四五六七八九十IVX]+(?:\.\d+)*)、?(.+)'
     match = re.match(pattern3, line)
     if match:
         section_num = match.group(1)
-        title = match.group(2).strip()
+        title = _strip_section_number_prefix(match.group(2).strip())
         cnt_dot = section_num.strip('.').count('.')
         level = 3 if cnt_dot == 0 and has_chinese_h2 else min(cnt_dot + 2, 6)
-        title = f"{section_num}{'.' if section_num.strip('、').count('.') == 0 else ''} {title}"
         return level, title, True, has_chinese_h2 or re.search(r'[一二三四五六七八九十]', section_num) is not None
 
     return 0, "", has_section_number, has_chinese_h2
@@ -772,7 +876,7 @@ def markdown_to_sections(markdown: Union[str, Path, List[str]]) -> Section:
     title = None
     for i, line in enumerate(markdown):
         if line.startswith("# "):
-            title = line[2:]
+            title = _strip_section_number_prefix(line[2:])
             break
     if title is None: i = -1
     root = Section(section_id=0, title=title, segments=[],
@@ -826,7 +930,7 @@ def _parse_lines_as_section(lines: List[str], parent: Section) -> int:
                     parent.segments.append(elem)
                     current_content = []
 
-                title = stripped.lstrip('#').strip()
+                title = _strip_section_number_prefix(stripped.lstrip('#').strip())
                 new_section = Section(
                     section_id=section_count + 1,
                     level=level,
@@ -887,31 +991,108 @@ def _adjust_content_headers(content: str, min_level: int) -> str:
 
     return '\n'.join(adjusted_lines)
 
+def _normalize_title_for_compare(text: str) -> str:
+    if not text:
+        return ""
+    text = _strip_section_number_prefix(text)
+    text = html.unescape(text)
+    text = re.sub(r"\[\^cite_id[:=]\s*([^\]]+?)\s*\]", "", text)
+    text = re.sub(r'!\[(?P<alt>.*?)\]\(chart:(?P<chart_id>[a-zA-Z0-9_\-]+)\)', "", text)
+    text = re.sub(r"\s+", "", text)
+    text = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff]", "", text)
+    return text.lower()
 
-def section_to_markdown(section: Section, level: int = 1) -> str:
-    """
-    将 Section 树递归转换为 Markdown 文本
 
-    Args:
-        section: 要转换的 Section 对象
-        level: 当前标题级别（# 的数量）
+def _titles_are_similar(title_a: str, title_b: str) -> bool:
+    normalized_a = _normalize_title_for_compare(title_a)
+    normalized_b = _normalize_title_for_compare(title_b)
+    if not normalized_a or not normalized_b:
+        return False
+    if normalized_a == normalized_b:
+        return True
 
-    Returns:
-        生成的 Markdown 文本
-    """
-    lines = [f"{'#' * level} {section.title}\n"]
-    # 添加当前 Section 的所有 segments 内容
-    for seg in section.segments:
-        if seg.content:
-            content = seg.content
-            # 调整content中的标题级别，确保不与section结构冲突
-            adjusted_content = _adjust_content_headers(content, level)
+    shorter, longer = sorted((normalized_a, normalized_b), key=len)
+    if len(shorter) < 4:
+        return False
+    return shorter in longer and len(shorter) / max(len(longer), 1) >= 0.6
+
+
+def _strip_redundant_leading_heading(content: str, current_title: str) -> str:
+    lines = content.split('\n')
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        match = re.match(r'^(#{1,6})\s+(.+)', stripped)
+        if match and _titles_are_similar(match.group(2).strip(), current_title):
+            new_lines = lines[:idx] + lines[idx + 1:]
+            while new_lines and not new_lines[0].strip():
+                new_lines.pop(0)
+            return '\n'.join(new_lines).strip()
+        break
+    return content.strip()
+
+
+def _convert_headings_to_strong_paragraphs(content: str) -> str:
+    converted_lines = []
+    for line in content.split('\n'):
+        match = re.match(r'^(#{1,6})\s+(.+)', line.strip())
+        if match:
+            converted_lines.append(f"**{match.group(2).strip()}**")
+        else:
+            converted_lines.append(line)
+    return '\n'.join(converted_lines).strip()
+
+
+def _sanitize_section_content(content: str, current_title: str, min_level: int, allow_headings: bool) -> str:
+    content = _strip_redundant_leading_heading(content, current_title)
+    if not content:
+        return ""
+    if not allow_headings:
+        return _convert_headings_to_strong_paragraphs(content)
+    return _adjust_content_headers(content, min_level)
+
+
+def section_to_markdown(section: Section, level: int = 1, number_path: Tuple[int, ...] = ()) -> str:
+    if not _has_renderable_content(section):
+        return ""
+
+    display_title = _compose_section_heading(section.title, number_path if level > 1 else ())
+    lines = [f"{'#' * level} {display_title}\n"]
+    allow_headings = not bool(section.subsections)
+    # 优先使用章节级润色后的内容
+    if getattr(section, "content", None):
+        content = section.content.strip()
+        if content:
+            adjusted_content = _sanitize_section_content(
+                content=content,
+                current_title=section.title,
+                min_level=level,
+                allow_headings=allow_headings,
+            )
             lines.append(adjusted_content + '\n')
+    else:
+        for seg in section.segments:
+            if getattr(seg, "content", None):
+                content = seg.content.strip()
+                if content:
+                    adjusted_content = _sanitize_section_content(
+                        content=content,
+                        current_title=section.title,
+                        min_level=level,
+                        allow_headings=allow_headings,
+                    )
+                    lines.append(adjusted_content + '\n')
 
-    # 递归处理所有子 Section
+    rendered_child_index = 0
     for subsection in section.subsections:
-        sub_md = section_to_markdown(subsection, level + 1)
+        if not _has_renderable_content(subsection):
+            continue
+        rendered_child_index += 1
+        next_number_path = number_path + (rendered_child_index,) if number_path else (rendered_child_index,)
+        sub_md = section_to_markdown(subsection, level + 1, next_number_path)
         if sub_md:
             lines.append(sub_md + '\n')
 
     return "\n".join(lines).strip()
+

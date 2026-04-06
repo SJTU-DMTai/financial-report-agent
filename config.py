@@ -2,6 +2,7 @@
 
 import os
 import yaml
+from copy import deepcopy
 from pathlib import Path
 
 
@@ -42,18 +43,28 @@ class Config:
     def get_model_cfg(self):
         models = self.data["models"]
         model_id = self.llm_name
-        return models[model_id]
+        model_cfg = deepcopy(models[model_id])
+        model_cfg.setdefault("reasoning_only", False)
+        model_cfg.setdefault("non_reasoning_model_name", None)
+        return model_cfg
     
     def get_vlm_cfg(self):
         models = self.data["models"]
         model_id = self.vlm_name
         if model_id is None:
             raise KeyError("未配置 models.vlm_default/models.default，且未设置 VLM_NAME")
-        return models[model_id]
+        model_cfg = deepcopy(models[model_id])
+        model_cfg.setdefault("reasoning_only", False)
+        model_cfg.setdefault("non_reasoning_model_name", None)
+        return model_cfg
 
     def get_max_verify_rounds(self) -> int:
-        verify_config = self.data["verify_config"]
-        return verify_config["max_verify_rounds"]
+        verify_config = self.data.get("verify_config", {}) or {}
+        return int(verify_config.get("max_verify_rounds", 2))
+
+    def is_multi_source_verification_enabled(self) -> bool:
+        verify_config = self.data.get("verify_config", {}) or {}
+        return bool(verify_config.get("enable_multi_source_verification", False))
     
     def get_wkhtmltopdf_path(self) -> str | None:
         wkhtmltopdf_cfg = self.data.get("wkhtmltopdf_path", {})

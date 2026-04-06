@@ -23,13 +23,13 @@ async def process_pdf_to_outline(pdf_path: Path, save_dir: Path,
     处理单个PDF，生成完整的Section对象。
     会检查并使用_outline.json缓存，以避免重复处理。
     """
-    outline_json_path = save_dir / f'{pdf_path.name.split(".")[0]}_outline{"_onlyw_evidence" if only_evidence else ""}.json'
-    outline_json_path2 = save_dir.parent / f'{pdf_path.name.split(".")[0]}_outline{"_onlyw_evidence" if only_evidence else ""}.json'
+    outline_json_path = save_dir / cfg.llm_name / f'{pdf_path.name.split(".")[0]}_outline.json'
+    outline_json_path2 = save_dir / f'{pdf_path.name.split(".")[0]}_outline.json'
     if outline_json_path.exists() or outline_json_path2.exists():
         if outline_json_path.exists():
-            manuscript = Section.from_json(outline_json_path.read_text())
+            manuscript = Section.from_json(outline_json_path.read_text(encoding="utf-8"))
         else:
-            manuscript = Section.from_json(outline_json_path2.read_text())
+            manuscript = Section.from_json(outline_json_path2.read_text(encoding="utf-8"))
         outline = manuscript.read(read_subsections=True, with_reference=True, with_content=True, with_evidence=True,
                                   fold_other=False)
         print(outline)
@@ -76,18 +76,19 @@ async def process_pdf_to_outline(pdf_path: Path, save_dir: Path,
             processed_segments = []
             for i, segment_text in enumerate(decomposed_segments_text):
                 if not segment_text.strip(): continue
-                segment = await call_chatbot_with_retry(
+                segment_res = await call_chatbot_with_retry(
                     llm_instruct, formatter,
                     prompt_dict["extract_evidence" if only_evidence else "plan_outline"],
                     f"为了撰写一份新研报，我找到了某机构在过去{demo_date}撰写的一份研报"
                     f"（{'可能是不同公司' if another_stock else '同一公司'}），名为{demo_name}。"
-                    f"从中摘出的一段参考片段如下：\n<reference> {segment_text} </reference>\n\n"
+                    f"从中摘出的一段参考片段如下：\n<reference>{segment_text}</reference>\n\n"
                     f"请你考虑时间差和公司异同，抽取用于当前新任务的论据{'' if only_evidence else '、撰写模版、写作要求'}和主题。\n\n",
-                    section.parse_evidence if only_evidence else section.parse, handle_hook_exceptions=(AssertionError,)
+                    handle_hook_exceptions=(AssertionError,)
                 )
+                if isinstance(segment_res, str) and "<skip>true</skip>" in segment_res.lower():
+                    continue
+                segment = (section.parse_evidence if only_evidence else section.parse)(segment_res)
                 segment.reference = segment_text
-                if only_evidence:
-                    segment.content = segment_text
                 processed_segments.append(segment)
             section.segments = processed_segments
 
@@ -95,6 +96,6 @@ async def process_pdf_to_outline(pdf_path: Path, save_dir: Path,
     # outline = manuscript.read(read_subsections=True, with_reference=True, with_content=True, with_evidence=True,
     #                           fold_other=False)
     # print(outline)
-    # if not only_evidence:
-    outline_json_path.write_text(manuscript.to_json(ensure_ascii=False))
+    if not only_evidence:
+        outline_json_path.write_text(manuscript.to_json(ensure_ascii=False), encoding="utf-8")
     return manuscript
