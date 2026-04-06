@@ -1,18 +1,25 @@
 # -*- coding: utf-8 -*-
 import json
+import re
 import traceback
 import warnings
 
 import pandas as pd
 from agentscope.formatter import OpenAIChatFormatter
 from abc import abstractmethod
-from typing import Any, List
+from typing import Any, List, Type
 
 from agentscope.formatter import OpenAIChatFormatter
-from agentscope._utils._common import _save_base64_data
+from agentscope._utils._common import _save_base64_data, _json_loads_with_repair
 from agentscope.formatter._openai_formatter import _to_openai_image_url, _to_openai_audio_data, logger
-from agentscope.message import Msg, AudioBlock, ImageBlock, TextBlock
+from agentscope.message import Msg, AudioBlock, ImageBlock, TextBlock, ToolUseBlock, Base64Source, ThinkingBlock
 from datetime import datetime
+
+from agentscope.model import OpenAIChatModel, ChatResponse
+from agentscope.model._model_usage import ChatUsage
+from openai import BaseModel
+from openai.types.chat import ChatCompletion
+
 
 def fmt_yyyymmdd(s: str) -> str:
     """
@@ -26,6 +33,133 @@ def fmt_yyyymmdd(s: str) -> str:
     except Exception as e:
         warnings.warn(f"DATE_FORMAT_ERROR: {s}")
         return s
+
+
+class KaLMChatModel(OpenAIChatModel):
+
+    def _parse_openai_completion_response(
+        self,
+        start_datetime: datetime,
+        response: ChatCompletion,
+        structured_model: Type[BaseModel] | None = None,
+    ) -> ChatResponse:
+        """Given an OpenAI chat completion response object, extract the content
+            blocks and usages from it.
+
+        Args:
+            start_datetime (`datetime`):
+                The start datetime of the response generation.
+            response (`ChatCompletion`):
+                OpenAI ChatCompletion object to parse.
+            structured_model (`Type[BaseModel] | None`, default `None`):
+                A Pydantic BaseModel class that defines the expected structure
+                for the model's output.
+
+        Returns:
+            ChatResponse (`ChatResponse`):
+                A ChatResponse object containing the content blocks and usage.
+
+        .. note::
+            If `structured_model` is not `None`, the expected structured output
+            will be stored in the metadata of the `ChatResponse`.
+        """
+        content_blocks: List[
+            TextBlock | ToolUseBlock | ThinkingBlock | AudioBlock
+        ] = []
+        metadata: dict | None = None
+
+        if response.choices:
+            choice = response.choices[0]
+            if (
+                hasattr(choice.message, "reasoning_content")
+                and choice.message.reasoning_content is not None
+            ):
+                content_blocks.append(
+                    ThinkingBlock(
+                        type="thinking",
+                        thinking=response.choices[0].message.reasoning_content,
+                    ),
+                )
+
+            if choice.message.content:
+                if choice.message.content.startswith("<think>") and "</think>" in choice.message.content:
+                    s = re.search("<think>(.*)</think>(.*)", choice.message.content, re.DOTALL)
+                    content_blocks.append(
+                        ThinkingBlock(
+                            type="thinking",
+                            thinking=s.group(1).strip(),
+                        )
+                    )
+                    if s.group(2).strip():
+                        content_blocks.append(
+                            TextBlock(
+                                type="text",
+                                text=s.group(2).strip(),
+                            )
+                        )
+                else:
+                    content_blocks.append(
+                        TextBlock(
+                            type="text",
+                            text=response.choices[0].message.content,
+                        ),
+                    )
+            if choice.message.audio:
+                media_type = self.generate_kwargs.get("audio", {}).get(
+                    "format",
+                    "mp3",
+                )
+                content_blocks.append(
+                    AudioBlock(
+                        type="audio",
+                        source=Base64Source(
+                            data=choice.message.audio.data,
+                            media_type=f"audio/{media_type}",
+                            type="base64",
+                        ),
+                    ),
+                )
+
+                if choice.message.audio.transcript:
+                    content_blocks.append(
+                        TextBlock(
+                            type="text",
+                            text=choice.message.audio.transcript,
+                        ),
+                    )
+
+            for tool_call in choice.message.tool_calls or []:
+                content_blocks.append(
+                    ToolUseBlock(
+                        type="tool_use",
+                        id=tool_call.id,
+                        name=tool_call.function.name,
+                        input=_json_loads_with_repair(
+                            tool_call.function.arguments,
+                        ),
+                    ),
+                )
+
+            if structured_model:
+                metadata = choice.message.parsed.model_dump()
+
+        usage = None
+        if response.usage:
+            usage = ChatUsage(
+                input_tokens=response.usage.prompt_tokens,
+                output_tokens=response.usage.completion_tokens,
+                time=(datetime.now() - start_datetime).total_seconds(),
+                metadata=response.usage,
+            )
+
+        parsed_response = ChatResponse(
+            content=content_blocks,
+            usage=usage,
+            metadata=metadata,
+        )
+
+        return parsed_response
+
 
 
 class PatchedOpenAIChatFormatter(OpenAIChatFormatter):
