@@ -368,26 +368,6 @@ class SearchTools:
                 # 2) 抓取网页 HTML 并抽取文本 + 图片
                 page_text = ""
                 published_date = None
-                
-                try:
-                    html_bytes = fetch_page_html(link)
-                    if html_bytes:
-                        page_text, img_urls = extract_text_and_images(html_bytes, link)
-                        
-                        try:
-                            published_date = find_date(
-                                html_bytes,
-                                url=link,
-                                original_date=True,
-                                extensive_search=True,
-                                deferred_url_extractor=True,   # 降低从 URL 猜日期的优先级，减少误判
-                            )
-                            if published_date:
-                                published_date = fmt_yyyymmdd(published_date)
-                        except Exception:
-                            published_date = None
-                except Exception:
-                    pass # 原网页抓取失败不中断，沿用下方的兜底逻辑
 
                 # 【兜底优化】如果 fetch_page_html 失败或未提取到有效文本，直接使用博查的高质量摘要作为正文
                 if not page_text.strip():
