@@ -10,7 +10,7 @@ import io
 
 
 async def main() -> None:
-    task_desc = "当前日期是2026-03-22，请帮我调研海兴电力（股票代码为603556）的深度研究报告。"
+    task_desc = "当前日期是2026-04-03，请帮我调研同花顺（股票代码为300033）的深度研究报告。"
     await run_workflow(task_desc=task_desc)
 
 if __name__ == "__main__":

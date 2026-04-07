@@ -50,7 +50,7 @@ def create_verifier_agent(
         formatter=formatter,
         toolkit=toolkit,
         parallel_tool_calls=False,
-        max_iters=15,
+        max_iters=10,
     )
 
 

@@ -3,6 +3,7 @@
 
 log*.txt
 *.out
+*.png
 data/memory/long_term/demonstration/*
 data/memory/short_term/*
 data/output/reports/*
@@ -11,7 +12,7 @@ data/reports/*
 cache.db
 .vscode/ 
 config.local.yaml
-
+verifier_trace_*
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
