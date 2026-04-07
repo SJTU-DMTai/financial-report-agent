@@ -6,7 +6,6 @@ import os
 import time
 import json
 import pickle
-import re
 import sys
 import traceback
 import warnings
@@ -27,15 +26,25 @@ from src.memory.short_term import ShortTermMemoryStore
 from src.memory.long_term import LongTermMemoryStore
 from src.agents.searcher import create_searcher_agent, build_searcher_toolkit
 from src.agents.writer import create_writer_agent, build_writer_toolkit
-from src.agents.planner import create_planner_agent, build_planner_toolkit
-from src.agents.verifier import create_verifier_agent, build_verifier_toolkit
-
 from src.utils.file_converter import md_to_pdf, pdf_to_markdown, section_to_markdown
 from src.utils.parse_verdict import parse_verifier_verdict
 from src.utils.call_with_retry import call_agent_with_retry
 from src.utils.get_entity_info import get_entity_info
 from src.utils.file_converter import markdown_to_sections
-from src.utils.multi_types_verification import SegmentVerifier
+from src.utils.format import (
+    _infer_report_title,
+    _normalize_report_title,
+    _normalize_section_titles,
+    _strip_section_number_prefix,
+    extract_tagged_text,
+    extract_writer_content,
+    print_section_reference_warning,
+)
+from src.utils.multi_types_verification import (
+    SegmentVerifier,
+    append_verifier_trace,
+    set_verifier_trace_path,
+)
 from src.utils.local_file import STOCK_REPORT_PATHS
 import config
 from src.utils.call_with_retry import call_chatbot_with_retry
@@ -187,7 +196,7 @@ async def process_single_segment(segment: Segment,
         )
 
         draft_msg = await call_agent_with_retry(writer, writer_input)
-        segment.content = draft_msg.get_text_content()
+        segment.content = extract_writer_content(draft_msg.get_text_content())
         assert segment.content is not None, str(segment)
         print(f"[Writer] Segment finished: {segment.topic}")
         print("[Writer 初稿输出]")
@@ -202,10 +211,15 @@ async def process_single_segment(segment: Segment,
             else:
                 print("修改建议:", suggestions, flush=True)
                 writer_input = Msg(
-                    name="user", content=f"经评估：\n{suggestions}\n请你继续修改。不要把修改说明放到最终回答中。", role="user",
+                    name="user",
+                    content=(
+                        f"经评估：\n{suggestions}\n"
+                        "请你继续修改。修改后的正文请使用<content>和</content>包裹。"
+                    ),
+                    role="user",
                 )
                 draft_msg = await call_agent_with_retry(writer, writer_input)
-                segment.content = draft_msg.get_text_content()
+                segment.content = extract_writer_content(draft_msg.get_text_content())
                 print(f"[Writer] Segment finished: {segment.topic}")
                 print(segment.content, flush=True)
 
@@ -213,27 +227,44 @@ async def process_single_segment(segment: Segment,
         if multi_source_verification_enabled:
 
             prev_issue_set = set()
-            for _ in range(max_verify_rounds):
+            for round_idx in range(max_verify_rounds):
+                current_text = segment.content
 
+                print(
+                    f"[Verifier Loop] round={round_idx + 1}/{max_verify_rounds} "
+                    f"topic={segment.topic}",
+                    flush=True,
+                )
+                print("[Verifier Checked Text]", flush=True)
+                print(current_text, flush=True)
                 verify_issues = await verifier.verify(segment.content)
-
                 # 过滤严重问题
                 verify_issues = [
                     iss for iss in verify_issues
                     if iss.severity in ("critical", "major")
                 ]
+                print(
+                    f"[Verifier Loop] major_or_critical_issues={len(verify_issues)}",
+                    flush=True,
+                )
                 if not verify_issues:
+                    await append_verifier_trace(
+                        topic=segment.topic,
+                        round_idx=round_idx + 1,
+                        checked_text=current_text,
+                        issue_count=0,
+                        status="passed",
+                    )
                     break
+                # # 收敛检测
+                # current_set = {
+                #     (iss.type, iss.description)
+                #     for iss in verify_issues
+                # }
 
-                # 收敛检测
-                current_set = {
-                    (iss.type, iss.description)
-                    for iss in verify_issues
-                }
-
-                if current_set == prev_issue_set:
-                    break
-                prev_issue_set = current_set
+                # if current_set == prev_issue_set:
+                #     break
+                # prev_issue_set = current_set
 
                 # 格式化
                 def format_issues(issues):
@@ -242,10 +273,17 @@ async def process_single_segment(segment: Segment,
                         lines.append(
                             f"{i}. [{iss.severity.upper()}] {iss.description}\n"
                             f"   建议: {iss.suggestion}"
+                            f"   证据: {iss.evidence}"
                         )
                     return "\n\n".join(lines)
 
                 verify_feedback = format_issues(verify_issues)
+                print(
+                    f"[Verifier Loop] feedback_chars={len(verify_feedback)}",
+                    flush=True,
+                )
+                print("[Verifier Feedback To Writer]", flush=True)
+                print(verify_feedback, flush=True)
 
                 # token 控制
                 verify_feedback = verify_feedback[:1500]
@@ -254,20 +292,31 @@ async def process_single_segment(segment: Segment,
                 writer_input = Msg(
                     name="user",
                     content=(
-                        "以下是对你当前段落的事实核验问题，请你直接修正文：\n\n"
+                        "以下是对你当前段落的事实核验问题，请你直接修改正文：\n\n"
                         f"{verify_feedback}\n\n"
                         "要求：\n"
                         "1. 保留可被 cite_id 支持的内容\n"
                         "2. 删除或降级无法验证的断言\n"
                         "3. 必须使用已有 cite_id\n"
-                        "4. 禁止新增未验证数字"
+                        "4. 禁止新增未验证数字\n"
+                        "5. 输出的段落正文使用<content>和</content>包裹，其中不要包含额外说明"
                     ),
                     role="user",
                 )
 
                 draft_msg = await call_agent_with_retry(writer, writer_input)
 
-                segment.content = draft_msg.get_text_content()
+                segment.content = extract_writer_content(draft_msg.get_text_content())
+                print("[Writer Rewritten After Verifier]", flush=True)
+                print(segment.content, flush=True)
+                await append_verifier_trace(
+                    topic=segment.topic,
+                    round_idx=round_idx + 1,
+                    checked_text=current_text,
+                    verify_feedback=verify_feedback,
+                    rewritten_text=segment.content,
+                    issue_count=len(verify_issues),
+                )
 
         await writer.memory.clear()
         segment.finished = True
@@ -338,20 +387,23 @@ async def process_section_concurrently(section: Section, parent_id, task_desc, d
             llm_instruct = create_chat_model(reasoning=False)
             formatter = create_agent_formatter()
             def _parse_res(text):
-                title = re.search("<title>(.+)</title>", text, re.DOTALL)
-                content = re.search("<content>(.+)</content>", text, re.DOTALL)
+                title = extract_tagged_text(text, "title")
+                content = extract_tagged_text(text, "content")
                 assert title is not None and content is not None, "输出格式不对，答案没有被合适的标签包裹住。"
-                title = title.group(1).strip().strip("#").strip()
-                content = content.group(1).strip()
+                title = _strip_section_number_prefix(title.strip().strip("#").strip())
                 return title, content
             title, content = await call_chatbot_with_retry(
                 llm_instruct, formatter,
-                "你是撰写金融研报的专家。我将提供某一章节初稿，请你删去无意义的部分，输出润色后的内容，不要篡改关键信息。",
+                "你是撰写金融研报的专家。我将提供某一章节初稿，请你删去无意义的部分，修改不连贯、不流畅的内容，输出润色后的内容，不要篡改关键信息。",
                 f"金融研报某一章节初稿如下：\n\n{section_text}\n\n"
                 f"该章节是参考了小标题为{section.title}的某个范例撰写的，请你根据初稿重新起一个标题，用<title>和</title>包裹住，限十字以内。"
-                f"并在初稿基础上稍作润色，更新后的内容用<content>和</content>包裹住。",
+                "并在初稿基础上稍作润色，更新后的内容用<content>和</content>包裹住。\n\n"
+                "额外要求：\n"
+                "1. 所有 [^cite_id:xxx] 引用标记都必须原样保留，不允许删除、改写、合并或新增。\n"
+                "2. 所有 ![...](chart:chart_xxx) 图表标记都必须原样保留，不允许删除、改写或新增。\n",
                 _parse_res, handle_hook_exceptions=(AssertionError, )
             )
+            print_section_reference_warning(section.title, section_text, content)
             section.title = title
             section.content = content
             print(f"[Final section] {section.title}")
@@ -390,11 +442,6 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
     long_term = LongTermMemoryStore(
         base_dir=long_term_dir,
     )
-
-    cfg = config.Config()
-    multi_source_verification_enabled = cfg.is_multi_source_verification_enabled()
-    max_verify_rounds = cfg.get_max_verify_rounds()
-
     entity = get_entity_info(long_term, task_desc)
     if not entity or not entity.get("code"):
         raise ValueError(f"无法从 task_desc 解析股票实体/代码：{task_desc}")
@@ -402,19 +449,22 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
     print("股票代码：", stock_symbol)
     now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_filename = f"log_{stock_symbol}_{now_str}.txt"
+    verifier_trace_filename = f"verifier_trace_{stock_symbol}_{now_str}.txt"
+    set_verifier_trace_path(PROJECT_ROOT / verifier_trace_filename)
     log_file = open(log_filename, "w", encoding="utf-8")
     sys.stdout = log_file
     sys.stderr = log_file
 
     cfg = config.Config()
+    multi_source_verification_enabled = cfg.is_multi_source_verification_enabled()
+    max_verify_rounds = cfg.get_max_verify_rounds()
+    
     filename = f"{stock_symbol}_{cur_date}"
     short_term_dir = PROJECT_ROOT / "data" / "memory" / "short_term" / filename
 
     short_term = ShortTermMemoryStore(
         base_dir=short_term_dir,
     )
-
-    # 解析demonstration report，第二遍解析同一个report可以注释掉
     if demo_pdf_path is None:
         demo_pdf_path = STOCK_REPORT_PATHS[stock_symbol][-1]
     demo_date = demo_pdf_path.name.split("_")[1]
@@ -424,6 +474,7 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
 
     outline = await process_pdf_to_outline(demo_pdf_path, long_term_dir / "demonstration",
                                               llm_reasoning, llm_instruct, formatter,)
+    _normalize_section_titles(outline)
     manuscript_path = output_pth / f"{stock_symbol}_{cur_date}.json"
     if manuscript_path.exists():
         manuscript = Section.from_json(manuscript_path.read_text(encoding='utf-8'))
@@ -438,6 +489,7 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
             entity=entity,
             time={"point": str(demo_date)},
         )
+    _normalize_section_titles(manuscript)
 
     def unfinished(section: Section) -> bool:
         if section.segments:
@@ -509,6 +561,14 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
             max_verify_rounds=max_verify_rounds,
         )
 
+    _normalize_section_titles(manuscript)
+    _normalize_report_title(manuscript, entity, task_desc)
+    (output_pth / f"{filename}.json").write_text(manuscript.to_json(ensure_ascii=False), encoding="utf-8")
     markdown_text = section_to_markdown(manuscript)
     (output_pth / f"{filename}.md").write_text(markdown_text, encoding="utf-8")
-    md_to_pdf(markdown_text, short_term=short_term, pdf_path=output_pth / f"{filename}.pdf")
+    md_to_pdf(
+        markdown_text,
+        short_term=short_term,
+        pdf_path=output_pth / f"{filename}.pdf",
+        header_title=_infer_report_title(task_desc, entity),
+    )

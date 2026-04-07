@@ -35,15 +35,23 @@ def create_chat_model(reasoning=True, model_cfg=None):
 
     temperature = m.get("temperature", 0)
     top_k = m.get("top_k", 20)
+    reasoning_only = m.get("reasoning_only", False)
+    non_reasoning_model_name = m.get("non_reasoning_model_name")
 
     if provider == "openrouter":
+        extra_body = {"top_k": top_k}
+        if reasoning or reasoning_only:
+            extra_body["reasoning"] = {"enabled": True}
+        resolved_model_name = model_name
+        if not reasoning and not reasoning_only:
+            resolved_model_name = non_reasoning_model_name or model_name.replace("-thinking", "")
+            extra_body["reasoning"] = {"enabled": False}
         return OpenAIChatModel(
-            model_name=model_name if reasoning else model_name.replace("-thinking", ""),
+            model_name=resolved_model_name,
             api_key=os.environ.get("API_KEY"),
             stream=stream,
             client_kwargs={"base_url": base_url},
-            generate_kwargs={"extra_body": {"reasoning": {"enabled": reasoning},
-                                            "top_k": top_k },
+            generate_kwargs={"extra_body": extra_body,
                              "temperature": temperature},
         )
 
