@@ -17,6 +17,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import jieba
 import time as time_module
+from htmldate import find_date
 from urllib.parse import urlparse
 from ..utils.call_with_retry import call_agent_with_retry
 from ..utils.get_entity_info import get_entity_info
@@ -310,9 +311,8 @@ class SearchTools:
             max_results (int):
                 返回的最大结果数量。
         """
-
         try:
-            max_results = int(max_results)
+            max_results = int(max_results) # 防止传入字符串如"10"导致搜索失败
         except (TypeError, ValueError):
             max_results = 3
 
@@ -321,7 +321,7 @@ class SearchTools:
         query = " ".join([p.strip() for p in query_parts if p.strip()])
 
         candidates: List[Dict[str, Any]] = []
-        # item_cite_ids: List[str] = []
+        item_cite_ids: List[str] = []
         try:
             # 1) 调用 Bocha (博查) Web Search API
             # 注意：请确保环境中已设置 BOCHA_API_KEY，或在此处硬编码您的 Key
@@ -368,26 +368,6 @@ class SearchTools:
                 # 2) 抓取网页 HTML 并抽取文本 + 图片
                 page_text = ""
                 published_date = None
-                
-                try:
-                    html_bytes = fetch_page_html(link)
-                    if html_bytes:
-                        page_text, img_urls = extract_text_and_images(html_bytes, link)
-                        
-                        try:
-                            published_date = find_date(
-                                html_bytes,
-                                url=link,
-                                original_date=True,
-                                extensive_search=True,
-                                deferred_url_extractor=True,   # 降低从 URL 猜日期的优先级，减少误判
-                            )
-                            if published_date:
-                                published_date = fmt_yyyymmdd(published_date)
-                        except Exception:
-                            published_date = None
-                except Exception:
-                    pass # 原网页抓取失败不中断，沿用下方的兜底逻辑
 
                 # 【兜底优化】如果 fetch_page_html 失败或未提取到有效文本，直接使用博查的高质量摘要作为正文
                 if not page_text.strip():
@@ -397,12 +377,11 @@ class SearchTools:
                         continue # 如果连摘要都没有，跳过
 
                 # 取前 300 字作为备用摘要
-                # snippet = page_text.replace("\n", " ")
-                # snippet = re.sub(r"\s{2,}", " ", snippet)
-                # snippet = snippet[:300] + ("..." if len(snippet) > 300 else "")
-                # page_text = ""
-                snippet = desc
+                snippet = page_text.replace("\n", " ")
+                snippet = re.sub(r"\s{2,}", " ", snippet)
+                snippet = snippet[:300] + ("..." if len(snippet) > 300 else "")
 
+                # 暂存候选项，暂不计算分数
                 candidates.append({
                     "title": title,
                     "link": link,
@@ -415,13 +394,13 @@ class SearchTools:
             if not candidates:
                 text = f"[search_engine] 对查询「{query}」未找到足够相关的结果。"
             else:
-                # scores = self._calculate_batch_relevance(query, candidates)
+                scores = self._calculate_batch_relevance(query, candidates)
                 # 将分数回填给 candidates
-                # for i, score in enumerate(scores):
-                #     candidates[i]['relevance'] = score
+                for i, score in enumerate(scores):
+                    candidates[i]['relevance'] = score
 
                 # 按相关性排序（高到低）
-                # candidates.sort(key=lambda x: x.get("relevance", 0), reverse=True)
+                candidates.sort(key=lambda x: x.get("relevance", 0), reverse=True)
 
                 if len(candidates) > max_results:
                     candidates = candidates[:max_results]
@@ -607,10 +586,16 @@ def get_retrieve_fn(short_term:ShortTermMemoryStore, long_term:LongTermMemorySto
 
                 # (A) 搜索引擎：search_engine_*
                 if isinstance(cite_id, str) and cite_id.startswith("search_engine_"):
+                    page_text_preview = ""
+                    if isinstance(content, list) and content:
+                        first = content[0] if isinstance(content[0], dict) else None
+                        if isinstance(first, dict):
+                            page_text = first.get("page_text") or ""
+                            page_text_preview = page_text[:100]
                     preview = short_term.load_material_preview(cite_id=cite_id)
                     if preview:
                         lines.append("    部分内容预览：")
-                        lines.append(f"   {preview}")
+                        lines.append(f"   {page_text_preview}")
 
 
                 # (B) 计算结果：calculate_*
