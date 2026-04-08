@@ -91,7 +91,7 @@ async def extract_unique_evidences_from_pdf(pdf_path: Path, save_dir: Path, only
         return evidences
 
     print(f"\n-> 开始提取并清洗文件: {pdf_path.name}", flush=True)
-    manuscript = await process_pdf_to_outline(pdf_path, save_dir / cfg.llm_name, llm_reasoning, llm_instruct, formatter, only_evidence)
+    manuscript = await process_pdf_to_outline(pdf_path, save_dir, llm_reasoning, llm_instruct, formatter, only_evidence)
     print(f"  - 从 {pdf_path.name} 的结构中提取论据...")
     return await extract_unique_evidences(manuscript, evidence_path)
 

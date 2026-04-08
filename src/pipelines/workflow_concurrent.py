@@ -432,7 +432,7 @@ async def process_section_concurrently(section: Section, parent_id, task_desc, d
         (output_pth / f"{stock_symbol}_{cur_date}.json").write_text(manuscript_root.to_json(ensure_ascii=False) ,encoding="utf-8")
 
 
-async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
+async def   run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
     """围绕一个 task description 执行完整的研报生成流程。
     """
     cur_date = cur_date or os.getenv('CUR_DATE', datetime.now().strftime("%Y%m%d"))
@@ -454,9 +454,9 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
     log_filename = f"log_{stock_symbol}_{now_str}.txt"
     verifier_trace_filename = f"verifier_trace_{stock_symbol}_{now_str}.txt"
     set_verifier_trace_path(PROJECT_ROOT / verifier_trace_filename)
-    log_file = open(log_filename, "w", encoding="utf-8")
-    sys.stdout = log_file
-    sys.stderr = log_file
+    # log_file = open(log_filename, "w", encoding="utf-8")
+    # sys.stdout = log_file
+    # sys.stderr = log_file
 
     cfg = config.Config()
     multi_source_verification_enabled = cfg.is_multi_source_verification_enabled()
@@ -475,103 +475,103 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
     output_pth = PROJECT_ROOT / "data" / "output" / "reports" / cfg.llm_name
     output_pth.mkdir(parents=True, exist_ok=True)
 
-    outline = await process_pdf_to_outline(demo_pdf_path, long_term_dir / "demonstration" / cfg.llm_name,
+    outline = await process_pdf_to_outline(demo_pdf_path, long_term_dir / "demonstration",
                                               llm_reasoning, llm_instruct, formatter,)
-    _normalize_section_titles(outline)
-    manuscript_path = output_pth / f"{stock_symbol}_{cur_date}.json"
-    if manuscript_path.exists():
-        manuscript = Section.from_json(manuscript_path.read_text(encoding='utf-8'))
-        print("加载已有的 manuscript:", manuscript_path)
-    else:
-        manuscript = outline
-        short_term.save_material(
-            cite_id=f"{demo_date}_reference_report",
-            content=(long_term_dir / "demonstration" / f"{demo_pdf_path.stem}.md").read_text(encoding='utf-8'),
-            description=demo_pdf_path.name,
-            source="",
-            entity=entity,
-            time={"point": str(demo_date)},
-        )
-    _normalize_section_titles(manuscript)
-
-    def unfinished(section: Section) -> bool:
-        if section.segments:
-            for segment in section.segments:
-                if not segment.finished:
-                    return True
-        if section.subsections:
-            for subsection in section.subsections:
-                if unfinished(subsection):
-                    return True
-        return False
-
-    if unfinished(manuscript):
-        def replace_unfinished_sections(manuscript: Section, outline: Section) -> None:
-            """递归替换包含未完成 segment 的 section"""
-            # 检查当前 section 是否有未完成的 segment
-            has_unfinished = False
-            if manuscript.segments:
-                for segment in manuscript.segments:
-                    if not segment.finished:
-                        has_unfinished = True
-                        break
-
-            # 如果当前 section 有未完成的 segment，整体替换
-            if has_unfinished:
-                # 复制 outline 对应 section 的所有属性
-                manuscript.title = outline.title
-                manuscript.content = outline.content
-                manuscript.segments = outline.segments
-                manuscript.subsections = outline.subsections
-                return
-
-            # 递归处理子 section
-            if manuscript.subsections and outline.subsections:
-                for i, subsection in enumerate(manuscript.subsections):
-                    if i < len(outline.subsections):
-                        replace_unfinished_sections(subsection, outline.subsections[i])
-
-        replace_unfinished_sections(manuscript, outline)
-        def create_searcher_writer_verifier():
-            searcher_toolkit = build_searcher_toolkit(
-                short_term=short_term,
-                long_term=long_term,
-            )
-            searcher = create_searcher_agent(model=llm_reasoning, formatter=formatter, toolkit=searcher_toolkit)
-            writer_toolkit = build_writer_toolkit(
-                short_term=short_term,
-                long_term=long_term,
-                searcher=searcher,
-            )
-            writer = create_writer_agent(model=llm_reasoning, formatter=formatter, toolkit=writer_toolkit)
-            verifier = SegmentVerifier(short_term, long_term)
-            return searcher, writer,verifier
-
-        # 启动递归并发处理
-        await process_section_concurrently(
-            section=manuscript,
-            parent_id=None,
-            task_desc=task_desc,
-            demo_date=demo_date,
-            cur_date=cur_date,
-            agent_factory=create_searcher_writer_verifier,
-            stock_symbol=stock_symbol,
-            output_pth=output_pth,
-            manuscript_root=manuscript,  # 用于在深层递归中保存完整的 json
-            short_term=short_term,
-            long_term=long_term,
-            multi_source_verification_enabled=multi_source_verification_enabled,
-            max_verify_rounds=max_verify_rounds,
-        )
-
-    _normalize_section_titles(manuscript)
-    _normalize_report_title(manuscript, entity, task_desc)
-    (output_pth / f"{filename}.json").write_text(manuscript.to_json(ensure_ascii=False), encoding="utf-8")
-    markdown_text = section_to_markdown(manuscript)
-    (output_pth / f"{filename}.md").write_text(markdown_text, encoding="utf-8")
-    md_to_pdf(
-        markdown_text,
-        short_term=short_term,
-        pdf_path=output_pth / f"{filename}.pdf",
-        header_title=_infer_report_title(task_desc, entity),
-    )
+    # _normalize_section_titles(outline)
+    # manuscript_path = output_pth / f"{stock_symbol}_{cur_date}.json"
+    # if manuscript_path.exists():
+    #     manuscript = Section.from_json(manuscript_path.read_text(encoding='utf-8'))
+    #     print("加载已有的 manuscript:", manuscript_path)
+    # else:
+    #     manuscript = outline
+    #     short_term.save_material(
+    #         cite_id=f"{demo_date}_reference_report",
+    #         content=(long_term_dir / "demonstration" / f"{demo_pdf_path.stem}.md").read_text(encoding='utf-8'),
+    #         description=demo_pdf_path.name,
+    #         source="",
+    #         entity=entity,
+    #         time={"point": str(demo_date)},
+    #     )
+    # _normalize_section_titles(manuscript)
+    #
+    # def unfinished(section: Section) -> bool:
+    #     if section.segments:
+    #         for segment in section.segments:
+    #             if not segment.finished:
+    #                 return True
+    #     if section.subsections:
+    #         for subsection in section.subsections:
+    #             if unfinished(subsection):
+    #                 return True
+    #     return False
+    #
+    # if unfinished(manuscript):
+    #     def replace_unfinished_sections(manuscript: Section, outline: Section) -> None:
+    #         """递归替换包含未完成 segment 的 section"""
+    #         # 检查当前 section 是否有未完成的 segment
+    #         has_unfinished = False
+    #         if manuscript.segments:
+    #             for segment in manuscript.segments:
+    #                 if not segment.finished:
+    #                     has_unfinished = True
+    #                     break
+    #
+    #         # 如果当前 section 有未完成的 segment，整体替换
+    #         if has_unfinished:
+    #             # 复制 outline 对应 section 的所有属性
+    #             manuscript.title = outline.title
+    #             manuscript.content = outline.content
+    #             manuscript.segments = outline.segments
+    #             manuscript.subsections = outline.subsections
+    #             return
+    #
+    #         # 递归处理子 section
+    #         if manuscript.subsections and outline.subsections:
+    #             for i, subsection in enumerate(manuscript.subsections):
+    #                 if i < len(outline.subsections):
+    #                     replace_unfinished_sections(subsection, outline.subsections[i])
+    #
+    #     replace_unfinished_sections(manuscript, outline)
+    #     def create_searcher_writer_verifier():
+    #         searcher_toolkit = build_searcher_toolkit(
+    #             short_term=short_term,
+    #             long_term=long_term,
+    #         )
+    #         searcher = create_searcher_agent(model=llm_reasoning, formatter=formatter, toolkit=searcher_toolkit)
+    #         writer_toolkit = build_writer_toolkit(
+    #             short_term=short_term,
+    #             long_term=long_term,
+    #             searcher=searcher,
+    #         )
+    #         writer = create_writer_agent(model=llm_reasoning, formatter=formatter, toolkit=writer_toolkit)
+    #         verifier = SegmentVerifier(short_term, long_term)
+    #         return searcher, writer,verifier
+    #
+    #     # 启动递归并发处理
+    #     await process_section_concurrently(
+    #         section=manuscript,
+    #         parent_id=None,
+    #         task_desc=task_desc,
+    #         demo_date=demo_date,
+    #         cur_date=cur_date,
+    #         agent_factory=create_searcher_writer_verifier,
+    #         stock_symbol=stock_symbol,
+    #         output_pth=output_pth,
+    #         manuscript_root=manuscript,  # 用于在深层递归中保存完整的 json
+    #         short_term=short_term,
+    #         long_term=long_term,
+    #         multi_source_verification_enabled=multi_source_verification_enabled,
+    #         max_verify_rounds=max_verify_rounds,
+    #     )
+    #
+    # _normalize_section_titles(manuscript)
+    # _normalize_report_title(manuscript, entity, task_desc)
+    # (output_pth / f"{filename}.json").write_text(manuscript.to_json(ensure_ascii=False), encoding="utf-8")
+    # markdown_text = section_to_markdown(manuscript)
+    # (output_pth / f"{filename}.md").write_text(markdown_text, encoding="utf-8")
+    # md_to_pdf(
+    #     markdown_text,
+    #     short_term=short_term,
+    #     pdf_path=output_pth / f"{filename}.pdf",
+    #     header_title=_infer_report_title(task_desc, entity),
+    # )

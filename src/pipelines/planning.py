@@ -23,8 +23,8 @@ async def process_pdf_to_outline(pdf_path: Path, save_dir: Path,
     处理单个PDF，生成完整的Section对象。
     会检查并使用_outline.json缓存，以避免重复处理。
     """
-    outline_json_path = save_dir / cfg.llm_name / f'{pdf_path.name.split(".")[0]}_outline.json'
-    outline_json_path2 = save_dir / f'{pdf_path.name.split(".")[0]}_outline.json'
+    outline_json_path = save_dir / cfg.llm_name / f'{pdf_path.name.split(".")[0]}_outline{"_onlyw_evidence" if only_evidence else ""}.json'
+    outline_json_path2 = save_dir / cfg.llm_name / f'{pdf_path.name.split(".")[0]}_outline{"_onlyw_evidence" if only_evidence else ""}.json'
     if outline_json_path.exists() or outline_json_path2.exists():
         if outline_json_path.exists():
             manuscript = Section.from_json(outline_json_path.read_text(encoding="utf-8"))

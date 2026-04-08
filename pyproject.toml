@@ -42,5 +42,4 @@ dependencies = [
     "beautifulsoup4",
     "requests",
     "Markdown",
-    "marker-pdf"
 ]

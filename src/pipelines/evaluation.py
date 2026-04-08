@@ -187,9 +187,9 @@ async def benchmark_single_pair(
     print(f"{'='*60}")
 
     print(f"[1/4] 处理报告...")
-    new_section = await process_pdf_to_outline(new_report_path, new_report_path.parent, llm_reasoning,
+    new_section = await process_pdf_to_outline(new_report_path, new_report_path, llm_reasoning,
                                                llm_instruct, formatter, only_evidence=True)
-    human_section = await process_pdf_to_outline(human_report_path, long_term_dir / cfg.llm, llm_reasoning,
+    human_section = await process_pdf_to_outline(human_report_path, long_term_dir, llm_reasoning,
                                                  llm_instruct, formatter, only_evidence=True)
 
     print(f"[2/4] 抽取论据...")
