@@ -999,138 +999,7 @@ class MaterialTools:
     #
     # ===================== 财务报表 =====================
     
-    # 获取指定股票的资产负债表数据，并保存表格结果到Material当中，返回Material标识cite_id。
-    #     抓取企业历年或各报告期的资产负债表数据，并将结果保存。
-    #     适用场景：研报中的“资产结构分析”“杠杆水平”“偿债能力”相关章节；对比不同报告期的资产、负债、所有者权益变化情况。
 
-    # async def fetch_balance_sheet_material(
-    #         self,
-    #         symbol: str,
-    #         indicator: str = "按报告期",
-    #         date: str | None = None,
-    # ) -> ToolResponse:
-    #     """获取指定股票的资产负债表数据，并保存表格结果到Material当中，返回Material标识cite_id。
-    #     抓取企业历年或各报告期的资产负债表数据，并将结果保存。
-    #     适用场景：
-    #     1. 研报中的“资产结构分析”“杠杆水平”“偿债能力”相关章节；
-    #     2. 提取公司的“总股本”、“实收资本(或股本)”、“所有者权益”等股本结构数据；
-    #     3. 对比不同报告期的资产、负债、所有者权益变化情况。
-
-    #     Args:
-    #         symbol (str):
-    #             股票代码，例如 "000063"。
-    #         indicator (str):
-    #             数据展示方式，持的取值：
-    #             - "按报告期"（默认）：按季度 / 半年 / 年度等报告期展示；
-    #             - "按年度"：按年度汇总展示；
-    #             - "按单季度"：按单个季度拆分展示。
-    #         date (str | None):
-    #             报告撰写日期，格式为 "YYYYMMDD"。
-    #     """
-
-    #     df = ak.stock_financial_debt_ths(symbol=symbol, indicator=indicator)
-
-    #     safe_indicator = indicator.replace(" ", "")
-    #     cite_id = f"{symbol}_balance_{safe_indicator}_{int(time_module.time())}"
-    #     entity = get_entity_info(long_term=self.long_term, text=symbol)
-    #     description = f"{entity['name']}（{entity['code']}）{indicator}资产负债表"
-    #     self._save_df_to_material(
-    #         df=df, cite_id=cite_id,
-    #         description=description,
-    #         entity=entity,
-    #         source="AKshare API:Hithink",
-    #     )
-    #     header = f"[fetch_balance_sheet_material] 资产负债表（symbol={symbol}, indicator={indicator}）"
-
-    #     return _build_tool_response_from_df(
-    #         df,
-    #         cite_id=cite_id,
-    #         header=header,
-    #         extra_meta={"symbol": symbol, "indicator": indicator},
-    #     )
-
-    # async def fetch_profit_table_material(
-    #         self,
-    #         symbol: str,
-    #         indicator: str = "按报告期",
-    #         date: str | None = None,
-    # ) -> ToolResponse:
-    #     """获取指定股票的利润表数据，并保存表格结果到Material当中，返回Material标识cite_id。
-    #     抓取企业历年或各报告期的利润表数据，并保存。
-    #     适用场景：盈利能力分析、收入与成本结构分析；生成研报中的“利润表分析”“盈利预测校验”等部分。
-
-    #     Args:
-    #         symbol (str):
-    #             股票代码，例如 "000063"。
-    #         indicator (str):
-    #             数据展示方式，支持的取值：
-    #             - "按报告期"（默认）；
-    #             - "按年度"；
-    #             - "按单季度"。
-    #         date (str | None):
-    #             报告撰写日期，格式为 "YYYYMMDD"。
-    #     """
-
-    #     df = ak.stock_financial_benefit_ths(symbol=symbol, indicator=indicator)
-
-    #     safe_indicator = indicator.replace(" ", "")
-    #     cite_id = f"{symbol}_profit_{safe_indicator}"
-    #     entity = get_entity_info(long_term=self.long_term, text=symbol)
-    #     description = f"{entity['name']}（{entity['code']}）{indicator}利润表"
-    #     self._save_df_to_material(
-    #         df=df, cite_id=cite_id,
-    #         description=description,
-    #         source="AKshare API:Hithink",
-    #         entity=entity,
-    #     )
-    #     header = f"[fetch_profit_table_material] 利润表（symbol={symbol}, indicator={indicator}）"
-    #     return _build_tool_response_from_df(
-    #         df,
-    #         cite_id=cite_id,
-    #         header=header,
-    #         extra_meta={"symbol": symbol, "indicator": indicator},
-    #     )
-
-    # async def fetch_cashflow_table_material(
-    #         self,
-    #         symbol: str,
-    #         indicator: str = "按报告期",
-    #         date: str | None = None,
-    # ) -> ToolResponse:
-    #     """获取指定股票的现金流量表数据，并保存表格结果到Material当中，返回Material标识cite_id。
-    #     抓取企业历年或各报告期的现金流量表数据（约 75 个字段），并将结果保存。
-    #     适用场景：研报中对经营活动、投资活动、筹资活动现金流的分析；评估企业现金创造能力、分红支付能力和资本开支压力。
-
-    #     Args:
-    #         symbol (str):
-    #             股票代码，例如 "000063"。
-    #         indicator (str):
-    #             数据展示方式，支持的取值：
-    #             - "按报告期"（默认）；
-    #             - "按年度"；
-    #             - "按单季度"。
-    #         date (str | None):
-    #             报告撰写日期，格式为 "YYYYMMDD"。
-    #     """
-    #     df = ak.stock_financial_cash_ths(symbol=symbol, indicator=indicator)
-
-    #     safe_indicator = indicator.replace(" ", "")
-    #     cite_id = f"{symbol}_cashflow_{safe_indicator}"
-    #     entity = get_entity_info(long_term=self.long_term, text=symbol)
-    #     description = f"{entity['name']}（{entity['code']}）{indicator}现金流量表"
-    #     self._save_df_to_material(
-    #         df=df, cite_id=cite_id,
-    #         description=description,
-    #         source="AKshare API:Hithink",
-    #         entity=entity,
-    #     )
-    #     header = f"[fetch_cashflow_table_material] 现金流量表（symbol={symbol}, indicator={indicator}）"
-    #     return _build_tool_response_from_df(
-    #         df,
-    #         cite_id=cite_id,
-    #         header=header,
-    #         extra_meta={"symbol": symbol, "indicator": indicator},
-    #     )
 
     async def fetch_balance_sheet_material(
             self,
@@ -1138,12 +1007,9 @@ class MaterialTools:
             indicator: str = "按报告期",
             date: str | None = None,
     ) -> ToolResponse:
-        """获取指定股票的资产负债表数据，并保存表格结果到Material当中，返回Material标识cite_id。
+        """    # 获取指定股票的资产负债表数据，并保存表格结果到Material当中，返回Material标识cite_id。
         抓取企业历年或各报告期的资产负债表数据，并将结果保存。
-        适用场景：
-        1. 研报中的“资产结构分析”“杠杆水平”“偿债能力”相关章节；
-        2. 提取公司的“总股本”、“实收资本(或股本)”、“所有者权益”等股本结构数据；
-        3. 对比不同报告期的资产、负债、所有者权益变化情况。
+        适用场景：研报中的“资产结构分析”“杠杆水平”“偿债能力”相关章节；对比不同报告期的资产、负债、所有者权益变化情况。
 
         Args:
             symbol (str):
@@ -1156,61 +1022,21 @@ class MaterialTools:
             date (str | None):
                 报告撰写日期，格式为 "YYYYMMDD"。
         """
-        
+
         df = ak.stock_financial_debt_ths(symbol=symbol, indicator=indicator)
 
         safe_indicator = indicator.replace(" ", "")
-
-        cached_cite_id = self._check_duplicate_in_registry(symbol, tool_keyword=f"_balance_{safe_indicator}")
-        if cached_cite_id:
-            msg = (f"【系统强制拦截】：检测到本地已存在 {symbol} 的资产负债表({indicator})！保存的材料的 cite_id 为 '{cached_cite_id}'\n"
-                   f"绝对禁止重复调用 API 抓取相同数据！\n"
-                   f"👉 请立即停止本工具，转去调用 query_fact_store 提取需要的具体数值，或 retrieve_local_material 检索本地保存的原始材料"
-                   f"或调用 read_material(cite_id='{cached_cite_id}') 读取全表。")
-            return ToolResponse(content=[TextBlock(type="text", text=msg)])
         cite_id = f"{symbol}_balance_{safe_indicator}_{int(time_module.time())}"
         entity = get_entity_info(long_term=self.long_term, text=symbol)
-        
-        if df is not None and not df.empty:
-            # ================= 1. 物理时间拦截 (防穿越) =================
-            cur_date = date or self.short_term.current_date
-            if cur_date:
-                limit_dt = pd.to_datetime(cur_date, format="%Y%m%d")
-                df['报告期_dt'] = pd.to_datetime(df['报告期'], errors='coerce')
-                # 仅保留报告期早于等于撰写日期的行
-                df = df[df['报告期_dt'] <= limit_dt].copy()
-                df.drop(columns=['报告期_dt'], inplace=True)
-            
-            # 确保按时间倒序（最新的合法数据在最上面）
-            df = df.sort_values(by="报告期", ascending=False)
-            
-            # ================= 2. 动态知识抽取入库 =================
-            # 取最近的 8 期财报存入知识库（避免无意义的老旧数据撑爆内存）
-            for idx, row in df.head(8).iterrows():
-                report_date = str(row.get("报告期", ""))
-                if not report_date or report_date == "nan": 
-                    continue
-                
-                # 调用短期记忆的全量展平入库方法
-                self.short_term.add_tabular_facts(
-                    symbol=symbol,
-                    time_point=report_date,
-                    row_dict=row.to_dict(),
-                    source=f"资产负债表({indicator})",
-                    cite_id=cite_id,
-                    from_tool="fetch_balance_sheet_material"
-                    # 全局财务指标，无须指定 dimension_col
-                )
-
-        description = f"{entity['name'] if entity else symbol}（{entity['code'] if entity else symbol}）{indicator}资产负债表"
+        description = f"{entity['name']}（{entity['code']}）{indicator}资产负债表"
         self._save_df_to_material(
             df=df, cite_id=cite_id,
             description=description,
             entity=entity,
             source="AKshare API:Hithink",
         )
-        
-        header = f"[fetch_balance_sheet_material] 资产负债表（symbol={symbol}, indicator={indicator}）。各项指标已展平存入本地知识库(Fact Store)。"
+        header = f"[fetch_balance_sheet_material] 资产负债表（symbol={symbol}, indicator={indicator}）"
+
         return _build_tool_response_from_df(
             df,
             cite_id=cite_id,
@@ -1239,49 +1065,20 @@ class MaterialTools:
             date (str | None):
                 报告撰写日期，格式为 "YYYYMMDD"。
         """
-        import pandas as pd
-        
+
         df = ak.stock_financial_benefit_ths(symbol=symbol, indicator=indicator)
 
         safe_indicator = indicator.replace(" ", "")
-        cite_id = f"{symbol}_profit_{safe_indicator}_{int(time_module.time())}"
+        cite_id = f"{symbol}_profit_{safe_indicator}"
         entity = get_entity_info(long_term=self.long_term, text=symbol)
-        
-        if df is not None and not df.empty:
-            # ================= 1. 物理时间拦截 (防穿越) =================
-            cur_date = date or self.short_term.current_date
-            if cur_date:
-                limit_dt = pd.to_datetime(cur_date, format="%Y%m%d")
-                df['报告期_dt'] = pd.to_datetime(df['报告期'], errors='coerce')
-                df = df[df['报告期_dt'] <= limit_dt].copy()
-                df.drop(columns=['报告期_dt'], inplace=True)
-            
-            df = df.sort_values(by="报告期", ascending=False)
-            
-            # ================= 2. 动态知识抽取入库 =================
-            for idx, row in df.head(8).iterrows():
-                report_date = str(row.get("报告期", ""))
-                if not report_date or report_date == "nan": 
-                    continue
-                    
-                self.short_term.add_tabular_facts(
-                    symbol=symbol,
-                    time_point=report_date,
-                    row_dict=row.to_dict(),
-                    source=f"利润表({indicator})",
-                    cite_id=cite_id,
-                    from_tool="fetch_profit_table_material"
-                )
-
-        description = f"{entity['name'] if entity else symbol}（{entity['code'] if entity else symbol}）{indicator}利润表"
+        description = f"{entity['name']}（{entity['code']}）{indicator}利润表"
         self._save_df_to_material(
             df=df, cite_id=cite_id,
             description=description,
             source="AKshare API:Hithink",
             entity=entity,
         )
-        
-        header = f"[fetch_profit_table_material] 利润表（symbol={symbol}, indicator={indicator}）。各项指标已展平存入本地知识库(Fact Store)。"
+        header = f"[fetch_profit_table_material] 利润表（symbol={symbol}, indicator={indicator}）"
         return _build_tool_response_from_df(
             df,
             cite_id=cite_id,
@@ -1310,55 +1107,253 @@ class MaterialTools:
             date (str | None):
                 报告撰写日期，格式为 "YYYYMMDD"。
         """
-        import pandas as pd
-        
         df = ak.stock_financial_cash_ths(symbol=symbol, indicator=indicator)
 
         safe_indicator = indicator.replace(" ", "")
-        cite_id = f"{symbol}_cashflow_{safe_indicator}_{int(time_module.time())}"
+        cite_id = f"{symbol}_cashflow_{safe_indicator}"
         entity = get_entity_info(long_term=self.long_term, text=symbol)
-
-        if df is not None and not df.empty:
-            # ================= 1. 物理时间拦截 (防穿越) =================
-            cur_date = date or self.short_term.current_date
-            if cur_date:
-                limit_dt = pd.to_datetime(cur_date, format="%Y%m%d")
-                df['报告期_dt'] = pd.to_datetime(df['报告期'], errors='coerce')
-                df = df[df['报告期_dt'] <= limit_dt].copy()
-                df.drop(columns=['报告期_dt'], inplace=True)
-            
-            df = df.sort_values(by="报告期", ascending=False)
-            
-            # ================= 2. 动态知识抽取入库 =================
-            for idx, row in df.head(8).iterrows():
-                report_date = str(row.get("报告期", ""))
-                if not report_date or report_date == "nan": 
-                    continue
-                    
-                self.short_term.add_tabular_facts(
-                    symbol=symbol,
-                    time_point=report_date,
-                    row_dict=row.to_dict(),
-                    source=f"现金流量表({indicator})",
-                    cite_id=cite_id,
-                    from_tool="fetch_cashflow_table_material"
-                )
-
-        description = f"{entity['name'] if entity else symbol}（{entity['code'] if entity else symbol}）{indicator}现金流量表"
+        description = f"{entity['name']}（{entity['code']}）{indicator}现金流量表"
         self._save_df_to_material(
             df=df, cite_id=cite_id,
             description=description,
             source="AKshare API:Hithink",
             entity=entity,
         )
-        
-        header = f"[fetch_cashflow_table_material] 现金流量表（symbol={symbol}, indicator={indicator}）。各项指标已展平存入本地知识库(Fact Store)。"
+        header = f"[fetch_cashflow_table_material] 现金流量表（symbol={symbol}, indicator={indicator}）"
         return _build_tool_response_from_df(
             df,
             cite_id=cite_id,
             header=header,
             extra_meta={"symbol": symbol, "indicator": indicator},
         )
+
+    # async def fetch_balance_sheet_material(
+    #         self,
+    #         symbol: str,
+    #         indicator: str = "按报告期",
+    #         date: str | None = None,
+    # ) -> ToolResponse:
+    #     """获取指定股票的资产负债表数据，并保存表格结果到Material当中，返回Material标识cite_id。
+    #     抓取企业历年或各报告期的资产负债表数据，并将结果保存。
+    #     适用场景：
+    #     1. 研报中的“资产结构分析”“杠杆水平”“偿债能力”相关章节；
+    #     2. 提取公司的“总股本”、“实收资本(或股本)”、“所有者权益”等股本结构数据；
+    #     3. 对比不同报告期的资产、负债、所有者权益变化情况。
+
+    #     Args:
+    #         symbol (str):
+    #             股票代码，例如 "000063"。
+    #         indicator (str):
+    #             数据展示方式，持的取值：
+    #             - "按报告期"（默认）：按季度 / 半年 / 年度等报告期展示；
+    #             - "按年度"：按年度汇总展示；
+    #             - "按单季度"：按单个季度拆分展示。
+    #         date (str | None):
+    #             报告撰写日期，格式为 "YYYYMMDD"。
+    #     """
+        
+    #     df = ak.stock_financial_debt_ths(symbol=symbol, indicator=indicator)
+
+    #     safe_indicator = indicator.replace(" ", "")
+
+    #     cached_cite_id = self._check_duplicate_in_registry(symbol, tool_keyword=f"_balance_{safe_indicator}")
+    #     if cached_cite_id:
+    #         msg = (f"【系统强制拦截】：检测到本地已存在 {symbol} 的资产负债表({indicator})！保存的材料的 cite_id 为 '{cached_cite_id}'\n"
+    #                f"绝对禁止重复调用 API 抓取相同数据！\n"
+    #                f"👉 请立即停止本工具，转去调用 query_fact_store 提取需要的具体数值，或 retrieve_local_material 检索本地保存的原始材料"
+    #                f"或调用 read_material(cite_id='{cached_cite_id}') 读取全表。")
+    #         return ToolResponse(content=[TextBlock(type="text", text=msg)])
+    #     cite_id = f"{symbol}_balance_{safe_indicator}_{int(time_module.time())}"
+    #     entity = get_entity_info(long_term=self.long_term, text=symbol)
+        
+    #     if df is not None and not df.empty:
+    #         # ================= 1. 物理时间拦截 (防穿越) =================
+    #         cur_date = date or self.short_term.current_date
+    #         if cur_date:
+    #             limit_dt = pd.to_datetime(cur_date, format="%Y%m%d")
+    #             df['报告期_dt'] = pd.to_datetime(df['报告期'], errors='coerce')
+    #             # 仅保留报告期早于等于撰写日期的行
+    #             df = df[df['报告期_dt'] <= limit_dt].copy()
+    #             df.drop(columns=['报告期_dt'], inplace=True)
+            
+    #         # 确保按时间倒序（最新的合法数据在最上面）
+    #         df = df.sort_values(by="报告期", ascending=False)
+            
+    #         # ================= 2. 动态知识抽取入库 =================
+    #         # 取最近的 8 期财报存入知识库（避免无意义的老旧数据撑爆内存）
+    #         for idx, row in df.head(8).iterrows():
+    #             report_date = str(row.get("报告期", ""))
+    #             if not report_date or report_date == "nan": 
+    #                 continue
+                
+    #             # 调用短期记忆的全量展平入库方法
+    #             self.short_term.add_tabular_facts(
+    #                 symbol=symbol,
+    #                 time_point=report_date,
+    #                 row_dict=row.to_dict(),
+    #                 source=f"资产负债表({indicator})",
+    #                 cite_id=cite_id,
+    #                 from_tool="fetch_balance_sheet_material"
+    #                 # 全局财务指标，无须指定 dimension_col
+    #             )
+
+    #     description = f"{entity['name'] if entity else symbol}（{entity['code'] if entity else symbol}）{indicator}资产负债表"
+    #     self._save_df_to_material(
+    #         df=df, cite_id=cite_id,
+    #         description=description,
+    #         entity=entity,
+    #         source="AKshare API:Hithink",
+    #     )
+        
+    #     header = f"[fetch_balance_sheet_material] 资产负债表（symbol={symbol}, indicator={indicator}）。各项指标已展平存入本地知识库(Fact Store)。"
+    #     return _build_tool_response_from_df(
+    #         df,
+    #         cite_id=cite_id,
+    #         header=header,
+    #         extra_meta={"symbol": symbol, "indicator": indicator},
+    #     )
+
+    # async def fetch_profit_table_material(
+    #         self,
+    #         symbol: str,
+    #         indicator: str = "按报告期",
+    #         date: str | None = None,
+    # ) -> ToolResponse:
+    #     """获取指定股票的利润表数据，并保存表格结果到Material当中，返回Material标识cite_id。
+    #     抓取企业历年或各报告期的利润表数据，并保存。
+    #     适用场景：盈利能力分析、收入与成本结构分析；生成研报中的“利润表分析”“盈利预测校验”等部分。
+
+    #     Args:
+    #         symbol (str):
+    #             股票代码，例如 "000063"。
+    #         indicator (str):
+    #             数据展示方式，支持的取值：
+    #             - "按报告期"（默认）；
+    #             - "按年度"；
+    #             - "按单季度"。
+    #         date (str | None):
+    #             报告撰写日期，格式为 "YYYYMMDD"。
+    #     """
+    #     import pandas as pd
+        
+    #     df = ak.stock_financial_benefit_ths(symbol=symbol, indicator=indicator)
+
+    #     safe_indicator = indicator.replace(" ", "")
+    #     cite_id = f"{symbol}_profit_{safe_indicator}_{int(time_module.time())}"
+    #     entity = get_entity_info(long_term=self.long_term, text=symbol)
+        
+    #     if df is not None and not df.empty:
+    #         # ================= 1. 物理时间拦截 (防穿越) =================
+    #         cur_date = date or self.short_term.current_date
+    #         if cur_date:
+    #             limit_dt = pd.to_datetime(cur_date, format="%Y%m%d")
+    #             df['报告期_dt'] = pd.to_datetime(df['报告期'], errors='coerce')
+    #             df = df[df['报告期_dt'] <= limit_dt].copy()
+    #             df.drop(columns=['报告期_dt'], inplace=True)
+            
+    #         df = df.sort_values(by="报告期", ascending=False)
+            
+    #         # ================= 2. 动态知识抽取入库 =================
+    #         for idx, row in df.head(8).iterrows():
+    #             report_date = str(row.get("报告期", ""))
+    #             if not report_date or report_date == "nan": 
+    #                 continue
+                    
+    #             self.short_term.add_tabular_facts(
+    #                 symbol=symbol,
+    #                 time_point=report_date,
+    #                 row_dict=row.to_dict(),
+    #                 source=f"利润表({indicator})",
+    #                 cite_id=cite_id,
+    #                 from_tool="fetch_profit_table_material"
+    #             )
+
+    #     description = f"{entity['name'] if entity else symbol}（{entity['code'] if entity else symbol}）{indicator}利润表"
+    #     self._save_df_to_material(
+    #         df=df, cite_id=cite_id,
+    #         description=description,
+    #         source="AKshare API:Hithink",
+    #         entity=entity,
+    #     )
+        
+    #     header = f"[fetch_profit_table_material] 利润表（symbol={symbol}, indicator={indicator}）。各项指标已展平存入本地知识库(Fact Store)。"
+    #     return _build_tool_response_from_df(
+    #         df,
+    #         cite_id=cite_id,
+    #         header=header,
+    #         extra_meta={"symbol": symbol, "indicator": indicator},
+    #     )
+
+    # async def fetch_cashflow_table_material(
+    #         self,
+    #         symbol: str,
+    #         indicator: str = "按报告期",
+    #         date: str | None = None,
+    # ) -> ToolResponse:
+    #     """获取指定股票的现金流量表数据，并保存表格结果到Material当中，返回Material标识cite_id。
+    #     抓取企业历年或各报告期的现金流量表数据（约 75 个字段），并将结果保存。
+    #     适用场景：研报中对经营活动、投资活动、筹资活动现金流的分析；评估企业现金创造能力、分红支付能力和资本开支压力。
+
+    #     Args:
+    #         symbol (str):
+    #             股票代码，例如 "000063"。
+    #         indicator (str):
+    #             数据展示方式，支持的取值：
+    #             - "按报告期"（默认）；
+    #             - "按年度"；
+    #             - "按单季度"。
+    #         date (str | None):
+    #             报告撰写日期，格式为 "YYYYMMDD"。
+    #     """
+    #     import pandas as pd
+        
+    #     df = ak.stock_financial_cash_ths(symbol=symbol, indicator=indicator)
+
+    #     safe_indicator = indicator.replace(" ", "")
+    #     cite_id = f"{symbol}_cashflow_{safe_indicator}_{int(time_module.time())}"
+    #     entity = get_entity_info(long_term=self.long_term, text=symbol)
+
+    #     if df is not None and not df.empty:
+    #         # ================= 1. 物理时间拦截 (防穿越) =================
+    #         cur_date = date or self.short_term.current_date
+    #         if cur_date:
+    #             limit_dt = pd.to_datetime(cur_date, format="%Y%m%d")
+    #             df['报告期_dt'] = pd.to_datetime(df['报告期'], errors='coerce')
+    #             df = df[df['报告期_dt'] <= limit_dt].copy()
+    #             df.drop(columns=['报告期_dt'], inplace=True)
+            
+    #         df = df.sort_values(by="报告期", ascending=False)
+            
+    #         # ================= 2. 动态知识抽取入库 =================
+    #         for idx, row in df.head(8).iterrows():
+    #             report_date = str(row.get("报告期", ""))
+    #             if not report_date or report_date == "nan": 
+    #                 continue
+                    
+    #             self.short_term.add_tabular_facts(
+    #                 symbol=symbol,
+    #                 time_point=report_date,
+    #                 row_dict=row.to_dict(),
+    #                 source=f"现金流量表({indicator})",
+    #                 cite_id=cite_id,
+    #                 from_tool="fetch_cashflow_table_material"
+    #             )
+
+    #     description = f"{entity['name'] if entity else symbol}（{entity['code'] if entity else symbol}）{indicator}现金流量表"
+    #     self._save_df_to_material(
+    #         df=df, cite_id=cite_id,
+    #         description=description,
+    #         source="AKshare API:Hithink",
+    #         entity=entity,
+    #     )
+        
+    #     header = f"[fetch_cashflow_table_material] 现金流量表（symbol={symbol}, indicator={indicator}）。各项指标已展平存入本地知识库(Fact Store)。"
+    #     return _build_tool_response_from_df(
+    #         df,
+    #         cite_id=cite_id,
+    #         header=header,
+    #         extra_meta={"symbol": symbol, "indicator": indicator},
+    #     )
 
     # ===================== 股东信息 =====================
 
