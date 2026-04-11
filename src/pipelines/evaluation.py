@@ -11,6 +11,7 @@ import sys
 import os
 import json
 import asyncio
+import traceback
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass, asdict, field
@@ -24,7 +25,7 @@ from src.evaluation.eval_evidence import evidence_coverage_and_accuracy
 from src.evaluation.eval_content import get_content_score, ContentScore
 from src.utils.instance import llm_reasoning, llm_instruct, formatter
 from src.pipelines.planning import process_pdf_to_outline
-from utils import local_file
+from src.utils import local_file
 
 
 @dataclass
@@ -63,6 +64,71 @@ class BenchmarkResult:
     evidence: EvidenceMetrics
     content: ContentScore
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
+
+
+def _serialize_benchmark_result(result: BenchmarkResult) -> Dict:
+    """将嵌套的Pydantic ContentScore转换为可JSON序列化的字典。"""
+    data = asdict(result)
+    if hasattr(result.content, "model_dump"):
+        data["content"] = result.content.model_dump()
+    else:
+        data["content"] = result.content.dict()
+    return data
+
+
+def _build_summary(
+    benchmark_items: List[BenchmarkItem],
+    results: List[BenchmarkResult],
+    successful: int,
+    failed: int,
+    none_count: int,
+    failure_reasons: Dict[str, str],
+) -> Dict:
+    return {
+        "total": len(benchmark_items),
+        "successful": successful,
+        "failed": failed,
+        "NONE": none_count,
+        "results": [_serialize_benchmark_result(r) for r in results],
+        "failure_reasons": failure_reasons,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+def _write_summary(output_path: Path, summary: Dict) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(summary, f, ensure_ascii=False, indent=2)
+
+
+def _get_content_average(content: Dict) -> float:
+    values = [
+        content.get("insightfulness", 0.0),
+        content.get("readability", 0.0),
+        content.get("relevance", 0.0),
+        content.get("sufficiency", 0.0),
+    ]
+    values = [float(v) for v in values if isinstance(v, (int, float))]
+    return sum(values) / len(values) if values else 0.0
+
+
+def _build_new_report_patterns(stock_code: str, date: str) -> List[str]:
+    """支持 YYYYMMDD 和 YYYY-MM-DD 两种新报告文件名。"""
+    patterns: List[str] = []
+
+    def add_pattern(date_str: str) -> None:
+        pattern = f"{stock_code}_{date_str}*.md"
+        if pattern not in patterns:
+            patterns.append(pattern)
+
+    add_pattern(date)
+
+    compact_date = date.replace("-", "")
+    if len(compact_date) == 8 and compact_date.isdigit():
+        add_pattern(compact_date)
+        add_pattern(f"{compact_date[:4]}-{compact_date[4:6]}-{compact_date[6:]}")
+
+    return patterns
 
 
 async def evaluate_structure(new_section: Section) -> StructureMetrics:
@@ -111,9 +177,16 @@ async def evaluate_content(new_section: Section) -> ContentScore:
 
     collect_segments(new_section)
 
+    if not segment_tasks:
+        return ContentScore(
+            insightfulness=0.0,
+            readability=0.0,
+            relevance=0.0,
+            sufficiency=0.0,
+        )
+
     # 初始化维度scores
     dimension_scores = {
-        "comprehensiveness": [],
         "insightfulness": [],
         "readability": [],
         "relevance": [],
@@ -139,8 +212,8 @@ async def evaluate_content(new_section: Section) -> ContentScore:
             continue
 
         for dim in dimension_scores.keys():
-            if dim in scores:
-                dimension_scores[dim].append(scores[dim])
+            if dim in scores and isinstance(scores[dim], (int, float)):
+                dimension_scores[dim].append(float(scores[dim]))
         evaluated_count += 1
 
     # 计算平均值，使用列表推导式优化
@@ -286,6 +359,8 @@ async def run_benchmark(
     NONE = 0
     failure_reasons = {}
 
+    _write_summary(output_path, _build_summary(benchmark_items, results, successful, failed, NONE, failure_reasons))
+
     for idx, item in enumerate(benchmark_items, 1):
         print(f"[{idx}/{len(benchmark_items)}] 处理 {item.stock_code} ({item.date})")
 
@@ -294,7 +369,8 @@ async def run_benchmark(
         if not ref_path.exists():
             print(f"  ✗ 参考报告不存在: {item.human_report}")
             NONE += 1
-            failure_reasons[f"human_report_NONE_{item.stock_code}"] = item.human_report
+            failure_reasons[f"human_report_NONE_{item.stock_code}_{item.date}"] = item.human_report
+            _write_summary(output_path, _build_summary(benchmark_items, results, successful, failed, NONE, failure_reasons))
             continue
 
         # 查找新报告
@@ -303,9 +379,19 @@ async def run_benchmark(
         )
 
         if not matching_files:
+            alt_patterns = _build_new_report_patterns(item.stock_code, item.date)[1:]
+            seen_files = set()
+            for pattern in alt_patterns:
+                for path in new_reports_dir.glob(pattern):
+                    if path not in seen_files:
+                        seen_files.add(path)
+                        matching_files.append(path)
+
+        if not matching_files:
             print(f"  ✗ 未找到新报告（搜索模式: {item.stock_code}_{item.date}*.md）")
             NONE += 1
-            failure_reasons[f"new_report_NONE_{item.stock_code}"] = f"{item.stock_code}_{item.date}*.md"
+            failure_reasons[f"new_report_NONE_{item.stock_code}_{item.date}"] = f"{item.stock_code}_{item.date}*.md"
+            _write_summary(output_path, _build_summary(benchmark_items, results, successful, failed, NONE, failure_reasons))
             continue
 
         if len(matching_files) > 1:
@@ -314,20 +400,27 @@ async def run_benchmark(
         new_report_path = matching_files[0]
 
         # 执行评估
-        result = await benchmark_single_pair(
-            stock_code=item.stock_code,
-            date=item.date,
-            new_report_path=new_report_path,
-            human_report_path=ref_path,
-            long_term_dir=long_term_dir,
-        )
+        try:
+            result = await benchmark_single_pair(
+                stock_code=item.stock_code,
+                date=item.date,
+                new_report_path=new_report_path,
+                human_report_path=ref_path,
+                long_term_dir=long_term_dir,
+            )
 
-        if result:
-            results.append(result)
-            successful += 1
-        else:
+            if result:
+                results.append(result)
+                successful += 1
+            else:
+                failed += 1
+                failure_reasons[f"evaluation_failed_{item.stock_code}_{item.date}"] = "评估过程中失败"
+        except Exception as e:
+            traceback.print_exc()
             failed += 1
-            failure_reasons[f"evaluation_failed_{item.stock_code}"] = "评估过程中失败"
+            failure_reasons[f"evaluation_failed_{item.stock_code}_{item.date}"] = str(e)
+        finally:
+            _write_summary(output_path, _build_summary(benchmark_items, results, successful, failed, NONE, failure_reasons))
 
 
     # 保存结果
@@ -344,17 +437,8 @@ async def run_benchmark(
         for reason, detail in failure_reasons.items():
             print(f"  - {reason}: {detail}")
 
-    summary = {
-        "total": len(benchmark_items),
-        "successful": successful,
-        "failed": failed,
-        "NONE": NONE,
-        "results": [asdict(r) for r in results],
-        "timestamp": datetime.now().isoformat(),
-    }
-
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(summary, f, ensure_ascii=False, indent=2)
+    summary = _build_summary(benchmark_items, results, successful, failed, NONE, failure_reasons)
+    _write_summary(output_path, summary)
     print(f"\n✓ 结果已保存到: {output_path}")
 
     return summary
@@ -376,7 +460,7 @@ def print_benchmark_summary(results_json_path: Path) -> None:
     print(f"总数: {data['total']}")
     print(f"成功: {data['successful']}")
     print(f"失败: {data['failed']}")
-    print(f"成功率: {data['successful']/data['total']*100:.1f}%\n")
+    print(f"成功率: {data['successful']/data['total']*100:.1f}%\n" if data["total"] > 0 else "成功率: 0.0%\n")
 
     if not data["results"]:
         print("无评估结果")
@@ -387,9 +471,15 @@ def print_benchmark_summary(results_json_path: Path) -> None:
 
     structure_total_segments = [r["structure"]["total_segments"] for r in results]
     structure_avg_segments = [r["structure"]["avg_segments_per_section"] for r in results]
+    structure_comprehensiveness = [r["structure"]["comprehensiveness"] for r in results]
+    structure_logicality = [r["structure"]["logicality"] for r in results]
     evidence_coverage = [r["evidence"]["coverage_ratio"] for r in results]
     evidence_accuracy = [r["evidence"]["accuracy_ratio"] for r in results]
-    content_scores = [r["content"]["average_score"] for r in results]
+    content_scores = [_get_content_average(r["content"]) for r in results]
+    content_insightfulness = [r["content"]["insightfulness"] for r in results]
+    content_readability = [r["content"]["readability"] for r in results]
+    content_relevance = [r["content"]["relevance"] for r in results]
+    content_sufficiency = [r["content"]["sufficiency"] for r in results]
 
     def safe_avg(values):
         return sum(values) / len(values) if values else 0
@@ -397,6 +487,8 @@ def print_benchmark_summary(results_json_path: Path) -> None:
     print("Structure指标:")
     print(f"  - 平均总segment数: {safe_avg(structure_total_segments):.1f}")
     print(f"  - 平均每section的segment数: {safe_avg(structure_avg_segments):.2f}")
+    print(f"  - 平均完整性: {safe_avg(structure_comprehensiveness):.2f}/10")
+    print(f"  - 平均逻辑性: {safe_avg(structure_logicality):.2f}/10")
 
     print("\nEvidence指标:")
     print(f"  - 平均覆盖率: {safe_avg(evidence_coverage):.2%}")
@@ -404,17 +496,25 @@ def print_benchmark_summary(results_json_path: Path) -> None:
 
     print("\nContent指标:")
     print(f"  - 平均总分: {safe_avg(content_scores):.2f}/10")
+    print(f"  - 平均洞察力: {safe_avg(content_insightfulness):.2f}/10")
+    print(f"  - 平均可读性: {safe_avg(content_readability):.2f}/10")
+    print(f"  - 平均相关性: {safe_avg(content_relevance):.2f}/10")
+    print(f"  - 平均充分性: {safe_avg(content_sufficiency):.2f}/10")
 
     print("\n详细结果:")
     for r in results:
         print(f"\n  {r['stock_code']} ({r['date']}):")
         print(f"    Structure: {r['structure']['total_segments']} segments, "
-              f"{r['structure']['avg_segments_per_section']:.2f} avg/section")
+              f"{r['structure']['avg_segments_per_section']:.2f} avg/section, "
+              f"comprehensiveness={r['structure']['comprehensiveness']:.2f}, "
+              f"logicality={r['structure']['logicality']:.2f}")
         print(f"    Evidence: {r['evidence']['coverage_ratio']:.2%} coverage, "
               f"{r['evidence']['accuracy_ratio']:.2%} accuracy")
-        print(f"    Content: {r['content']['average_score']:.2f}/10 overall, "
-              f"insight={r['content']['insight']:.2f}, "
-              f"readability={r['content']['readability']:.2f}")
+        print(f"    Content: {_get_content_average(r['content']):.2f}/10 overall, "
+              f"insightfulness={r['content']['insightfulness']:.2f}, "
+              f"readability={r['content']['readability']:.2f}, "
+              f"relevance={r['content']['relevance']:.2f}, "
+              f"sufficiency={r['content']['sufficiency']:.2f}")
 
 
 # ==============================================================================
@@ -427,7 +527,7 @@ async def main(model_name):
     PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
     # 配置路径
-    benchmark_json = PROJECT_ROOT / "benchmark.json"
+    benchmark_json = PROJECT_ROOT / "benchmark_1.json"
     new_reports = PROJECT_ROOT / "data" / "output" / "reports" / model_name
     long_term = PROJECT_ROOT / "data" / "memory" / "long_term"
     output = PROJECT_ROOT / "data" / "output" / f"{model_name}_benchmark_results.json"

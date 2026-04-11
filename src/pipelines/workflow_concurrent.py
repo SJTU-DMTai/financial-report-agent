@@ -13,6 +13,7 @@ from dataclasses import asdict
 from datetime import datetime
 from functools import partial
 from pathlib import Path
+import pandas as pd
 
 from agentscope.agent import ReActAgent
 from agentscope.message import Msg
@@ -46,13 +47,59 @@ from src.utils.multi_types_verification import (
     set_verifier_trace_path,
 )
 from src.utils.local_file import STOCK_REPORT_PATHS
+from src.utils.task_date import normalize_compact_date
 import config
 from src.utils.call_with_retry import call_chatbot_with_retry
 from src.utils.instance import llm_reasoning, llm_instruct, llm_judge, formatter
 import logging
 from typing import List, Optional, Dict, Any
-# 假设你在相同目录下运行，导入你定义的 MaterialTools
 from src.tools.material_tools import MaterialTools
+
+DEFAULT_DISCLOSURE_CATEGORIES = ["年报", "半年报", "一季报", "三季报"]
+
+def _has_preloaded_disclosures(
+    short_term: ShortTermMemoryStore,
+    symbol: str,
+    start_date: str,
+    end_date: Optional[str],
+    disclosure_categories: List[str],
+) -> bool:
+    if not short_term or not hasattr(short_term, "_registry"):
+        return False
+
+    required_categories = {category for category in disclosure_categories if category}
+    if not required_categories:
+        return False
+
+    normalized_symbol = (symbol or "").split(".")[0]
+    normalized_start = normalize_compact_date(start_date)
+    normalized_end = normalize_compact_date(end_date) if end_date else None
+    loaded_categories = set()
+
+    for meta in short_term._registry.values():
+        if getattr(meta, "source", "") != "AKshare API:CNINFO":
+            continue
+
+        entity_code = ((getattr(meta, "entity", {}) or {}).get("code") or "").split(".")[0]
+        if entity_code != normalized_symbol:
+            continue
+
+        point = normalize_compact_date((getattr(meta, "time", {}) or {}).get("point"))
+        if point is not None:
+            if point < normalized_start:
+                continue
+            if normalized_end is not None and point > normalized_end:
+                continue
+
+        description = (getattr(meta, "description", "") or "").lower()
+        for category in required_categories - loaded_categories:
+            if f"category={category}".lower() in description:
+                loaded_categories.add(category)
+
+        if loaded_categories == required_categories:
+            return True
+
+    return False
 
 async def preload_task_materials(
     tools: MaterialTools, 
@@ -69,23 +116,27 @@ async def preload_task_materials(
     logging.info(f"[Pre-loader] 🚀 开始为任务预加载知识库: Entity={symbol}, 时间={start_date}至{end_date}")
     print(f"[Pre-loader] 🚀 开始为任务预加载知识库: Entity={symbol}, 时间={start_date}至{end_date}")
 
-    if tools.short_term and hasattr(tools.short_term, "_registry"):
-            current_registry_size = len(tools.short_term._registry)
-            if current_registry_size > 0:
-                msg = f"检测到本地 Registry 已存在 {current_registry_size} 条材料，跳过网络预加载环节。"
-                logging.info(f"[Pre-loader] ⏭️ {msg}")
-                print(f"[Pre-loader] ⏭️ {msg}")
-                return {
-                    "symbol": symbol,
-                    "news_batches_loaded": 0,
-                    "disclosure_categories_loaded": 0,
-                    "errors": [],
-                    "total_materials_in_memory": current_registry_size,
-                    "skipped": True 
-                }
-
     news_keywords = news_keywords or [""]
-    disclosure_categories = disclosure_categories or [""] 
+    disclosure_categories = disclosure_categories or DEFAULT_DISCLOSURE_CATEGORIES
+    if _has_preloaded_disclosures(
+        tools.short_term,
+        symbol=symbol,
+        start_date=start_date,
+        end_date=end_date,
+        disclosure_categories=disclosure_categories,
+    ):
+        current_registry_size = len(tools.short_term._registry) if tools.short_term else 0
+        msg = f"检测到 {symbol} 在目标时间窗内的公告材料已预加载完成，跳过重复预加载。"
+        logging.info(f"[Pre-loader] ⏭️ {msg}")
+        print(f"[Pre-loader] ⏭️ {msg}")
+        return {
+            "symbol": symbol,
+            "news_batches_loaded": 0,
+            "disclosure_categories_loaded": 0,
+            "errors": [],
+            "total_materials_in_memory": current_registry_size,
+            "skipped": True
+        }
     print("symbol:", symbol)
     stats = {
         "symbol": symbol,
@@ -93,8 +144,6 @@ async def preload_task_materials(
         "disclosure_categories_loaded": 0,
         "errors": []
     }
-    start_date = start_date.replace("-", "")
-    end_date = end_date.replace("-", "") if end_date else None
     # ==========================================
     # 阶段 2：预加载并解析 PDF 公告
     # ==========================================
@@ -331,13 +380,16 @@ async def process_section_concurrently(section: Section, parent_id, task_desc, d
     """递归并发处理章节"""
 
     tools = MaterialTools(short_term=short_term, long_term=long_term)
-    start_date = f"{int(cur_date[:4]) - 1}-01-01"
-    end_date = f"{cur_date[:4]}-{cur_date[4:6]}-{cur_date[6:]}"
+    end_date = normalize_compact_date(cur_date)
+    start_date = (
+        pd.to_datetime(end_date, format="%Y%m%d") - pd.DateOffset(months=6)
+    ).strftime("%Y%m%d")
     stats = await preload_task_materials(
         tools=tools,
         symbol=stock_symbol,
         start_date=start_date,
-        end_date=end_date
+        end_date=end_date,
+        disclosure_categories=DEFAULT_DISCLOSURE_CATEGORIES,
     )
 
     # 1. 处理子章节 (递归) - 优先启动子任务
@@ -450,125 +502,136 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
     now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_filename = f"log_{stock_symbol}_{now_str}.txt"
     verifier_trace_filename = f"verifier_trace_{stock_symbol}_{now_str}.txt"
-    set_verifier_trace_path(PROJECT_ROOT / verifier_trace_filename)
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
     log_file = open(log_filename, "w", encoding="utf-8")
+    set_verifier_trace_path(PROJECT_ROOT / verifier_trace_filename)
     sys.stdout = log_file
     sys.stderr = log_file
 
-    cfg = config.Config()
-    multi_source_verification_enabled = cfg.is_multi_source_verification_enabled()
-    max_verify_rounds = cfg.get_max_verify_rounds()
-    
-    filename = f"{stock_symbol}_{cur_date}"
-    short_term_dir = PROJECT_ROOT / "data" / "memory" / "short_term" / filename
+    try:
+        cfg = config.Config()
+        multi_source_verification_enabled = cfg.is_multi_source_verification_enabled()
+        max_verify_rounds = cfg.get_max_verify_rounds()
+        
+        filename = f"{stock_symbol}_{cur_date}"
+        short_term_dir = PROJECT_ROOT / "data" / "memory" / "short_term" / filename
 
-    short_term = ShortTermMemoryStore(
-        base_dir=short_term_dir,
-    )
-    if demo_pdf_path is None:
-        demo_pdf_path = STOCK_REPORT_PATHS[stock_symbol][-1]
-    demo_date = demo_pdf_path.name.split("_")[1]
-
-    output_pth = PROJECT_ROOT / "data" / "output" / "reports" / cfg.llm_name
-    output_pth.mkdir(parents=True, exist_ok=True)
-
-    outline = await process_pdf_to_outline(demo_pdf_path, long_term_dir / "demonstration",
-                                              llm_reasoning, llm_instruct, formatter,)
-    _normalize_section_titles(outline)
-    manuscript_path = output_pth / f"{stock_symbol}_{cur_date}.json"
-    if manuscript_path.exists():
-        manuscript = Section.from_json(manuscript_path.read_text(encoding='utf-8'))
-        print("加载已有的 manuscript:", manuscript_path)
-    else:
-        manuscript = outline
-        short_term.save_material(
-            cite_id=f"{demo_date}_reference_report",
-            content=(long_term_dir / "demonstration" / f"{demo_pdf_path.stem}.md").read_text(encoding='utf-8'),
-            description=demo_pdf_path.name,
-            source="",
-            entity=entity,
-            time={"point": str(demo_date)},
+        short_term = ShortTermMemoryStore(
+            base_dir=short_term_dir,
         )
-    _normalize_section_titles(manuscript)
+        if demo_pdf_path is None:
+            demo_pdf_path = STOCK_REPORT_PATHS[stock_symbol][-1]
+        demo_date = demo_pdf_path.name.split("_")[1]
 
-    def unfinished(section: Section) -> bool:
-        if section.segments:
-            for segment in section.segments:
-                if not segment.finished:
-                    return True
-        if section.subsections:
-            for subsection in section.subsections:
-                if unfinished(subsection):
-                    return True
-        return False
+        output_pth = PROJECT_ROOT / "data" / "output" / "reports" / cfg.llm_name
+        output_pth.mkdir(parents=True, exist_ok=True)
 
-    if unfinished(manuscript):
-        def replace_unfinished_sections(manuscript: Section, outline: Section) -> None:
-            """递归替换包含未完成 segment 的 section"""
-            # 检查当前 section 是否有未完成的 segment
-            has_unfinished = False
-            if manuscript.segments:
-                for segment in manuscript.segments:
+        outline = await process_pdf_to_outline(demo_pdf_path, long_term_dir / "demonstration",
+                                                  llm_reasoning, llm_instruct, formatter,)
+        _normalize_section_titles(outline)
+        manuscript_path = output_pth / f"{stock_symbol}_{cur_date}.json"
+        if manuscript_path.exists():
+            manuscript = Section.from_json(manuscript_path.read_text(encoding='utf-8'))
+            print("加载已有的 manuscript:", manuscript_path)
+        else:
+            manuscript = outline
+            short_term.save_material(
+                cite_id=f"{demo_date}_reference_report",
+                content=(long_term_dir / "demonstration" / f"{demo_pdf_path.stem}.md").read_text(encoding='utf-8'),
+                description=demo_pdf_path.name,
+                source="",
+                entity=entity,
+                time={"point": str(demo_date)},
+            )
+        _normalize_section_titles(manuscript)
+
+        def unfinished(section: Section) -> bool:
+            if section.segments:
+                for segment in section.segments:
                     if not segment.finished:
-                        has_unfinished = True
-                        break
+                        return True
+            if section.subsections:
+                for subsection in section.subsections:
+                    if unfinished(subsection):
+                        return True
+            return False
 
-            # 如果当前 section 有未完成的 segment，整体替换
-            if has_unfinished:
-                # 复制 outline 对应 section 的所有属性
-                manuscript.title = outline.title
-                manuscript.content = outline.content
-                manuscript.segments = outline.segments
-                manuscript.subsections = outline.subsections
-                return
+        if unfinished(manuscript):
+            def replace_unfinished_sections(manuscript: Section, outline: Section) -> None:
+                """递归替换包含未完成 segment 的 section"""
+                # 检查当前 section 是否有未完成的 segment
+                has_unfinished = False
+                if manuscript.segments:
+                    for segment in manuscript.segments:
+                        if not segment.finished:
+                            has_unfinished = True
+                            break
 
-            # 递归处理子 section
-            if manuscript.subsections and outline.subsections:
-                for i, subsection in enumerate(manuscript.subsections):
-                    if i < len(outline.subsections):
-                        replace_unfinished_sections(subsection, outline.subsections[i])
+                # 如果当前 section 有未完成的 segment，整体替换
+                if has_unfinished:
+                    # 复制 outline 对应 section 的所有属性
+                    manuscript.title = outline.title
+                    manuscript.content = outline.content
+                    manuscript.segments = outline.segments
+                    manuscript.subsections = outline.subsections
+                    return
 
-        replace_unfinished_sections(manuscript, outline)
-        def create_searcher_writer_verifier():
-            searcher_toolkit = build_searcher_toolkit(
+                # 递归处理子 section
+                if manuscript.subsections and outline.subsections:
+                    for i, subsection in enumerate(manuscript.subsections):
+                        if i < len(outline.subsections):
+                            replace_unfinished_sections(subsection, outline.subsections[i])
+
+            replace_unfinished_sections(manuscript, outline)
+            def create_searcher_writer_verifier():
+                searcher_toolkit = build_searcher_toolkit(
+                    short_term=short_term,
+                    long_term=long_term,
+                )
+                searcher = create_searcher_agent(model=llm_reasoning, formatter=formatter, toolkit=searcher_toolkit)
+                writer_toolkit = build_writer_toolkit(
+                    short_term=short_term,
+                    long_term=long_term,
+                    searcher=searcher,
+                )
+                writer = create_writer_agent(model=llm_reasoning, formatter=formatter, toolkit=writer_toolkit)
+                verifier = SegmentVerifier(short_term, long_term)
+                return searcher, writer,verifier
+
+            # 启动递归并发处理
+            await process_section_concurrently(
+                section=manuscript,
+                parent_id=None,
+                task_desc=task_desc,
+                demo_date=demo_date,
+                cur_date=cur_date,
+                agent_factory=create_searcher_writer_verifier,
+                stock_symbol=stock_symbol,
+                output_pth=output_pth,
+                manuscript_root=manuscript,  # 用于在深层递归中保存完整的 json
                 short_term=short_term,
                 long_term=long_term,
+                multi_source_verification_enabled=multi_source_verification_enabled,
+                max_verify_rounds=max_verify_rounds,
             )
-            searcher = create_searcher_agent(model=llm_reasoning, formatter=formatter, toolkit=searcher_toolkit)
-            writer_toolkit = build_writer_toolkit(
-                short_term=short_term,
-                long_term=long_term,
-                searcher=searcher,
-            )
-            writer = create_writer_agent(model=llm_reasoning, formatter=formatter, toolkit=writer_toolkit)
-            verifier = SegmentVerifier(short_term, long_term)
-            return searcher, writer,verifier
 
-        # 启动递归并发处理
-        await process_section_concurrently(
-            section=manuscript,
-            parent_id=None,
-            task_desc=task_desc,
-            demo_date=demo_date,
-            cur_date=cur_date,
-            agent_factory=create_searcher_writer_verifier,
-            stock_symbol=stock_symbol,
-            output_pth=output_pth,
-            manuscript_root=manuscript,  # 用于在深层递归中保存完整的 json
+        _normalize_section_titles(manuscript)
+        _normalize_report_title(manuscript, entity, task_desc)
+        (output_pth / f"{filename}.json").write_text(manuscript.to_json(ensure_ascii=False), encoding="utf-8")
+        markdown_text = section_to_markdown(manuscript)
+        (output_pth / f"{filename}.md").write_text(markdown_text, encoding="utf-8")
+        md_to_pdf(
+            markdown_text,
             short_term=short_term,
-            long_term=long_term,
-            multi_source_verification_enabled=multi_source_verification_enabled,
-            max_verify_rounds=max_verify_rounds,
+            pdf_path=output_pth / f"{filename}.pdf",
+            header_title=_infer_report_title(task_desc, entity),
         )
-
-    _normalize_section_titles(manuscript)
-    _normalize_report_title(manuscript, entity, task_desc)
-    (output_pth / f"{filename}.json").write_text(manuscript.to_json(ensure_ascii=False), encoding="utf-8")
-    markdown_text = section_to_markdown(manuscript)
-    (output_pth / f"{filename}.md").write_text(markdown_text, encoding="utf-8")
-    md_to_pdf(
-        markdown_text,
-        short_term=short_term,
-        pdf_path=output_pth / f"{filename}.pdf",
-        header_title=_infer_report_title(task_desc, entity),
-    )
+    finally:
+        try:
+            log_file.flush()
+        finally:
+            sys.stdout = original_stdout
+            sys.stderr = original_stderr
+            log_file.close()
+            set_verifier_trace_path(None)

@@ -2,9 +2,11 @@
 
 
 log*.txt
+logs/*
 *.out
 *.png
 data/memory/long_term/demonstration/*
+data/memory/long_term/evidences/*
 data/memory/short_term/*
 data/output/reports/*
 data/reports/*
