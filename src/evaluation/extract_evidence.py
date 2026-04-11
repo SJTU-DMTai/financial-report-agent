@@ -348,6 +348,7 @@ def save_result_with_lock(result_data: Dict, output_json_path: Path) -> bool:
     if result_data is None:
         return False
 
+    output_json_path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = output_json_path.with_suffix('.lock')
 
     # 创建文件锁，超时时间为 60 秒
@@ -507,7 +508,7 @@ async def main():
     # 创建并发任务列表
     tasks = [
         process_single_stock_pair(stock_code, old_path, new_path, long_term_dir, output_json_path, results_cache, semaphore)
-        for stock_code, old_path, new_path in report_pairs if not (stock_code, old_path.name, new_path.name) not in results_cache
+        for stock_code, old_path, new_path in report_pairs if (stock_code, old_path.name, new_path.name) not in results_cache
     ]
     # 并发执行所有任务
     results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -545,7 +546,7 @@ async def main():
             continue
         if result is not None and isinstance(result, dict):
             successful_count += 1
-            results_cache[result['stock_code']] = result
+            results_cache[(result['stock_code'], result['old_report'], result['new_report'])] = result
         else:
             failed_count += 1
 

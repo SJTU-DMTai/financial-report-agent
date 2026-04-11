@@ -291,15 +291,11 @@ class SearchTools:
         company_name: str, 
         keyword1: str, 
         keyword2: str, 
-        max_results: int = 3
+        max_results: int = 10
     ) -> ToolResponse:
-        """进行 Web 搜索并返回搜索结果预览，并保存每一条搜索结果到Material当中，返回每一条Material标识cite_id。
-        - 调用博查(Bocha)搜索引擎，根据给定关键词返回若干条过滤后的搜索结果，适合获取大致信息或者是新闻等。
+        """进行 Web 搜索并返回搜索结果预览，并保存每一条搜索结果到Material当中，返回每一条Material标识cite_id，以及命中关键词的片段。
+        - 调用搜索引擎，根据给定关键词返回若干条搜索结果，适合获取大致信息或者是新闻等。
         - 如果需要完整、可核查的原文内容，或者是结构化数据请调用其他工具。
-        
-        【重要约束说明】：
-        1. 本工具采用精确关键词搜索，严禁输入带有自然语言逻辑的长句（如“请帮我查找XX的YY数据”、“基于上述内容搜索”等）。
-        2. 必须将查询拆分为确切的实体名和业务名词。
         
         Args:
             company_name (str): 
@@ -307,14 +303,14 @@ class SearchTools:
             keyword1 (str): 
                 核心搜索维度/指标。仅保留核心名词（如："营业收入"、"AI存储"、"产能"）。
             keyword2 (str): 
-                补充限定词/次要维度。如有时间约束需求，则输入时间字符串，如无特定需求可传空字符串 ""。不要输入无意义的修饰词。此处分词不得超过2个词。
+                补充限定词/次要维度。如有时间约束需求，则输入时间字符串，如无特定需求可传空字符串 ""。
             max_results (int):
                 返回的最大结果数量。
         """
         try:
-            max_results = int(max_results) # 防止传入字符串如"10"导致搜索失败
+            max_results = int(max_results)
         except (TypeError, ValueError):
-            max_results = 3
+            max_results = 10
 
         # 将三个关键词组合拼接成最终的搜索 Query
         query_parts = [company_name, keyword1, keyword2]
@@ -324,7 +320,7 @@ class SearchTools:
         item_cite_ids: List[str] = []
         try:
             # 1) 调用 Bocha (博查) Web Search API
-            # 注意：请确保环境中已设置 BOCHA_API_KEY，或在此处硬编码您的 Key
+            # 注意：请确保环境中已设置 BOCHA_API_KEY
             import os
             import requests
             import json
@@ -356,41 +352,24 @@ class SearchTools:
                 # 适配博查返回的字段命名
                 title = r.get("name", "") or "无标题"
                 link = r.get("url", "") or ""
-                desc = r.get("summary", "") or r.get("snippet", "") or ""
-
+                summary = r.get("summary", "") or r.get("snippet", "") or ""
+                snippet = r.get("snippet", "") or ""
                 title = re.sub(r"\s+", "", title).replace("　", "")
-                desc = re.sub(r"\s+", "", desc).replace("　", "")
-
+                published_date = r.get("datePublished", "")
                 if not link.startswith("http"):
                     # 非正常链接直接跳过
                     continue
 
-                # 2) 抓取网页 HTML 并抽取文本 + 图片
-                page_text = ""
-                published_date = None
-
-                # 【兜底优化】如果 fetch_page_html 失败或未提取到有效文本，直接使用博查的高质量摘要作为正文
-                if not page_text.strip():
-                    if desc.strip():
-                        page_text = desc
-                    else:
-                        continue # 如果连摘要都没有，跳过
-
-                # 取前 300 字作为备用摘要
-                snippet = page_text.replace("\n", " ")
-                snippet = re.sub(r"\s{2,}", " ", snippet)
-                snippet = snippet[:300] + ("..." if len(snippet) > 300 else "")
+                page_text = summary
 
                 # 暂存候选项，暂不计算分数
                 candidates.append({
                     "title": title,
                     "link": link,
-                    "page_description": desc or snippet, # 优先用博查摘要，没有则用正文截断
+                    "page_description": snippet,
                     "page_text": page_text,
-                    "published_date": published_date or r.get("dateLastCrawled", ""), # 补充博查自带的抓取时间作为备用
+                    "published_date": published_date, 
                 })
-
-            # 如果一个都没通过过滤，就退回到“未找到”
             if not candidates:
                 text = f"[search_engine] 对查询「{query}」未找到足够相关的结果。"
             else:
@@ -442,7 +421,6 @@ class SearchTools:
                 valid_keywords = [k.strip() for k in [company_name, keyword1, keyword2] if k.strip()]
                 # ========================================================================
 
-
                 lines: List[str] = [f"[search_engine] 搜索：{query}", 
                                     "以下为搜索结果预览（每条结果已单独写入 Material）：",
                                     ]
@@ -489,19 +467,19 @@ class SearchTools:
                             #     break
 
                     if matched_contexts:
-                        lines.append("   🎯 页面正文关键词命中上下文:")
+                        lines.append("   页面正文关键词命中上下文:")
                         for idx, ctx in enumerate(matched_contexts):
                             lines.append(f"      片段{idx+1}: {ctx}")
                     else:
                         # 兜底：如果正文中没有匹配到提取词（可能只在标题中），则默认返回开头片段
                         snippet = page_text_clean[:500] + ("......[后续内容已截断]" if len(page_text_clean) > 500 else "")
-                        lines.append(f"   ⚠️ 未在正文中精确命中关键词，页面正文开头摘录: {snippet}")
+                        lines.append(f"   未在正文中精确命中关键词，页面正文开头摘录: {snippet}")
                     
-                    lines.append("   [如果片段信息不足，请单独使用 read_material 工具读取上述 cite_id 获取全文]")
 
                     lines.append("")  # 空行分隔
                     lines.append("")
 
+                lines.append("   [如果片段信息不足，请单独使用 read_material 工具读取上述 cite_id 获取全文，或者 fetch_url_page_text 工具获取根据链接网页全文]")
                 text = "\n".join(lines)
 
         except Exception as e:
@@ -586,16 +564,10 @@ def get_retrieve_fn(short_term:ShortTermMemoryStore, long_term:LongTermMemorySto
 
                 # (A) 搜索引擎：search_engine_*
                 if isinstance(cite_id, str) and cite_id.startswith("search_engine_"):
-                    page_text_preview = ""
-                    if isinstance(content, list) and content:
-                        first = content[0] if isinstance(content[0], dict) else None
-                        if isinstance(first, dict):
-                            page_text = first.get("page_text") or ""
-                            page_text_preview = page_text[:100]
                     preview = short_term.load_material_preview(cite_id=cite_id)
                     if preview:
                         lines.append("    部分内容预览：")
-                        lines.append(f"   {page_text_preview}")
+                        lines.append(f"   {preview}")
 
 
                 # (B) 计算结果：calculate_*
@@ -614,6 +586,7 @@ def get_retrieve_fn(short_term:ShortTermMemoryStore, long_term:LongTermMemorySto
                 # # (C) 表格：非前缀类时，用 m_type==table 给出前几行
                 elif m_type == "table":
                     preview = ""
+                    columns_preview = ""
                     if isinstance(content, pd.DataFrame) and not content.empty:
                         df_preview = content.head(3).copy()
                         MAX_CELL_CHARS = 32
@@ -626,14 +599,15 @@ def get_retrieve_fn(short_term:ShortTermMemoryStore, long_term:LongTermMemorySto
                                     else v
                                 )
                             )
-                        
+                        columns_preview = ', '.join(content.columns)
                         preview = df_preview.to_csv(index=False)
-                        preview = ', '.join(content.columns)
                 
                     lines.append("    列名:")
-                    lines.append(preview)
-                    for ln in preview.splitlines():
-                        lines.append(f"    {ln}")
+                    lines.append(f"    {columns_preview}")
+                    if preview:
+                        lines.append("    前3行预览:")
+                        for ln in preview.splitlines():
+                            lines.append(f"    {ln}")
 
                 lines.append("</material>\n")  # 空行分隔
 
