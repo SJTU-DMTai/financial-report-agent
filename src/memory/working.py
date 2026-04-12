@@ -12,13 +12,15 @@ from typing import List, Tuple, Optional # [修改] 导入 Optional
 @dataclass_json
 @dataclass
 class Evidence:
-    text: str
+    evidence_id: str = None # 例如: "s1_s2_p3_e1"
+    text: str = None
     is_static: bool = False
     value: Optional[str] = None # 存储静态证据的具体值
 
 @dataclass_json
 @dataclass
 class Segment:
+    segment_id: str = None # 例如: "s1_s2_p3"
     finished: bool = False
     topic: str = None
     requirements: str = None
@@ -100,6 +102,10 @@ class Section:
 
     @staticmethod
     def parse(contents: str) -> Segment:
+        contents = contents.strip()
+        if contents == "<skip>true</skip>":
+            return None
+
         keys = ['requirement', 'template', 'evidence', 'topic']
         cnts = [contents.count(f"<{k}>") for k in keys]
         # cnts += [contents.count(f"</{k}>") for k in keys]
@@ -112,7 +118,7 @@ class Section:
         assert len(res) > 0, "Format error. You did not correctly warp template, evidence, requirement, or topic with the corresponding blocks and put them in order. Please Retry."
         evidences_text, template, requirements, topic = [s.strip() for s in res[0]]
         
-        # [新逻辑] 解析带有 is_static 标志的 evidences
+        # 解析带有 is_static 标志的 evidences
         parsed_evidences: List[Evidence] = []
         raw_evidences = evidences_text.replace("\n", "").replace(";", "；").split("；")
         for e_str in raw_evidences:
@@ -141,6 +147,10 @@ class Section:
     
     @staticmethod
     def parse_evidence(contents: str) -> Segment:
+        contents = contents.strip()
+        if contents == "<skip>true</skip>":
+            return None
+
         keys = ['evidence', 'topic']
         cnts = [contents.count(f"<{k}>") for k in keys]
         # cnts += [contents.count(f"</{k}>") for k in keys]
