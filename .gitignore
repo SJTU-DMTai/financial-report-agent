@@ -1,8 +1,5 @@
 ### Python template
 
-# 敏感信息文件，不上传到远程仓库
-config.yaml
-src/utils/instance.py
 
 log*.txt
 logs/*
