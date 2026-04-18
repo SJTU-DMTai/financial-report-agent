@@ -94,6 +94,6 @@ async def structure_score(report: Section) -> Tuple[int, int]:
     scores = await call_chatbot_with_retry(llm_reasoning, formatter, sys_prompt,
                                            f"**待评估的研报大纲:**\n---\n{outline}\n---",
                                            structured_model=StructureScore,)
-    comprehensiveness = scores.get("comprehensiveness")
-    logicality = scores.get("logicality")
+    comprehensiveness = scores.comprehensiveness
+    logicality = scores.logicality
     return (comprehensiveness, logicality)

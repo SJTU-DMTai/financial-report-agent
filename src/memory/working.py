@@ -2,21 +2,22 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from collections import OrderedDict
+from dataclasses import dataclass, field
 from dataclasses_json import dataclass_json
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Optional, Union
 
-@dataclass_json
-@dataclass
-class Segment:
+from pydantic import BaseModel
+
+class Segment(BaseModel):
     finished: bool = False
-    topic: str = None
-    requirements: str = None
-    reference: str = None
-    content: str = None
-    template: str = None
-    evidences: List[str] = None
+    topic: Optional[str] = None
+    requirements: Optional[str] = None
+    reference: Optional[str] = None
+    content: Optional[str] = None
+    template: Optional[str] = None
+    evidences: Optional[List[Union[str, Tuple[str, str]]]] = None
 
     def __str__(self, with_requirements=True, with_reference=False, with_content=True, with_evidence=True):
         ctx = ""
@@ -41,23 +42,27 @@ class Segment:
             )
             ctx += f"\t+ **写作要求**\n{requirements}\n\n"
         if with_evidence and self.evidences is not None:
-            evidence_text = "\n".join(
-                "\t\t- " + e.replace("\n\n", "\n")
-                for e in self.evidences if e
-            )
+            if isinstance(self.evidences, dict):
+                evidence_text = "\n".join(
+                    f"\t\t- {k}：{v}".replace("\n\n", "\n")
+                    for k, v in self.evidences.items() if k
+                )
+            else:
+                evidence_text = "\n".join(
+                    "\t\t- " + (" : ".join(e) if isinstance(e, tuple) else e).replace("\n\n", "\n")
+                    for e in self.evidences if e
+                )
             ctx += f"\t+ **论据材料**\n{evidence_text}\n\n"
 
         return ctx
 
-@dataclass_json
-@dataclass
-class Section:
+class Section(BaseModel):
     section_id: int
     level: int
     title: str
     segments: List[Segment]
     subsections: List[Section]
-    content: str = None
+    content: Optional[str] = None
 
     def read(self, with_requirements=True, with_reference=False, with_content=False, with_evidence=False,
              fold_other=True, fold_all=False, read_subsections=False) -> str:
@@ -89,6 +94,8 @@ class Section:
 
     @staticmethod
     def parse(contents: str) -> Segment:
+        if isinstance(contents, str) and "<skip>true</skip>" in contents.lower():
+            return None
         keys = ['requirement', 'template', 'evidence', 'topic']
         cnts = [contents.count(f"<{k}>") for k in keys]
         # cnts += [contents.count(f"</{k}>") for k in keys]
@@ -119,7 +126,7 @@ class Section:
                 assert c1 == c2 > 0, "Incomplete answer. You must give <evidence>, </evidence>, <topic> and </topic> for each item. Please Retry."
         contents = contents.replace("\r\n", "\n")
         print(contents, flush=True)
-        res = re.findall(r"<evidence>(.+?)(?:</evidence>)?\s*<topic>(.+?)</topic>", contents, re.DOTALL)
+        res = re.findall(r"<evidence>(.+?)(?:</evidence>)?\s*<topic>(.+?)<", contents, re.DOTALL)
         assert len(res) > 0, "Format error. You did not correctly warp evidence or topic with the corresponding blocks and put them in order. Please Retry."
         evidences, topic = [s.strip() for s in res[0]]
         evidences = evidences.replace("\n", "").replace(";", "；").split("；")
