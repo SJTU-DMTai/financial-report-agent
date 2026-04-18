@@ -10,7 +10,11 @@ from typing import List, Tuple, Dict, Any, Union, Optional
 from enum import Enum
 import re
 from datetime import datetime
+from threading import Lock, RLock
 from src.utils.instance import cfg
+
+_REGISTRY_LOCKS: Dict[str, RLock] = {}
+_REGISTRY_LOCKS_GUARD = Lock()
 
 
 class MaterialType(str, Enum):
@@ -62,6 +66,15 @@ class ShortTermMemoryStore:
     def registry_path(self) -> Path:
         return self.material_dir / f"{cfg.llm_name}_registry.json"
 
+    def _get_registry_lock(self) -> RLock:
+        key = str(self.registry_path.resolve())
+        with _REGISTRY_LOCKS_GUARD:
+            lock = _REGISTRY_LOCKS.get(key)
+            if lock is None:
+                lock = RLock()
+                _REGISTRY_LOCKS[key] = lock
+            return lock
+
     def __post_init__(self):
         
         self._registry: Dict[str, MaterialMeta] = {}
@@ -105,18 +118,20 @@ class ShortTermMemoryStore:
     # ---- Registry 读写 ----
 
     def _load_registry(self):
-        if self.registry_path.exists():
-            try:
-                data = json.loads(self.registry_path.read_text(encoding="utf-8"))
-                for key, val in data.items():
-                    val['m_type'] = MaterialType(val['m_type']) # 恢复 Enum
-                    self._registry[key] = MaterialMeta(**val)
-            except:
-                self._registry = {}
+        with self._get_registry_lock():
+            if self.registry_path.exists():
+                try:
+                    data = json.loads(self.registry_path.read_text(encoding="utf-8"))
+                    for key, val in data.items():
+                        val['m_type'] = MaterialType(val['m_type'])  # restore Enum
+                        self._registry[key] = MaterialMeta(**val)
+                except:
+                    self._registry = {}
 
     def _save_registry(self):
-        data = {k: {**asdict(v), 'm_type': v.m_type.value} for k, v in self._registry.items()}
-        self.registry_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        with self._get_registry_lock():
+            data = {k: {**asdict(v), 'm_type': v.m_type.value} for k, v in self._registry.items()}
+            self.registry_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
     def get_material_meta(self, cite_id: str) -> Optional[MaterialMeta]:
         return self._registry.get(cite_id)
@@ -249,53 +264,50 @@ class ShortTermMemoryStore:
         upstream_cite_ids: Optional[List[str]] = None,
     ) -> None:
         self.ensure_dirs()
-        
-        # 简化判断逻辑
-        if isinstance(content, pd.DataFrame):
-            ext, m_type = "csv", MaterialType.TABLE
-            if content.index.name is None:
-                content.index.name = "index"
-            content.to_csv(self.material_dir / f"{cite_id}.csv", index=True)
-        elif isinstance(content, (dict, list)):
-            ext, m_type = "json", MaterialType.JSON
-            (self.material_dir / f"{cite_id}.json").write_text(json.dumps(content, ensure_ascii=False, indent=2), encoding="utf-8")
-        else: # str
-            content = content.replace(r"<br>", " ",)
-            content = content.replace(r"\n ", "\n",)
-            content = content.replace(r"\n\t", "\n",)
-            content = re.sub(r"\t{2,}", "\t", content)
-            content = re.sub(r"\n{3,}", "\n\n", content)
-            content = re.sub(r" {3,}", "  ", content)
-            content = re.sub(r"-{4,}", "---", content)
-            ext = forced_ext or "txt"
-            m_type = MaterialType.TEXT
-            (self.material_dir / f"{cite_id}.{ext}").write_text(str(content), encoding="utf-8")
+        with self._get_registry_lock():
+            # Serialize material file and registry update under the same lock.
+            if isinstance(content, pd.DataFrame):
+                ext, m_type = "csv", MaterialType.TABLE
+                if content.index.name is None:
+                    content.index.name = "index"
+                content.to_csv(self.material_dir / f"{cite_id}.csv", index=True)
+            elif isinstance(content, (dict, list)):
+                ext, m_type = "json", MaterialType.JSON
+                (self.material_dir / f"{cite_id}.json").write_text(json.dumps(content, ensure_ascii=False, indent=2), encoding="utf-8")
+            else: # str
+                content = content.replace(r"<br>", " ",)
+                content = content.replace(r"\n ", "\n",)
+                content = content.replace(r"\n\t", "\n",)
+                content = re.sub(r"\t{2,}", "\t", content)
+                content = re.sub(r"\n{3,}", "\n\n", content)
+                content = re.sub(r" {3,}", "  ", content)
+                content = re.sub(r"-{4,}", "---", content)
+                ext = forced_ext or "txt"
+                m_type = MaterialType.TEXT
+                (self.material_dir / f"{cite_id}.{ext}").write_text(str(content), encoding="utf-8")
 
-        entity = entity if entity is not None else {"name": "", "code": ""}
-        time = time if time is not None else {}
-        upstream_cite_ids = upstream_cite_ids or []
-        upstream_cite_ids = [str(item).strip() for item in upstream_cite_ids if str(item).strip()]
-        
-        _DESC_SEP_RE = re.compile(r"[，,。.;；:：/\\|()（）\[\]{}<>《》“”\"'!?！？\t\r\n]+")
-        _DESC_WS_RE = re.compile(r"\s+")
+            entity = entity if entity is not None else {"name": "", "code": ""}
+            time = time if time is not None else {}
+            upstream_cite_ids = upstream_cite_ids or []
+            upstream_cite_ids = [str(item).strip() for item in upstream_cite_ids if str(item).strip()]
 
-        description = (description or "").strip()
-        # description = _DESC_SEP_RE.sub(" ", description)
-        description = _DESC_WS_RE.sub(" ", description)
-        description = description.lower()
+            _DESC_WS_RE = re.compile(r"\s+")
 
+            description = (description or "").strip()
+            description = _DESC_WS_RE.sub(" ", description)
+            description = description.lower()
 
-        self._registry[cite_id] = MaterialMeta(
-            cite_id=cite_id,
-            m_type=m_type,
-            filename=f"{cite_id}.{ext}",
-            entity=entity,
-            time=time,
-            description=description,
-            source=source,
-            upstream_cite_ids=upstream_cite_ids,
-        )
-        self._save_registry()
+            self._registry[cite_id] = MaterialMeta(
+                cite_id=cite_id,
+                m_type=m_type,
+                filename=f"{cite_id}.{ext}",
+                entity=entity,
+                time=time,
+                description=description,
+                source=source,
+                upstream_cite_ids=upstream_cite_ids,
+            )
+            self._save_registry()
 
     def load_material(self, cite_id: str) -> Union[pd.DataFrame, dict, str, None]:
         meta = self._registry.get(cite_id)

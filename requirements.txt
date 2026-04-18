@@ -1,5 +1,6 @@
 agentscope==1.0.16
 akshare==1.17.85
+baostock==0.8.9
 beautifulsoup4==4.14.3
 dataclasses-json==0.6.7
 ddgs==9.9.1
