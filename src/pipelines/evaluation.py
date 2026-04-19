@@ -67,12 +67,8 @@ class BenchmarkResult(BaseModel):
 
 def _serialize_benchmark_result(result: BenchmarkResult) -> Dict:
     """将嵌套的Pydantic ContentScore转换为可JSON序列化的字典。"""
-    data = asdict(result)
-    if hasattr(result.content, "model_dump"):
-        data["content"] = result.content.model_dump()
-    else:
-        data["content"] = result.content.dict()
-    return data
+    if isinstance(result, dict): return result
+    return result.model_dump()
 
 
 def _build_summary(

@@ -509,8 +509,8 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
     original_stderr = sys.stderr
     log_file = open(log_filename, "w", encoding="utf-8")
     set_verifier_trace_path(PROJECT_ROOT / verifier_trace_filename)
-    sys.stdout = log_file
-    sys.stderr = log_file
+    # sys.stdout = log_file
+    # sys.stderr = log_file
 
     try:
         cfg = config.Config()
@@ -634,7 +634,7 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
         try:
             log_file.flush()
         finally:
-            sys.stdout = original_stdout
-            sys.stderr = original_stderr
+            # sys.stdout = original_stdout
+            # sys.stderr = original_stderr
             log_file.close()
             set_verifier_trace_path(None)
