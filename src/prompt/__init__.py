@@ -661,7 +661,7 @@ suggestion 必须为字符串，应包含以下要素：
 - 无问题 → []
 - 不要解释
 - 不要输出多余字段
-- 你必须输出合法 JSON，不允许任何解释性文字
+- 你必须输出合法 JSON数组，不允许任何解释性文字
 """
 
 prompt_dict["verifier_temporal_prompt"] = """
@@ -692,7 +692,7 @@ prompt_dict["verifier_temporal_prompt"] = """
    - 不允许扩大或缩小时间范围
 
 --------------------------------
-【重点检查项】
+【重点检查项和type输出】
 
 - time_mismatch：时间表达不一致
 - event_time_conflict：事件与时间不匹配
@@ -742,7 +742,7 @@ suggestion 必须为字符串，应包含以下要素：
 - 如果无问题，返回 []
 - 不要解释
 - 不要输出多余字段
-- 你必须输出合法 JSON，不允许任何解释性文字
+- 你必须输出合法 JSON数组，不允许任何解释性文字
 """
 
 prompt_dict["claim_extract_sys_prompt"] = """

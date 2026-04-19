@@ -1,0 +1,197 @@
+# config.yaml
+models:
+  default: qwen3.5-397b-a17b   # 默认使用的模型 id
+  vlm_default: grok
+
+  qwen3.5-Flash:
+    provider: openrouter
+    model_name: qwen/qwen3.5-flash-02-23
+    base_url_env: https://openrouter.ai/api/v1
+    stream: false
+
+  qwen3.5-397b-a17b:
+    provider: openrouter
+    model_name: qwen/qwen3.5-397b-a17b
+    base_url_env: https://openrouter.ai/api/v1
+    stream: false
+
+  mimo_openrouter:
+    provider: openrouter
+    model_name: xiaomi/mimo-v2-flash:free
+    base_url_env: https://openrouter.ai/api/v1
+    stream: false
+
+  qwen3.6:
+    provider: openrouter
+    model_name: qwen/qwen3.6-plus:free
+    reasoning_only: true
+    base_url_env: https://openrouter.ai/api/v1
+    stream: false
+
+  mimo:
+    provider: xiaomi
+    model_name: mimo-v2-flash
+    base_url_env: https://api.xiaomimimo.com/v1
+    stream: false
+
+  devstral:
+    provider: openrouter
+    model_name: mistralai/devstral-2512:free
+    base_url_env: https://openrouter.ai/api/v1
+    stream: false
+
+  deepseek-v3.1-nex-n1:
+    provider: openrouter
+    model_name: nex-agi/deepseek-v3.1-nex-n1:free
+    base_url_env: https://openrouter.ai/api/v1
+    stream: false
+
+  qwen3-max:
+    provider: openrouter
+    model_name: qwen/qwen3-max
+    base_url_env: https://openrouter.ai/api/v1
+    stream: false
+
+  qwen3-235b-a22b:
+    provider: openrouter
+    model_name: qwen/qwen3-235b-a22b-thinking-2507
+    base_url_env: https://openrouter.ai/api/v1
+    stream: false
+
+  qwen3-4b:
+    provider: openrouter
+    model_name: qwen/qwen3-4b:free
+    base_url_env: https://openrouter.ai/api/v1
+    stream: false
+
+  qwen3-32b:
+    provider: openrouter
+    model_name: qwen/qwen3-32b
+    base_url_env: https://openrouter.ai/api/v1
+    stream: false
+    temperature: 0.5
+    top_k: 20
+
+  qwen3-235b-thinking:
+    provider: openrouter
+    model_name: qwen/qwen3-235b-a22b-thinking-2507
+    non_reasoning_model_name: qwen/qwen3-235b-a22b-instruct-2507
+    base_url_env: https://openrouter.ai/api/v1
+    stream: false
+
+  qwen3-235b-instruct:
+    provider: openrouter
+    model_name: qwen/qwen3-235b-a22b-instruct-2507
+    base_url_env: https://openrouter.ai/api/v1
+    stream: false
+
+  ds-v3.2:
+    provider: openrouter
+    model_name: deepseek/deepseek-v3.2
+    base_url_env: https://openrouter.ai/api/v1
+    stream: false
+
+  qwen-turbo:
+    provider: openrouter
+    model_name: qwen/qwen-turbo
+    base_url_env: https://openrouter.ai/api/v1
+    stream: false
+
+  grok:
+    provider: openrouter
+    model_name: x-ai/grok-4.1-fast
+    base_url_env: https://openrouter.ai/api/v1
+    stream: false
+
+  grok4:
+    provider: openrouter
+    model_name: x-ai/grok-4-fast
+    base_url_env: https://openrouter.ai/api/v1
+    stream: false
+
+  deepseekv3.2:
+    provider: modelscope
+    model_name: deepseek-ai/DeepSeek-V3.2
+    base_url_env: https://api-inference.modelscope.cn/v1
+    stream: false
+
+  deepseekv3.1:
+    provider: modelscope
+    model_name: deepseek-ai/DeepSeek-V3.1
+    base_url_env: https://api-inference.modelscope.cn/v1
+    stream: false
+
+  qwen3max_dashscope:
+    provider: dashscope
+    model_name: qwen3-max
+    stream: false
+
+  qwenplus_dashscope:
+    provider: dashscope
+    model_name: qwen-plus
+    stream: false
+
+  qwenflash_dashscope:
+    provider: dashscope
+    model_name: qwen-flash
+    stream: false
+
+  doubao_ark:
+    provider: ark
+    model_name: ep-20250904234628-hj9k8
+    base_url_env: https://ark-ap-southeast.byteintl.net/api/v3
+    stream: false
+
+  deepseek-v3.2:
+    provider: ark
+    model_name: ep-20260212213128-4kwzl
+    base_url_env: https://ark-ap-southeast.byteintl.net/api/v3
+    stream: false
+    temperature: 0.5
+
+  qwen3.5:
+    provider: openrouter
+    model_name: qwen/qwen3.5-397b-a17b
+    base_url_env: https://openrouter.ai/api/v1
+    stream: false
+    temperature: 0.5
+    top_k: 20
+
+  qwen3.5-27b:
+    provider: openrouter
+    model_name: qwen/qwen3.5-27b
+    base_url_env: https://openrouter.ai/api/v1
+    stream: false
+    temperature: 0.5
+    top_k: 20
+
+  qwen3.5-flash:
+    provider: openrouter
+    model_name: qwen/qwen3.5-flash-02-23
+    base_url_env: https://openrouter.ai/api/v1
+    stream: false
+    temperature: 0.5
+    top_k: 20
+
+  kalm-qwen3.5-flash:
+    provider: kalm
+    model_name: 18955
+    base_url_env: http://mmdcadamsminiserverproxy.office.polaris/service/8907/v1
+    stream: false
+    temperature: 0.5
+    top_k: 20
+
+pdf_style:
+  base_color: "#1F4E79"
+  body_font_path: "C:/Windows/Fonts/msyh.ttc"
+  heading_font_path: "C:/Windows/Fonts/msyh.ttc"
+  mono_font_path: "C:/Windows/Fonts/consola.ttf"
+
+
+verify_config:
+  max_verify_rounds: 2
+  enable_multi_source_verification: True
+
+wkhtmltopdf_path:
+  path: /usr/local/bin/wkhtmltopdf
+

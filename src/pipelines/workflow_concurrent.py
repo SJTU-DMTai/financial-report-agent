@@ -45,6 +45,9 @@ from src.utils.multi_types_verification import (
     SegmentVerifier,
     append_verifier_trace,
     set_verifier_trace_path,
+    evaluate_claims,
+    compute_segment_report,
+    format_report_for_writer,
 )
 from src.utils.local_file import STOCK_REPORT_PATHS
 from src.utils.task_date import normalize_compact_date
@@ -277,97 +280,108 @@ async def process_single_segment(segment: Segment,
 
 
         if multi_source_verification_enabled:
+            prev_priority_ids = None
+            prev_score = None
 
-            prev_issue_set = set()
             for round_idx in range(max_verify_rounds):
                 current_text = segment.content
-
-                print(
-                    f"[Verifier Loop] round={round_idx + 1}/{max_verify_rounds} "
-                    f"topic={segment.topic}",
-                    flush=True,
-                )
+                print(f"[Verifier Loop] round={round_idx + 1}/{max_verify_rounds} topic={segment.topic}", flush=True)
                 print("[Verifier Checked Text]", flush=True)
                 print(current_text, flush=True)
-                verify_issues = await verifier.verify(segment.content)
-                # 过滤严重问题
-                verify_issues = [
-                    iss for iss in verify_issues
-                    if iss.severity in ("critical", "major")
-                ]
-                print(
-                    f"[Verifier Loop] major_or_critical_issues={len(verify_issues)}",
-                    flush=True,
-                )
-                if not verify_issues:
+
+                # 获取 claims 和 issues
+                claims, all_issues = await verifier.verify_with_claims(segment.content)
+                if not claims:
+                    print("[Verifier Loop] No claims extracted, stop")
+                    break
+
+                # 生成 claim 级评估报告
+                claim_evals = evaluate_claims(claims, all_issues)
+                report = compute_segment_report(claim_evals, top_k=5)
+                print(f"[Verifier Loop] segment_score={report.segment_score}, passed={report.passed}, bad_claims={report.bad_claims_count}", flush=True)
+
+                # 3. 动态调整 top_k（基于当前 bad_claims_count）
+                top_k = min(5, max(2, report.bad_claims_count))
+                if top_k != 5:
+                    report = compute_segment_report(claim_evals, top_k=top_k)
+
+                 # 4. 收敛检测（使用调整后的报告）
+                current_priority_ids = {ce.claim_id for ce in report.priority_claims}
+                same_priority = (prev_priority_ids is not None and current_priority_ids == prev_priority_ids)
+                small_improve = (prev_score is not None and (report.segment_score - prev_score) < 5)
+
+                if same_priority and small_improve:
+                    print(f"[Verifier Loop] Early stop: priority unchanged and score improvement <5 ({prev_score} -> {report.segment_score})", flush=True)
+                    break
+
+                prev_priority_ids = current_priority_ids
+                prev_score = report.segment_score
+
+                # ---------- 5. 停止条件----------
+                # 分数 >= 80 视为高质量，直接通过
+                if report.segment_score >= 80:
+                    print(f"[Verifier Loop] High quality (score={report.segment_score}) → stop", flush=True)
                     await append_verifier_trace(
                         topic=segment.topic,
                         round_idx=round_idx + 1,
                         checked_text=current_text,
                         issue_count=0,
-                        status="passed",
+                        status="passed_high_score",
+                        score=report.segment_score,
+                        star_rating=report.star_rating,
+                        passed=True,
+                        priority_claims_count=0,
                     )
                     break
-                # # 收敛检测
-                # current_set = {
-                #     (iss.type, iss.description)
-                #     for iss in verify_issues
-                # }
 
-                # if current_set == prev_issue_set:
-                #     break
-                # prev_issue_set = current_set
 
-                # 格式化
-                def format_issues(issues):
-                    lines = []
-                    for i, iss in enumerate(issues[:8], 1):
-                        lines.append(
-                            f"{i}. [{iss.severity.upper()}] {iss.description}\n"
-                            f"   建议: {iss.suggestion}"
-                            f"   证据: {iss.evidence}"
-                        )
-                    return "\n\n".join(lines)
-
-                verify_feedback = format_issues(verify_issues)
-                print(
-                    f"[Verifier Loop] feedback_chars={len(verify_feedback)}",
-                    flush=True,
-                )
+                verify_feedback = format_report_for_writer(report)
+                print(f"[Verifier Loop] feedback_chars={len(verify_feedback)}", flush=True)
                 print("[Verifier Feedback To Writer]", flush=True)
                 print(verify_feedback, flush=True)
 
-                # token 控制
-                verify_feedback = verify_feedback[:1500]
-
-                # 生成 rewrite prompt
+                # ---------- 5. Writer 改写 ----------
                 writer_input = Msg(
                     name="user",
                     content=(
-                        "以下是对你当前段落的事实核验问题，请你直接修改正文：\n\n"
+                        "以下是你当前段落的**评估报告**。请**优先重写报告中列出的 Priority Claims**，一次性修正它们的所有问题。\n\n"
                         f"{verify_feedback}\n\n"
                         "要求：\n"
-                        "1. 保留可被 cite_id 支持的内容\n"
-                        "2. 删除或降级无法验证的断言\n"
-                        "3. 必须使用已有 cite_id\n"
-                        "4. 禁止新增未验证数字\n"
-                        "5. 输出的段落正文使用<content>和</content>包裹，其中不要包含额外说明"
+                        "1. 对每个 Priority Claim，根据其「问题汇总」和「修改建议」整体重写该句子。\n"
+                        "2. 其他未列出的声明可保持不变或微调。\n"
+                        "3. 保留可被 cite_id 支持的内容，删除无法验证的断言。\n"
+                        "4. 必须使用已有 cite_id，禁止新增未验证数字。\n"
+                        "5. 输出的段落正文使用 <content> 和 </content> 包裹，不要包含额外说明。"
                     ),
                     role="user",
                 )
 
                 draft_msg = await call_agent_with_retry(writer, writer_input)
+                new_content = extract_writer_content(draft_msg.get_text_content())
 
-                segment.content = extract_writer_content(draft_msg.get_text_content())
+                # ---------- 6. 检测 rewrite 无变化 ----------
+                if new_content.strip() == current_text.strip():
+                    print("[Verifier Loop] Early stop: rewrite produced no change", flush=True)
+                    break
+                segment.content = new_content
+
                 print("[Writer Rewritten After Verifier]", flush=True)
                 print(segment.content, flush=True)
+
+                # ---------- 7. Trace 记录 ----------
+                priority_issue_count = sum(len(ce.issues) for ce in report.priority_claims)
                 await append_verifier_trace(
                     topic=segment.topic,
                     round_idx=round_idx + 1,
                     checked_text=current_text,
                     verify_feedback=verify_feedback,
                     rewritten_text=segment.content,
-                    issue_count=len(verify_issues),
+                    issue_count=priority_issue_count,
+                    status=f"score={report.segment_score}" if report.segment_score < 75 else "passed",
+                    score=report.segment_score,
+                    star_rating=report.star_rating,
+                    passed=report.passed,
+                    priority_claims_count=len(report.priority_claims),
                 )
 
         await writer.memory.clear()
@@ -481,7 +495,7 @@ async def process_section_concurrently(section: Section, parent_id, task_desc, d
     # 6. 保存中间结果 (可选，防止崩溃全丢)
     # 注意：并发写入文件可能冲突，这里简单处理，实际生产建议用单独的 save 协程或锁
     async with SAVE_LOCK:
-        (output_pth / f"{stock_symbol}_{cur_date}.json").write_text(manuscript_root.model_dump_json(ensure_ascii=False) ,encoding="utf-8")
+        (output_pth / f"{stock_symbol}_{cur_date}.json").write_text(manuscript_root.to_json(ensure_ascii=False) ,encoding="utf-8")
 
 
 async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
@@ -509,8 +523,8 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
     original_stderr = sys.stderr
     log_file = open(log_filename, "w", encoding="utf-8")
     set_verifier_trace_path(PROJECT_ROOT / verifier_trace_filename)
-    # sys.stdout = log_file
-    # sys.stderr = log_file
+    sys.stdout = log_file
+    sys.stderr = log_file
 
     try:
         cfg = config.Config()
@@ -523,6 +537,7 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
         short_term = ShortTermMemoryStore(
             base_dir=short_term_dir,
         )
+
         if demo_pdf_path is None:
             demo_pdf_path = STOCK_REPORT_PATHS[stock_symbol][-1]
         demo_date = demo_pdf_path.name.split("_")[1]
@@ -634,7 +649,7 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
         try:
             log_file.flush()
         finally:
-            # sys.stdout = original_stdout
-            # sys.stderr = original_stderr
+            sys.stdout = original_stdout
+            sys.stderr = original_stderr
             log_file.close()
             set_verifier_trace_path(None)
