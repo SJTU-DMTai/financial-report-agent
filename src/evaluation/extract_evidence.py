@@ -1,23 +1,54 @@
 import re
+import math
 import traceback
+import tempfile
 from pathlib import Path
+from datetime import datetime, timedelta
 
 import json
+import numpy as np
+import pandas as pd
 from typing import List, Dict, Tuple, Optional
 from collections import defaultdict
 import asyncio
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from rapidfuzz import fuzz
+from semhash import SemHash
 from filelock import FileLock
 
 from src.pipelines.planning import process_pdf_to_outline
 from src.memory.working import Section
 from src.utils.call_with_retry import call_chatbot_with_retry
 from src.utils.local_file import DEMO_DIR
-from src.utils.instance import llm_reasoning, llm_instruct, formatter, cfg
+from src.utils.instance import llm_reasoning, llm_instruct, formatter, cfg, create_emb_model
+from src.utils.retrieve_in_memory import _tokenize_for_bm25, _bm25_scores
 
 # 最大并发数限制
 MAX_CONCURRENT = 8
+
+# ===================== 股票代码 -> 公司名称 查询 =====================
+
+_code_name_df: Optional[pd.DataFrame] = None
+
+
+def _load_code_name_df() -> pd.DataFrame:
+    """延迟加载 a_share_code_name.csv，返回 DataFrame。"""
+    global _code_name_df
+    if _code_name_df is None:
+        csv_path = Path(__file__).resolve().parent.parent.parent / "data" / "memory" / "long_term" / "a_share_code_name.csv"
+        if csv_path.exists():
+            _code_name_df = pd.read_csv(csv_path, dtype=str)
+        else:
+            _code_name_df = pd.DataFrame(columns=["code", "name"])
+    return _code_name_df
+
+
+def get_entity_name_by_code(stock_code: str) -> str:
+    """根据股票代码查找公司名称，找不到则返回空字符串。"""
+    code = str(stock_code).zfill(6)
+    df = _load_code_name_df()
+    hit = df[df["code"] == code]
+    return "" if hit.empty else hit.iloc[0]["name"]
 
 
 def extract_text_from_content(content) -> str:
@@ -40,163 +71,687 @@ async def get_content_from_response(response_msg) -> str:
     except TypeError: pass
     return full_content.strip()
 
-def get_all_evidences_from_section(section: Section) -> List[str]:
-    """递归地从Section对象中收集所有论据文本。"""
+def get_all_evidences_from_section(section: Section) -> List[Tuple[str, str]]:
+    """递归地从Section对象中收集所有论据。
+
+    evidences 是 OrderedDict[论据, 具体事实]，返回 (论据, 具体事实) 元组列表。
+
+    Returns:
+        List of (key, value) tuples.
+    """
     evidences = []
     if section.segments:
         for segment in section.segments:
             if segment.evidences:
-                evidences.extend([e for e in segment.evidences if e and e.strip()])
+                if isinstance(segment.evidences, dict):
+                    for k, v in segment.evidences.items():
+                        if k and k.strip():
+                            evidences.append((k.strip(), v.strip() if v else ""))
+                else:
+                    evidences += segment.evidences
     if section.subsections:
         for subsection in section.subsections:
-            evidences.extend(get_all_evidences_from_section(subsection))
+            if '摘要' not in subsection.title:
+                evidences.extend(get_all_evidences_from_section(subsection))
     return evidences
 
-async def extract_unique_evidences_from_pdf(pdf_path: Path, save_dir: Path, only_evidence: bool = False) -> List[str]:
+async def extract_unique_evidences_from_pdf(pdf_path: Path, save_dir: Path, only_evidence: bool = False, stock_entity_name: str = "") -> List[Tuple[str, str]]:
     pdf_stem = pdf_path.stem  # 去掉.pdf后缀
     evidence_filename = f"{pdf_stem}_evidences.json"
-    evidence_path = save_dir / evidence_filename
+    evidence_path = save_dir / cfg.llm_name / evidence_filename
     # 尝试直接读取
     if evidence_path.exists():
         print(f"    - 检测到已有的evidences，加载: {evidence_filename}")
         evidences = json.loads(evidence_path.read_text(encoding="utf-8"))
         return evidences
 
+    # 从文件名中提取研报写作日期
+    report_date = _parse_report_date_from_path(pdf_path)
+    if report_date:
+        print(f"  - 研报写作日期: {report_date.strftime('%Y-%m-%d')}", flush=True)
+
     print(f"\n-> 开始提取并清洗文件: {pdf_path.name}", flush=True)
     manuscript = await process_pdf_to_outline(pdf_path, save_dir, llm_reasoning, llm_instruct, formatter, only_evidence)
     print(f"  - 从 {pdf_path.name} 的结构中提取论据...")
-    return await extract_unique_evidences(manuscript, evidence_path)
+    return await extract_unique_evidences(manuscript, evidence_path, stock_entity_name=stock_entity_name, report_date=report_date)
 
-async def extract_unique_evidences(manuscript: Section, evidence_path: Path) -> List[str]:
+
+async def extract_unique_evidences(manuscript: Section, evidence_path: Path, stock_entity_name: str = "", report_date: Optional[datetime] = None) -> List[Tuple[str, str]]:
+    if evidence_path.exists():
+        return json.loads(evidence_path.read_text(encoding="utf-8"))
     evidences = get_all_evidences_from_section(manuscript)
-    print(f"  - 对 {len(evidences)} 条原始论据进行语义去重...")
+    print(f"  - 对 {len(evidences)} 条原始论据进行语义去重...", flush=True)
 
-    evidences = await drop_duplicate_evidences(evidences)
+    evidences = await drop_duplicate_evidences_by_similarity(evidences, stock_entity_name=stock_entity_name, report_date=report_date)
     # 保存到long_term_dir
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
     evidence_path.write_text(
         json.dumps(evidences, ensure_ascii=False, indent=2),
         encoding="utf-8"
     )
-    print(f"    -> Evidence已保存到: {evidence_path}")
+    print(f"    -> Evidence已保存到: {evidence_path}", flush=True)
     return evidences
 
-async def drop_duplicate_evidences(evidences: List[str]) -> List[str]:
-    sys_prompt = f"""你是一名专业的金融分析助手，擅长数据清洗和信息摘要。
-你的任务是对以下从一份研报大纲中提取的“论据（evidences）”列表进行去重。列表中的许多条目可能措辞不同，但表达的是相同或相似的含义。每行是带有id的一条论据。
+def _bm25_similarity_matrix(
+    texts_a: List[str],
+    texts_b: List[str],
+) -> np.ndarray:
+    """以 texts_a 中的每条文本作为 query，对 texts_b 计算 BM25 分数矩阵 (M, N)。
 
-### 流程
-遍历每一个序号对应的论据，然后检查所有论据，找到所有含义相同的论据，该组论据对应的一或多个id用空格隔开，单独放在一行。然后遍历下一个论据，如果该论据已在上文中被划分到某组，则跳过。
-最后输出所有组用<ANSWER>和</ANSWER>包裹住，每组一行，只包含数字id和空格。
+    分数会被 min-max 归一化到 [0, 1] 区间以便与 cosine 相似度混合。
+    """
+    tokens_a = [_tokenize_for_bm25(t) for t in texts_a]
+    tokens_b = [_tokenize_for_bm25(t) for t in texts_b]
 
-""" + """
-### 要求
-1. 完整遍历所有论据，确保没有遗漏。
-2. 忽视论据提及的数据来源，忽视每条论据涉及“查询”等动词，请关注核心实体或指标。如果有时间范围约束，则不同时间的实体属于不同的论据，不应去重。
-3. 如果某条论据本身就是独特的，没有与之重复的项，那么必须将它包含在最终的列表中。
-""" if len(evidences) < 300 else f"""
-### 要求
-1. 遍历每条论据。
-2. 忽视论据提及的数据来源，忽视每条论据涉及“查询”等动词，请关注核心实体或指标。如果有时间范围约束，则不同时间的实体属于不同的论据，不应去重。
-3. 如果某条论据本身就是独特的，没有与之重复的项，那么跳过，不必输出该论据id。（即每一组论据至少有两个不同的id）
-""" + """
-#### 输出示例
-<ANSWER>
-1 3 6
-2 6 19
-</ANSWER>
-"""
-    _evidences = [e.replace("查询", "").replace("确认", "").replace("计算", "")
-                  .replace("获取", "") for e in evidences]
-    evidences = []
-    for e in _evidences:
-        if e not in evidences:
-            evidences.append(e)
-    numbered_evidences = "\n".join(f"{i+1} {e}" for i, e in enumerate(evidences))
-    def _parse(response: str) -> List[str]:
-        response = re.search(r"<ANSWER>(.*?)</ANSWER>", response, re.DOTALL)
-        assert response is not None, "没有找到<ANSWER>标签包裹的内容。"
-        response = response.group(1).strip()
-        groups = []
-        seen_ids = set()
-        for line in response.strip().splitlines():
-            ids = line.strip().split()
-            for _id in ids: assert re.match(r"^\d+$", _id), f"输出格式错误：输出了数字id之外的其他字符: {_id}"
-            unique_ids = [int(id_) for id_ in ids if id_ not in seen_ids]
-            if unique_ids:
-                groups.append(unique_ids)
-                seen_ids.update(unique_ids)
-        unseen_ids = set(range(1, 1 + len(evidences))) - seen_ids
-        unique_evidences = []
-        for group in groups:
-            first_id = int(group[0]) - 1
-            unique_evidences.append(list(evidences)[first_id])
-        for unseen_id in unseen_ids:
-            first_id = int(unseen_id) - 1
-            unique_evidences.append(list(evidences)[first_id])
-        return unique_evidences
-    return await call_chatbot_with_retry(
-        llm_instruct, formatter,
-        sys_prompt, f"需要处理的论据列表如下：\n---\n{numbered_evidences}\n---",
-        hook=_parse, handle_hook_exceptions=(AssertionError, TypeError), max_retries=3,
-    )
+    M, N = len(texts_a), len(texts_b)
+    matrix = np.zeros((M, N), dtype=np.float32)
+
+    for i, q_tokens in enumerate(tokens_a):
+        scores = _bm25_scores(q_tokens, tokens_b)
+        matrix[i] = scores
+
+    # min-max 归一化（整体）
+    mn, mx = matrix.min(), matrix.max()
+    if mx - mn > 1e-8:
+        matrix = (matrix - mn) / (mx - mn)
+    else:
+        matrix[:] = 0.0
+    return matrix
+
+# ===================== 时间解析工具函数 =====================
+
+def _parse_report_date_from_path(pdf_path: Path) -> Optional[datetime]:
+    """从 PDF 文件名中提取研报写作日期。
+
+    文件名格式: {stock_code}_{YYYY-MM-DD}_xxx.pdf
+
+    Args:
+        pdf_path: PDF 文件路径。
+
+    Returns:
+        datetime 对象，解析失败返回 None。
+    """
+    parts = pdf_path.stem.split("_")
+    if len(parts) >= 2:
+        try:
+            return datetime.strptime(parts[1], "%Y-%m-%d")
+        except ValueError:
+            pass
+    return None
 
 
-async def find_best_matches(source_texts: List[str], texts_to_match: List[str]) -> List[Tuple[str, str]]:
-    # 为每个列表的项加上唯一ID
-    texts_to_match_formatted = "\n".join(f"  R_{i + 1}: {text}" for i, text in enumerate(texts_to_match))
-    source_texts_formatted = "\n".join(f"  S_{i + 1}: {text}" for i, text in enumerate(source_texts))
+# 相对时间词 -> (年偏移, 季度/半年/月标识) 的映射规则
+_RELATIVE_TIME_PATTERNS: List[Tuple[str, callable]] = []
 
-    prompt = f"""你是一个精准的语义匹配引擎。你的任务是从“源列表(S)”中，为“待匹配列表(R)”里的每一项找到与之**完全匹配或语义上非常相似**的匹配项。
 
-## 任务指令
-1.  仔细阅读下面提供的两个列表：待匹配列表(R)和源列表(S)。
-2.  对于 R 中的**每一项**（如 R_500），请在 S 中找到与之含义最相同、同时约束条件（例如时间）相同的匹配项（如 S_600）。
-    -   如果对于某个 R_ID，在 S 列表中找不到任何合适的匹配项，请{'设为 NONE' if len(source_texts) + len(texts_to_match) < 500 else '跳过，不输出该项'}。
-    -   如果存在多个合适的匹配项，选最匹配的一个，不要输出多个S_。
-3.  你的答案必须包裹在<ANSWER>和</ANSWER>内。其中每一行是待匹配ID和找到的源ID，逗号隔开。
+def _resolve_relative_time(text: str, report_date: datetime) -> str:
+    """将论据文本中的相对时间词转换为具体的时间标签。
 
-### 输出示例
-<ANSWER>
-R_1, S_5
-R_3, S_4
-R_6, S_2
-</ANSWER>
-"""
-    def _parse(response: str) -> Dict[str, str]:
-        match_map_by_id = {}
-        answer_match = re.search(r"<ANSWER>(.+)</?ANSWER>", response, re.DOTALL)
-        assert answer_match is not None, "输出格式错误：未找到<ANSWER>和</ANSWER>标签包裹的内容。"
-        answer_content = answer_match.group(1).strip().replace('-', '_')
-        for line in answer_content.splitlines():
-            if "NONE" in line or "无" in line:
-                continue
-            res = re.search(r"(R_\d+).+(S_\d+)", line.strip())
-            assert res is not None, f"输出格式错误。错误行: {line}"
-            r_id, s_id = res.group(1), res.group(2)
-            match_map_by_id[r_id] = s_id
-        return match_map_by_id
-    match_map_by_id = await call_chatbot_with_retry(
-        llm_instruct, formatter,
-        prompt, f"**待匹配列表(R):**\n---\n{texts_to_match_formatted}\n---\n\n"
-                f"**源列表(S):**\n---\n{source_texts_formatted}\n---\n\n",
-        hook=_parse, handle_hook_exceptions=(AssertionError, ), max_retries=3,
-    )
-    evidence_pairs = []
-    for i, r_text in enumerate(texts_to_match):
-        r_id = f"R_{i + 1}"
-        s_id = match_map_by_id.get(r_id)
+    支持的相对时间词包括：
+    - 季度类：本季度、上一季度、上季度、下一季度、前N个季度
+    - 年度类：本年度、上年度、去年、前年、今年、明年
+    - 半年类：上半年、下半年
+    - 月份类：本月、上月、上个月
+    - 模糊类：近N年、近N个季度、未来N年
 
-        if s_id and s_id != "NONE":
+    Args:
+        text: 论据文本。
+        report_date: 研报写作日期。
+
+    Returns:
+        替换后的文本，相对时间词被替换为具体时间（如 "2025年Q2"）。
+    """
+    year = report_date.year
+    month = report_date.month
+    quarter = (month - 1) // 3 + 1  # 1-4
+
+    def _quarter_str(y, q):
+        """生成季度字符串，处理跨年。"""
+        while q > 4:
+            y += 1
+            q -= 4
+        while q < 1:
+            y -= 1
+            q += 4
+        return f"{y}年Q{q}"
+
+    def _half_year_str(y, half):
+        return f"{y}年{'上' if half == 1 else '下'}半年"
+
+    result = text
+
+    # === 季度类 ===
+    # "前N个季度" / "近N个季度"
+    m = re.search(r'[前近](\d+)个?季度', result)
+    if m:
+        n = int(m.group(1))
+        start_q_label = _quarter_str(year, quarter - n)
+        end_q_label = _quarter_str(year, quarter - 1)
+        result = result[:m.start()] + f"{start_q_label}至{end_q_label}" + result[m.end():]
+
+    # "未来N个季度"
+    m = re.search(r'未来(\d+)个?季度', result)
+    if m:
+        n = int(m.group(1))
+        start_q_label = _quarter_str(year, quarter + 1)
+        end_q_label = _quarter_str(year, quarter + n)
+        result = result[:m.start()] + f"{start_q_label}至{end_q_label}" + result[m.end():]
+
+    # "下一季度" / "下季度"
+    result = re.sub(r'下一?季度', _quarter_str(year, quarter + 1), result)
+    # "上一季度" / "上季度"
+    result = re.sub(r'上一?季度', _quarter_str(year, quarter - 1), result)
+    # "本季度" / "当季度"
+    result = re.sub(r'[本当]季度', _quarter_str(year, quarter), result)
+
+    # === 年度类 ===
+    # "近N年" / "过去N年"
+    m = re.search(r'[近过去](\d+)年', result)
+    if m:
+        n = int(m.group(1))
+        result = result[:m.start()] + f"{year - n}年至{year}年" + result[m.end():]
+
+    # "未来N年"
+    m = re.search(r'未来(\d+)年', result)
+    if m:
+        n = int(m.group(1))
+        result = result[:m.start()] + f"{year + 1}年至{year + n}年" + result[m.end():]
+
+    result = re.sub(r'前年', f"{year - 2}年", result)
+    result = re.sub(r'去年|上年度|上一年度|上一年', f"{year - 1}年", result)
+    result = re.sub(r'今年|本年度|本年|当年度', f"{year}年", result)
+    result = re.sub(r'明年|下一年度|下一年', f"{year + 1}年", result)
+
+    # === 半年类 ===
+    half = 1 if month <= 6 else 2
+    result = re.sub(r'上半年', _half_year_str(year, 1), result)
+    result = re.sub(r'下半年', _half_year_str(year, 2), result)
+
+    # === 月份类 ===
+    def _month_str(y, m_val):
+        while m_val > 12:
+            y += 1
+            m_val -= 12
+        while m_val < 1:
+            y -= 1
+            m_val += 12
+        return f"{y}年{m_val}月"
+
+    result = re.sub(r'上个?月', _month_str(year, month - 1), result)
+    result = re.sub(r'[本当]月', _month_str(year, month), result)
+    result = re.sub(r'下个?月', _month_str(year, month + 1), result)
+
+    return result
+
+
+def _extract_time_tag(text: str) -> str:
+    """从论据文本中提取时间标签，用于分组。
+
+    提取规则（按优先级）：
+    1. 具体年份+季度：如 "2025年Q2" -> "2025-Q2"
+    2. 具体年份+半年：如 "2025年上半年" -> "2025-H1"
+    3. 具体年份+月份：如 "2025年3月" -> "2025-03"
+    4. 年份范围：如 "2022年至2025年" -> "2022~2025"
+    5. 单独年份：如 "2025年" -> "2025"
+    6. 无时间信息 -> "NO_TIME"
+
+    如果存在多个时间标记，取第一个作为主时间标签。
+
+    Args:
+        text: 论据文本（已经过相对时间转换）。
+
+    Returns:
+        时间标签字符串。
+    """
+    # 年份范围
+    m = re.search(r'(\d{4})\s*年?\s*[至到~-]\s*(\d{4})\s*年?', text)
+    if m:
+        return f"{m.group(1)}~{m.group(2)}"
+
+    # 年份+季度
+    m = re.search(r'(\d{4})\s*年\s*(?:第\s*)?([一二三四1-4])\s*季度', text)
+    if m:
+        q_map = {'一': '1', '二': '2', '三': '3', '四': '4'}
+        q = q_map.get(m.group(2), m.group(2))
+        return f"{m.group(1)}-Q{q}"
+
+    # 年份+Q格式
+    m = re.search(r'(\d{4})\s*年\s*Q([1-4])', text)
+    if m:
+        return f"{m.group(1)}-Q{m.group(2)}"
+
+    # 年份+半年
+    m = re.search(r'(\d{4})\s*年\s*(上|下)\s*半年', text)
+    if m:
+        h = '1' if m.group(2) == '上' else '2'
+        return f"{m.group(1)}-H{h}"
+
+    # 年份+月份
+    m = re.search(r'(\d{4})\s*年\s*(\d{1,2})\s*月', text)
+    if m:
+        return f"{m.group(1)}-{int(m.group(2)):02d}"
+
+    # 单独年份
+    m = re.search(r'(\d{4})\s*年', text)
+    if m:
+        return f"{m.group(1)}"
+
+    return "NO_TIME"
+
+
+def _group_evidences_by_time(
+    evidences: List[Tuple[str, str]],
+    report_date: Optional[datetime] = None,
+) -> Dict[str, List[Tuple[int, Tuple[str, str]]]]:
+    """按时间标签对论据进行分组。
+
+    先将相对时间转为绝对时间，再提取时间标签进行分组。
+
+    Args:
+        evidences: List of (evidence_text, value) tuples.
+        report_date: 研报写作日期，用于解析相对时间。
+
+    Returns:
+        Dict mapping time_tag -> List of (original_index, (evidence_text, value)).
+    """
+    groups: Dict[str, List[Tuple[int, Tuple[str, str]]]] = defaultdict(list)
+    for idx, (text, value) in enumerate(evidences):
+        resolved_text = text
+        if report_date:
+            resolved_text = _resolve_relative_time(text, report_date)
+        tag = _extract_time_tag(resolved_text)
+        groups[tag].append((idx, (text, value)))
+    return groups
+
+
+# ===================== rapidfuzz 辅助函数 =====================
+
+def _rapidfuzz_dedup_evidences(
+    evidences: List[Tuple[str, str]],
+    fuzzy_threshold: float = 85.0,
+) -> List[Tuple[str, str]]:
+    """使用 rapidfuzz 的 token_set_ratio 对论据进行模糊去重。
+
+    通过 Union-Find 将 token_set_ratio >= fuzzy_threshold 的论据归为一组，
+    每组只保留第一条（出现最早的）。
+
+    注意：本函数不做时间分组，调用方应先按时间分组后再调用。
+
+    Args:
+        evidences: List of (evidence_text, value) tuples.
+        fuzzy_threshold: token_set_ratio 阈值（0-100），越高越保守。
+
+    Returns:
+        去重后的 (evidence_text, value) 列表。
+    """
+    if len(evidences) <= 1:
+        return evidences
+
+    N = len(evidences)
+    texts = [e for e, _ in evidences]
+
+    # Union-Find
+    parent = list(range(N))
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(x, y):
+        rx, ry = find(x), find(y)
+        if rx != ry:
+            if rx < ry:
+                parent[ry] = rx
+            else:
+                parent[rx] = ry
+
+    for i in range(N):
+        for j in range(i + 1, N):
+            score = fuzz.token_set_ratio(texts[i], texts[j])
+            if score >= fuzzy_threshold:
+                union(i, j)
+
+    # 每组保留 root（最小 ID）对应的论据
+    kept_indices = set()
+    for i in range(N):
+        kept_indices.add(find(i))
+
+    unique_evidences = [evidences[i] for i in sorted(kept_indices)]
+    return unique_evidences
+
+
+# ===================== 新版本：基于 rapidfuzz + semhash 的去重 =====================
+
+async def drop_duplicate_evidences_by_similarity(
+    evidences: List[Tuple[str, str]],
+    semhash_threshold: float = 0.90,
+    stock_entity_name: str = "",
+    report_date: Optional[datetime] = None,
+) -> List[Tuple[str, str]]:
+    """基于 rapidfuzz 模糊去重 + semhash 语义去重进行两阶段去重（带时间分组约束）。
+
+    去重策略：
+    1. 先按时间标签进行一次分组。
+    2. 在每个时间组内，依次执行：
+       a. rapidfuzz 的 token_set_ratio 模糊去重
+       b. semhash 语义哈希补充去重（阈值 >= semhash_threshold）
+
+    对于判定为重复的一组证据，保留第一条（出现最早的）。
+
+    Args:
+        evidences: List of (evidence_text, value) tuples.
+        semhash_threshold: semhash 语义相似度阈值（0-1），越高越保守。
+        stock_entity_name: 公司名称，非空时会将 evidence 中的公司名替换为"公司"以提升去重效果。
+        report_date: 研报写作日期，用于解析相对时间并按时间分组去重。
+
+    Returns:
+        去重后的 (evidence_text, value) 列表。
+    """
+    if not evidences:
+        return evidences
+
+    # 先做简单的文本清洗去重（与原版一致）
+    _pairs: List[Tuple[str, str]] = []
+    seen_texts: List[str] = []
+    for text, value in evidences:
+        cleaned = text.replace("查询", "").replace("确认", "").replace("计算", "").replace("获取", "")
+        if stock_entity_name:
+            cleaned = cleaned.replace(stock_entity_name, "")
+        cleaned = (cleaned.replace("本公司", "").replace("本股票", "").replace("目标公司", "").replace("目标股票", "")
+                   .replace("研报公司", "").replace("研报股票", "").replace("该公司", "").replace("该股票", "")
+                   .replace("公司的", "").replace("股票的", "").replace("公司", ""))
+        if cleaned not in seen_texts:
+            seen_texts.append(cleaned)
+            _pairs.append((cleaned, value))
+    evidences = _pairs
+
+    if len(evidences) <= 1:
+        return evidences
+
+    N_before = len(evidences)
+
+    # ===== 一次性按时间标签分组 =====
+    time_groups = _group_evidences_by_time(evidences, report_date)
+    if report_date:
+        print(f"    - 时间分组结果：{len(time_groups)} 个时间组 -> {', '.join(f'{k}({len(v)}条)' for k, v in sorted(time_groups.items()))}", flush=True)
+
+    print(f"    - 对 {N_before} 条论据按时间组进行 rapidfuzz + semhash 两阶段去重...", flush=True)
+
+    # ===== 在每个时间组内依次执行 rapidfuzz 去重 + semhash 去重 =====
+    final_evidences: List[Tuple[str, str]] = []
+
+    for tag, group_items in sorted(time_groups.items()):
+        group_evs = [ev for _, ev in group_items]
+        n_group_before = len(group_evs)
+
+        if n_group_before <= 1:
+            final_evidences.extend(group_evs)
+            continue
+
+        # --- 阶段1：rapidfuzz 模糊去重 ---
+        group_evs = _rapidfuzz_dedup_evidences(group_evs)
+        n_after_fuzz = len(group_evs)
+
+        # --- 阶段2：semhash 语义去重 ---
+        if len(group_evs) > 1:
+            records = [{'text': group_evs[i][0], 'idx': i} for i in range(len(group_evs))]
             try:
-                s_idx = int(s_id.split('_')[1]) - 1
-                if 0 <= s_idx < len(source_texts):
-                    s_text = source_texts[s_idx]
-                    evidence_pairs.append((s_text, r_text))
-            except (ValueError, IndexError) as e:
-                print(e)
-                continue  # 如果ID格式错误，则跳过
+                sh = SemHash.from_records(records, columns=['text'])
+                result = sh.self_deduplicate(threshold=semhash_threshold)
+                kept_indices = {rec['idx'] for rec in result.selected}
+                group_evs = [group_evs[i] for i in sorted(kept_indices)]
+            except Exception as e:
+                print(f"      时间组 [{tag}]: semhash 出错 ({e})，保留 rapidfuzz 去重结果", flush=True)
+
+        n_after_sem = len(group_evs)
+        if n_group_before != n_after_sem:
+            print(f"      时间组 [{tag}]: {n_group_before} -> {n_after_fuzz}(fuzz) -> {n_after_sem}(semhash)", flush=True)
+
+        final_evidences.extend(group_evs)
+
+    print(f"    - 两阶段去重总结：{N_before} -> {len(final_evidences)} 条", flush=True)
+    return final_evidences
+
+
+# ===================== 新版本：基于相似度的匹配 =====================
+
+async def find_best_matches_by_similarity(
+    source_evidences: List[Tuple[str, str]],
+    ref_evidences: List[Tuple[str, str]],
+    min_threshold: float = 0.75,
+) -> List[Tuple[str, str, str, str]]:
+    """基于 embedding cosine 相似度为参考论据匹配源论据。
+
+    使用 embedding model 对 source 和 ref 的论据文本分别编码，
+    计算 cosine 相似度矩阵，然后按分数降序贪心配对。
+
+    Args:
+        source_evidences: List of (evidence_text, value) from the source.
+        ref_evidences: List of (evidence_text, value) from the reference.
+        min_threshold: 最低 cosine 相似度阈值，低于此值视为无匹配。
+
+    Returns:
+        List of (source_evidence, ref_evidence, source_value, ref_value) tuples.
+    """
+    if not source_evidences or not ref_evidences:
+        return []
+
+    emb_model = create_emb_model()
+
+    source_texts = [e for e, _ in source_evidences]
+    ref_texts = [e for e, _ in ref_evidences]
+
+    print(f"    - 正在通过 embedding model 计算 {len(ref_texts)} x {len(source_texts)} 的相似度矩阵...", flush=True)
+
+    # 调用 embedding model 编码
+    source_resp = await emb_model(source_texts)
+    ref_resp = await emb_model(ref_texts)
+
+    source_embs = np.array(source_resp.embeddings, dtype=np.float32)  # (S, D)
+    ref_embs = np.array(ref_resp.embeddings, dtype=np.float32)        # (R, D)
+
+    # L2 归一化后点积 = cosine similarity
+    source_norms = np.linalg.norm(source_embs, axis=1, keepdims=True)
+    ref_norms = np.linalg.norm(ref_embs, axis=1, keepdims=True)
+    source_embs = source_embs / np.maximum(source_norms, 1e-8)
+    ref_embs = ref_embs / np.maximum(ref_norms, 1e-8)
+
+    # sim_matrix: (R, S)
+    sim_matrix = ref_embs @ source_embs.T
+
+    # 贪心匹配：按最高分数优先配对，避免一个 source 被多个 ref 重复匹配
+    candidates = []
+    for r_idx in range(len(ref_texts)):
+        for s_idx in range(len(source_texts)):
+            score = float(sim_matrix[r_idx, s_idx])
+            if score >= min_threshold:
+                candidates.append((score, r_idx, s_idx))
+    candidates.sort(key=lambda x: x[0], reverse=True)
+
+    evidence_pairs: List[Tuple[str, str, str, str]] = []
+    matched_ref = set()
+    matched_src = set()
+    for score, r_idx, s_idx in candidates:
+        if r_idx in matched_ref or s_idx in matched_src:
+            continue
+        s_text, s_value = source_evidences[s_idx]
+        r_text, r_value = ref_evidences[r_idx]
+        evidence_pairs.append((s_text, r_text, s_value, r_value))
+        matched_ref.add(r_idx)
+        matched_src.add(s_idx)
+        print(f"      匹配 (score={score:.3f}): {s_text[:60]}  <->  {r_text[:60]}，[{s_value}] vs [{r_value}] ")
+
+    print(f"    -> 配对完成，成功构建了 {len(evidence_pairs)} 对可供判断的论据（阈值={min_threshold}）。")
+    return evidence_pairs
+
+
+def _rapidfuzz_match(
+    source_evidences: List[Tuple[str, str]],
+    ref_evidences: List[Tuple[str, str]],
+    match_threshold: float = 60.0,
+    source_report_date: Optional[datetime] = None,
+    ref_report_date: Optional[datetime] = None,
+) -> List[Tuple[str, str, str, str]]:
+    """使用 rapidfuzz 的 token_set_ratio 进行两个论据列表之间的模糊匹配（带时间约束）。
+
+    先将两边论据中的相对时间转为具体时间，提取时间标签。
+    匹配时优先在相同时间标签的论据之间进行，NO_TIME 组的论据可以与任意组匹配。
+    对每对 (source, ref) 计算 token_set_ratio 分数，按分数降序贪心配对。
+
+    Args:
+        source_evidences: List of (evidence_text, value) from the source.
+        ref_evidences: List of (evidence_text, value) from the reference.
+        match_threshold: token_set_ratio 最低匹配阈值（0-100）。
+        source_report_date: 源研报写作日期。
+        ref_report_date: 参考研报写作日期。
+
+    Returns:
+        List of (source_evidence, ref_evidence, source_value, ref_value) tuples.
+    """
+    if not source_evidences or not ref_evidences:
+        return []
+
+    # 为每条论据计算时间标签（先转绝对时间再提取标签）
+    source_tags = []
+    for text, _ in source_evidences:
+        resolved = _resolve_relative_time(text, source_report_date) if source_report_date else text
+        source_tags.append(_extract_time_tag(resolved))
+
+    ref_tags = []
+    for text, _ in ref_evidences:
+        resolved = _resolve_relative_time(text, ref_report_date) if ref_report_date else text
+        ref_tags.append(_extract_time_tag(resolved))
+
+    source_texts = [e for e, _ in source_evidences]
+    ref_texts = [e for e, _ in ref_evidences]
+
+    # 计算所有 (ref, source) 对的 token_set_ratio 分数，加时间约束
+    candidates = []
+    for r_idx, r_text in enumerate(ref_texts):
+        for s_idx, s_text in enumerate(source_texts):
+            r_tag = ref_tags[r_idx]
+            s_tag = source_tags[s_idx]
+            # 时间约束：只有同一时间标签或其中一方为 NO_TIME 时才允许匹配
+            if r_tag != s_tag and r_tag != "NO_TIME" and s_tag != "NO_TIME":
+                continue
+            score = fuzz.token_set_ratio(r_text, s_text)
+            if score >= match_threshold:
+                candidates.append((score, r_idx, s_idx))
+
+    # 按分数降序排列，贪心匹配
+    candidates.sort(key=lambda x: x[0], reverse=True)
+
+    evidence_pairs: List[Tuple[str, str, str, str]] = []
+    matched_src = set()
+    matched_ref = set()
+
+    for score, r_idx, s_idx in candidates:
+        if s_idx in matched_src or r_idx in matched_ref:
+            continue
+        s_text, s_value = source_evidences[s_idx]
+        r_text, r_value = ref_evidences[r_idx]
+        evidence_pairs.append((s_text, r_text, s_value, r_value))
+        matched_src.add(s_idx)
+        matched_ref.add(r_idx)
+        tag_info = f"[{source_tags[s_idx]}↔{ref_tags[r_idx]}]" if source_report_date or ref_report_date else ""
+        print(f"      rapidfuzz匹配 (score={score:.1f}) {tag_info}: [{s_value}] {s_text[:60]}  <->  [{r_value}] {r_text[:60]}")
+
+    return evidence_pairs
+
+
+async def find_best_matches(
+    source_evidences: List[Tuple[str, str]],
+    ref_evidences: List[Tuple[str, str]],
+    source_report_date: Optional[datetime] = None,
+    ref_report_date: Optional[datetime] = None,
+) -> List[Tuple[str, str, str, str]]:
+    """使用 rapidfuzz 的 token_set_ratio 进行模糊匹配（带时间约束），为参考论据列表中的每一项在源论据列表中找到最佳匹配。
+
+    匹配前先将相对时间转为具体时间，只在相同时间标签的论据之间进行匹配。
+    如果 rapidfuzz 未产生有效匹配，则回退到 BM25 匹配。
+
+    Args:
+        source_evidences: List of (evidence_text, value) from the source (report).
+        ref_evidences: List of (evidence_text, value) from the reference.
+        source_report_date: 源研报写作日期，用于解析相对时间。
+        ref_report_date: 参考研报写作日期，用于解析相对时间。
+
+    Returns:
+        List of (source_evidence, ref_evidence, source_value, ref_value) tuples.
+    """
+    if not source_evidences or not ref_evidences:
+        return []
+
+    date_info = ""
+    if source_report_date:
+        date_info += f" source_date={source_report_date.strftime('%Y-%m-%d')}"
+    if ref_report_date:
+        date_info += f" ref_date={ref_report_date.strftime('%Y-%m-%d')}"
+    print(f"    - 使用 rapidfuzz 进行模糊匹配（时间约束）: {len(source_evidences)} x {len(ref_evidences)}{date_info} ...", flush=True)
+
+    try:
+        evidence_pairs = _rapidfuzz_match(
+            source_evidences, ref_evidences,
+            source_report_date=source_report_date,
+            ref_report_date=ref_report_date,
+        )
+    except Exception as e:
+        print(f"    - rapidfuzz 匹配过程出错: {e}，回退到 BM25 匹配", flush=True)
+        traceback.print_exc()
+        evidence_pairs = []
+
+    if not evidence_pairs:
+        # 回退方案：使用 BM25 进行匹配
+        print(f"    - rapidfuzz 未产生有效匹配，回退到 BM25 匹配...", flush=True)
+        evidence_pairs = await _fallback_bm25_match(source_evidences, ref_evidences)
 
     print(f"    -> 配对完成，成功构建了 {len(evidence_pairs)} 对可供判断的论据。")
+    return evidence_pairs
+
+
+async def _fallback_bm25_match(
+    source_evidences: List[Tuple[str, str]],
+    ref_evidences: List[Tuple[str, str]],
+    min_threshold: float = 0.5,
+) -> List[Tuple[str, str, str, str]]:
+    """BM25 回退匹配方案，当 dedupe 匹配失败时使用。
+
+    Args:
+        source_evidences: List of (evidence_text, value) from the source.
+        ref_evidences: List of (evidence_text, value) from the reference.
+        min_threshold: 最低 BM25 归一化相似度阈值。
+
+    Returns:
+        List of (source_evidence, ref_evidence, source_value, ref_value) tuples.
+    """
+    source_texts = [e for e, _ in source_evidences]
+    ref_texts = [e for e, _ in ref_evidences]
+
+    bm25_sim = _bm25_similarity_matrix(ref_texts, source_texts)  # (len(ref), len(source))
+
+    # 贪心匹配
+    candidates = []
+    for r_idx in range(len(ref_texts)):
+        for s_idx in range(len(source_texts)):
+            score = bm25_sim[r_idx, s_idx]
+            if score >= min_threshold:
+                candidates.append((score, r_idx, s_idx))
+    candidates.sort(key=lambda x: x[0], reverse=True)
+
+    evidence_pairs: List[Tuple[str, str, str, str]] = []
+    matched_ref = set()
+    matched_src = set()
+    for score, r_idx, s_idx in candidates:
+        if r_idx in matched_ref or s_idx in matched_src:
+            continue
+        s_text, s_value = source_evidences[s_idx]
+        r_text, r_value = ref_evidences[r_idx]
+        evidence_pairs.append((s_text, r_text, s_value, r_value))
+        matched_ref.add(r_idx)
+        matched_src.add(s_idx)
+
     return evidence_pairs
 
 
@@ -404,59 +959,37 @@ async def process_single_stock_pair(stock_code: str, old_path: Path, new_path: P
         try:
             print(f"\n======= 正在处理股票: {stock_code} =======", flush=True)
 
-            evidences_old = await extract_unique_evidences_from_pdf(old_path, long_term_dir / "demonstration")
-            evidences_new = await extract_unique_evidences_from_pdf(new_path, long_term_dir / "demonstration")
+            stock_entity_name = get_entity_name_by_code(stock_code)
+            if stock_entity_name:
+                print(f"  - 公司名称: {stock_entity_name}", flush=True)
+
+            evidences_old = await extract_unique_evidences_from_pdf(old_path, long_term_dir / "demonstration", stock_entity_name=stock_entity_name)
+            evidences_new = await extract_unique_evidences_from_pdf(new_path, long_term_dir / "demonstration", stock_entity_name=stock_entity_name)
             # ===== 并发提取两份报告的论据 =====
             # evidences_old, evidences_new = await asyncio.gather(
             #     extract_unique_evidences_from_pdf(old_path, long_term_dir / "demonstration"),
             #     extract_unique_evidences_from_pdf(new_path, long_term_dir / "demonstration")
             # )
-            common_evidences_texts = await find_best_matches(evidences_old, evidences_new)
+            # 从文件名中提取研报写作日期，用于匹配时的时间约束
+            old_report_date = _parse_report_date_from_path(old_path)
+            new_report_date = _parse_report_date_from_path(new_path)
+            common_evidences_texts = await find_best_matches(
+                evidences_old, evidences_new,
+                source_report_date=old_report_date,
+                ref_report_date=new_report_date,
+            )
 
-            common_evidences_with_locs = []
             assert len(common_evidences_texts) > 0, "!!! 未找到任何共通论据"
-            if common_evidences_texts:
-                print(f"\n  --- 开始为 {len(common_evidences_texts)} 条共通论据定位 ---", flush=True)
-                outline_old_path = long_term_dir / "demonstration" / cfg.llm_name / f"{old_path.stem}_outline.json"
-                outline_new_path = long_term_dir / "demonstration" / cfg.llm_name / f"{new_path.stem}_outline.json"
-                if not outline_new_path.exists():
-                    outline_new_path = long_term_dir / "demonstration" / f"{new_path.stem}_outline.json"
-                if not outline_old_path.exists():
-                    outline_old_path = long_term_dir / "demonstration" / f"{old_path.stem}_outline.json"
-
-                outline_old_content = outline_old_path.read_text(encoding='utf-8')
-                outline_new_content = outline_new_path.read_text(encoding='utf-8')
-
-                # ===== 并发定位两份报告中论据的位置 =====
-                locations_old, locations_new = await asyncio.gather(
-                    find_locations_in_outline(outline_old_content, [e[0] for e in common_evidences_texts]),
-                    find_locations_in_outline(outline_new_content, [e[1] for e in common_evidences_texts])
-                )
-                for old_text, new_text in common_evidences_texts:
-                    common_evidences_with_locs.append({
-                        "text": (old_text, new_text),
-                        "location_old": locations_old.get(old_text, "NONE"),
-                        "location_new": locations_new.get(new_text, "NONE")
-                    })
-
-            # 过滤掉任何包含 "NONE" 的共通论据
-            initial_count = len(common_evidences_with_locs)
-
-            filtered_common_evidences = [
-                item for item in common_evidences_with_locs
-                if "NONE" not in item.get("location_old", "NONE") and \
-                   "NONE" not in item.get("location_new", "NONE")
+            common_evidences_with_locs = [
+                {"text": (old_text, new_text)}
+                for old_text, new_text in common_evidences_texts
             ]
-
-            filtered_count = len(filtered_common_evidences)
-            if initial_count > filtered_count:
-                print(f"  - 过滤完成：移除了 {initial_count - filtered_count} 条无法在两份报告中同时定位的共通论据。", flush=True)
 
             result_data = {
                 "stock_code": stock_code, "old_report": old_path.name, "new_report": new_path.name,
                 "old_evidence_count": len(evidences_old), "new_evidence_count": len(evidences_new),
-                "common_evidence_count": filtered_count,
-                # "common_evidences": filtered_common_evidences
+                "common_evidence_count": len(common_evidences_with_locs),
+                # "common_evidences": common_evidences_with_locs
             }
 
             print(f"--- 股票 {stock_code} 处理完成 ---", flush=True)
@@ -485,7 +1018,7 @@ async def main():
     if not report_pairs: print("未找到任何可处理的研报对，程序退出。"); return
 
     existing_results = []
-    output_json_path = PROJECT_ROOT / "data" / "output" / "comparison_results.json"
+    output_json_path = PROJECT_ROOT / "output" / "comparison_results.json"
     output_txt_path = PROJECT_ROOT / "data"  / "output" / "comparison_results.txt"
     if output_json_path.exists():
         with open(output_json_path, 'r', encoding='utf-8') as f:

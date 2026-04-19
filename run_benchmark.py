@@ -1,6 +1,4 @@
 # -*- coding: utf-8 -*-
-from dotenv import load_dotenv
-load_dotenv()
 import asyncio
 import json
 import os
@@ -13,6 +11,13 @@ from src.memory.long_term import LongTermMemoryStore
 from src.utils.get_entity_info import get_entity_info
 from src.utils.local_file import DEMO_DIR
 
+import io
+import sys
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
+from dotenv import load_dotenv
+load_dotenv()
 
 async def process_single_task(item, idx, total, long_term_memory, semaphore):
     """

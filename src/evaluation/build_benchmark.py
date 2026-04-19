@@ -21,7 +21,7 @@ def extract_date_from_filename(filename):
 
 def filter_and_sort_comparison_results():
     # Read the comparison_results.json file
-    data_path = Path(__file__).parent.parent.parent / 'data' / 'output' / 'comparison_results.json'
+    data_path = Path(__file__).parent.parent.parent / 'output' / 'comparison_results.json'
 
     with open(data_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
