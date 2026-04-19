@@ -568,9 +568,9 @@ async def main(method_name, new_reports_dir):
     """示例使用"""
     # 配置路径
     benchmark_json = PROJECT_ROOT / "benchmark.json"
-    # new_reports = PROJECT_ROOT / "data" / "output" / "reports" / model_name
+    # new_reports = PROJECT_ROOT / "output" / "reports" / model_name
     long_term = PROJECT_ROOT / "data" / "memory" / "long_term"
-    output = PROJECT_ROOT / "data" / "output" / f"{method_name}_benchmark_results.json"
+    output = PROJECT_ROOT / "output" / f"{method_name}_benchmark_results.json"
 
     # 执行评估
     summary = await run_benchmark(
@@ -601,7 +601,7 @@ if __name__ == "__main__":
     if args.new_reports_path:
         args.new_reports_path = Path(args.new_reports_path)
     else:
-        args.new_reports_path = PROJECT_ROOT / "data" / "output" / "reports" / args.method_name,
+        args.new_reports_path = PROJECT_ROOT / "output" / "reports" / args.method_name,
 
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())

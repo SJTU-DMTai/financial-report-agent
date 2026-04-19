@@ -1018,7 +1018,7 @@ async def main():
     if not report_pairs: print("未找到任何可处理的研报对，程序退出。"); return
 
     existing_results = []
-    output_json_path = PROJECT_ROOT / "data" / "output" / "comparison_results.json"
+    output_json_path = PROJECT_ROOT / "output" / "comparison_results.json"
     output_txt_path = PROJECT_ROOT / "data"  / "output" / "comparison_results.txt"
     if output_json_path.exists():
         with open(output_json_path, 'r', encoding='utf-8') as f:

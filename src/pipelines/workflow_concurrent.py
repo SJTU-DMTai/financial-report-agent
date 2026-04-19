@@ -523,8 +523,8 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
     original_stderr = sys.stderr
     log_file = open(log_filename, "w", encoding="utf-8")
     set_verifier_trace_path(PROJECT_ROOT / verifier_trace_filename)
-    sys.stdout = log_file
-    sys.stderr = log_file
+    # sys.stdout = log_file
+    # sys.stderr = log_file
 
     try:
         cfg = config.Config()
@@ -542,7 +542,7 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
             demo_pdf_path = STOCK_REPORT_PATHS[stock_symbol][-1]
         demo_date = demo_pdf_path.name.split("_")[1]
 
-        output_pth = PROJECT_ROOT / "data" / "output" / "reports" / cfg.llm_name
+        output_pth = PROJECT_ROOT / "output" / "reports" / cfg.llm_name
         output_pth.mkdir(parents=True, exist_ok=True)
 
         outline = await process_pdf_to_outline(demo_pdf_path, long_term_dir / "demonstration",

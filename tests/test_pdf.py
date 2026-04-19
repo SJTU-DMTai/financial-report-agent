@@ -9,7 +9,7 @@ from pathlib import Path
 
 CURRENT_FILE = Path(__file__).resolve()
 PROJECT_ROOT = CURRENT_FILE.parent.parent
-DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "data" / "output" / "reports"
+DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "output" / "reports"
 DEFAULT_SHORT_TERM_ROOT = PROJECT_ROOT / "data" / "memory" / "short_term"
 
 
