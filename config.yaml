@@ -1,7 +1,19 @@
 # config.yaml
 models:
-  default: devstral   # 默认使用的模型 id
+  default: qwen3.5-397b-a17b   # 默认使用的模型 id
   vlm_default: grok
+
+  qwen3.5-Flash:
+    provider: openrouter
+    model_name: qwen/qwen3.5-flash-02-23
+    base_url_env: https://openrouter.ai/api/v1
+    stream: false
+
+  qwen3.5-397b-a17b:
+    provider: openrouter
+    model_name: qwen/qwen3.5-397b-a17b
+    base_url_env: https://openrouter.ai/api/v1
+    stream: false
 
   mimo_openrouter:
     provider: openrouter
@@ -171,9 +183,9 @@ models:
 
 pdf_style:
   base_color: "#1F4E79"
-  body_font_path: "/System/Library/Fonts/STHeiti Medium.ttc"
-  heading_font_path: "/System/Library/Fonts/STHeiti Medium.ttc"
-  mono_font_path: "/System/Library/Fonts/Courier.ttc"
+  body_font_path: "C:/Windows/Fonts/msyh.ttc"
+  heading_font_path: "C:/Windows/Fonts/msyh.ttc"
+  mono_font_path: "C:/Windows/Fonts/consola.ttf"
 
 
 verify_config:
