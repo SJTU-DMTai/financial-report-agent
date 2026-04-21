@@ -81,7 +81,10 @@ async def evidence_coverage_and_accuracy(report_evidences: List[str], reference_
                 print(f"      ! 批次处理失败：模型返回的不是一个列表。")
 
         # 最终统计所有批次的结果
-        consistent_count = sum(1 for result in all_judgements if isinstance(result, str) and "一致" in result)
+        consistent_count = sum(
+            1 for result in all_judgements
+            if isinstance(result, str) and result.strip() == "一致"
+        )
         print(f"    -> 所有批次判断完成，总计有 {consistent_count} 对论据被判断为事实一致。")
         return consistent_count
 

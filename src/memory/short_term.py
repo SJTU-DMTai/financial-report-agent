@@ -54,14 +54,6 @@ class ShortTermMemoryStore:
     def manuscript_dir(self) -> Path:
         return self.base_dir / "manuscript"
 
-    # @property
-    # def demonstration_dir(self) -> Path:
-    #     return self.base_dir / "demonstration"
-    
-    @property
-    def demonstration_path(self) -> Path:
-        return self.base_dir / "demonstration" / "demonstration.md"
-    
     @property
     def registry_path(self) -> Path:
         return self.material_dir / f"{cfg.llm_name}_registry.json"
@@ -135,121 +127,6 @@ class ShortTermMemoryStore:
 
     def get_material_meta(self, cite_id: str) -> Optional[MaterialMeta]:
         return self._registry.get(cite_id)
-
-    # ---- Outline ----
-    def load_outline(self) -> str:
-        if not self.outline_path.exists():
-            return ""
-        return self.outline_path.read_text(encoding="utf-8")
-
-    def save_outline(self, content: str) -> None:
-        self.ensure_dirs()
-        self.outline_path.write_text(content, encoding="utf-8")
-
-
-
-    def _parse_outline_sections(self, outline: str) -> Tuple[Optional[str], List[Tuple[str, str, str]]]:
-        """把 outline.md 划分为若干 section。
-        返回: (report_title, sections)
-
-        report_title: 文档级研报标题
-        sections: List[(section_id, title, body_markdown)]
-        规则：
-        - 第 1 行是文档级研报标题
-        - 之后以一级标题 `#` 作为章节分割点
-        - section_id 形如 `sec_01_行业分析`，保证字典序 == 章节顺序
-        """
-        lines = outline.splitlines()
-        sections: List[Tuple[str, str, str]] = []
-
-        if not lines:
-            return None, sections
-    
-        report_title = lines[0]
-        content_lines = lines[1:]
-        current_title = None
-        current_body_lines: List[str] = []
-        index = 0
-
-        def flush():
-            nonlocal current_title, current_body_lines, index
-            if current_title is None:
-                return
-            title = current_title.strip("# ").strip()
-            # 简单 slug 化做 section_id
-            slug = re.sub(r"\s+", "_", title)
-            slug = re.sub(r"[^\w\-一-龥]", "", slug)  # 保留中文和常见字符
-            index += 1
-            prefix = f"{index:02d}"
-            section_id = f"sec_{prefix}_{slug}"
-            body = "\n".join(current_body_lines).strip()
-            sections.append((section_id, title, body))
-            current_title = None
-            current_body_lines = []
-
-        for line in content_lines:
-            if line.startswith("# "):  # 一级标题
-                flush()
-                current_title = line
-            else:
-                if current_title is None:
-                    continue
-                current_body_lines.append(line)
-
-        flush()
-        return report_title, sections
-
-
-    # ---- Manuscript ----
-
-    def draft_manuscript_from_outline(self):
-        """根据现有的 outline.md 生成按章节拆分的多个 markdown 草稿骨架。
-        根据大纲内容创建对应章节的初始 markdown 草稿，并返回生成的章节列表。
-        """
-        outline = self.load_outline()
-        report_title, sections = self._parse_outline_sections(outline)
-
-        for idx, (section_id, title, body_md) in enumerate(sections):
-            if idx == 0 and report_title:
-                body_markdown = (
-                f"# {report_title}\n\n"
-                f"# {title}\n\n"
-                "（请根据大纲要点在此撰写正文，可调用 Searcher 工具补充材料，调用calculate工具进行计算，调用generate chart工具绘图。）\n\n"
-                f"{body_md}\n\n"
-                )
-            else :
-                body_markdown = (
-                f"# {title}\n\n"
-                "（请根据大纲要点在此撰写正文，可调用 Searcher 工具补充材料，调用calculate工具进行计算，调用generate chart工具绘图。）\n\n"
-                f"{body_md}\n\n"
-                )
-
-            self.save_manuscript_section(section_id, body_markdown)
-        return sections
-
-
-
-    def save_manuscript_section(self, section_id: str, md: str) -> None:
-        self.ensure_dirs()
-        path = self.manuscript_dir / f"{section_id}.md"
-        path.write_text(md, encoding="utf-8")
-
-    def load_manuscript_section(self, section_id: str) -> str:
-        path = self.manuscript_dir / f"{section_id}.md"
-        if not path.exists():
-            return ""
-        return path.read_text(encoding="utf-8")
-    
-    # ---- demonstration ----
-    def load_demonstration(self) -> str:
-        if not self.demonstration_path.exists():
-            return ""
-        return self.demonstration_path.read_text(encoding="utf-8")
-
-    def save_demonstration(self, content: str) -> None:
-        self.ensure_dirs()
-        self.demonstration_path.write_text(content, encoding="utf-8")
-    
     # -----------------------------------------
     # Material 存储
     # -----------------------------------------

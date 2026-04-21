@@ -5,7 +5,9 @@ import re
 from dataclasses import dataclass
 from dataclasses_json import dataclass_json
 from pathlib import Path
-from typing import List, Tuple
+from typing import List
+
+from src.utils.instance import cfg
 
 @dataclass_json
 @dataclass
@@ -130,4 +132,36 @@ class Section:
                 _evidences.append(e)
         evidences = None if len(_evidences) == 0 else _evidences
         return Segment(template=None, requirements=None, topic=topic, evidences=evidences)
+
+
+def _get_outline_cache_paths(pdf_path: Path, save_dir: Path, only_evidence: bool) -> tuple[Path, Path]:
+    stem = pdf_path.stem
+    suffix = "_outline_only_evidence.json" if only_evidence else "_outline.json"
+    model_cache_path = save_dir / cfg.llm_name / f"{stem}{suffix}"
+    legacy_cache_path = save_dir / f"{stem}{suffix}"
+    return model_cache_path, legacy_cache_path
+
+
+def _get_outline_cache_candidates(pdf_path: Path, save_dir: Path, only_evidence: bool) -> list[Path]:
+    model_cache_path, legacy_cache_path = _get_outline_cache_paths(pdf_path, save_dir, only_evidence)
+    cache_candidates = [model_cache_path, legacy_cache_path]
+    if only_evidence:
+        full_model_cache_path, full_legacy_cache_path = _get_outline_cache_paths(pdf_path, save_dir, False)
+        cache_candidates.extend([full_model_cache_path, full_legacy_cache_path])
+    return cache_candidates
+
+
+def _load_cached_outline(pdf_path: Path, save_dir: Path, only_evidence: bool) -> Section | None:
+    for cache_path in _get_outline_cache_candidates(pdf_path, save_dir, only_evidence):
+        if cache_path.exists():
+            return Section.from_json(cache_path.read_text(encoding="utf-8"))
+    return None
+
+
+def _parse_segment_response(contents: str, only_evidence: bool) -> Segment | str:
+    if isinstance(contents, str) and "<skip>true</skip>" in contents.lower():
+        return contents
+    if only_evidence:
+        return Section.parse_evidence(contents)
+    return Section.parse(contents)
 

@@ -11,15 +11,16 @@ import sys
 import os
 import json
 import asyncio
+import re
 import traceback
+from copy import deepcopy
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from typing import Any, Dict, List, Tuple, Optional
 from dataclasses import dataclass, asdict, field
 from datetime import datetime
 
-from src.memory.working import Section
-from src.evaluation.extract_evidence import get_all_evidences_from_section, extract_unique_evidences_from_pdf, \
-    extract_unique_evidences
+from src.memory.working import Section, Segment
+from src.evaluation.extract_evidence import extract_unique_evidences
 from src.evaluation.eval_structure import num_of_segment, structure_score
 from src.evaluation.eval_evidence import evidence_coverage_and_accuracy
 from src.evaluation.eval_content import get_content_score, ContentScore
@@ -64,6 +65,145 @@ class BenchmarkResult:
     evidence: EvidenceMetrics
     content: ContentScore
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
+
+
+def _build_pair_cache_key(stock_code: str, date: str, human_report_name: str, new_report_name: str) -> str:
+    return f"{stock_code}|{date}|{human_report_name}|{new_report_name}"
+
+
+def _load_json_file(json_path: Path) -> Optional[Any]:
+    if not json_path.exists():
+        return None
+    try:
+        with open(json_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except json.JSONDecodeError:
+        return None
+
+
+_CITE_REFERENCE_PATTERN = re.compile(r"\[\^cite_id[:=][^\]]+?\]")
+_CHART_REFERENCE_PATTERN = re.compile(r"\[\^chart_id[:=][^\]]+?\]")
+_CHART_IMAGE_PATTERN = re.compile(r"!\[[^\]]*]\(chart:[a-zA-Z0-9_\-]+\)")
+def _strip_references_for_scoring(text: Optional[str]) -> Optional[str]:
+    if text is None:
+        return None
+
+    cleaned = _CHART_IMAGE_PATTERN.sub("", text)
+    cleaned = _CITE_REFERENCE_PATTERN.sub("", cleaned)
+    cleaned = _CHART_REFERENCE_PATTERN.sub("", cleaned)
+    cleaned = re.sub(r"[ \t]+([，。；：！？,.!?;:])", r"\1", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
+def _sanitize_segment_for_scoring(segment: Segment) -> None:
+    segment.topic = _strip_references_for_scoring(segment.topic)
+    segment.reference = _strip_references_for_scoring(segment.reference)
+    segment.content = _strip_references_for_scoring(segment.content)
+
+
+def _sanitize_section_for_scoring(section: Section) -> Section:
+    sanitized = deepcopy(section)
+    pending_sections = [sanitized]
+
+    while pending_sections:
+        current = pending_sections.pop()
+        current.title = _strip_references_for_scoring(current.title)
+
+        for segment in current.segments or []:
+            _sanitize_segment_for_scoring(segment)
+
+        for subsection in current.subsections or []:
+            pending_sections.append(subsection)
+
+    return sanitized
+
+
+def _sanitize_evidence_list(evidences: List[str]) -> List[str]:
+    cleaned_evidences: List[str] = []
+
+    for evidence in evidences:
+        cleaned = _strip_references_for_scoring(evidence)
+        if cleaned and cleaned not in cleaned_evidences:
+            cleaned_evidences.append(cleaned)
+
+    return cleaned_evidences
+
+
+def _content_score_to_dict(scores: Any) -> Optional[Dict[str, float]]:
+    if hasattr(scores, "model_dump"):
+        scores = scores.model_dump()
+    elif hasattr(scores, "dict"):
+        scores = scores.dict()
+
+    if not isinstance(scores, dict):
+        return None
+
+    normalized_scores: Dict[str, float] = {}
+    for dim in ("insightfulness", "readability", "relevance", "sufficiency"):
+        value = scores.get(dim)
+        if isinstance(value, (int, float)):
+            normalized_scores[dim] = float(value)
+    return normalized_scores if normalized_scores else None
+
+
+def _average_content_scores(score_dicts: List[Dict[str, float]]) -> Dict[str, float]:
+    avg_scores = {
+        "insightfulness": 0.0,
+        "readability": 0.0,
+        "relevance": 0.0,
+        "sufficiency": 0.0,
+    }
+    if not score_dicts:
+        return avg_scores
+
+    for dim in avg_scores:
+        values = [score[dim] for score in score_dicts if dim in score]
+        avg_scores[dim] = sum(values) / len(values) if values else 0.0
+    return avg_scores
+
+
+def _collect_segment_tasks_for_content(section: Section) -> List[Tuple[str, str]]:
+    segment_tasks: List[Tuple[str, str]] = []
+    pending_sections: List[Tuple[Section, str]] = [(section, section.title or "全文")]
+
+    while pending_sections:
+        current_section, parent_topic = pending_sections.pop()
+        current_topic = current_section.title or parent_topic or "全文"
+
+        for segment in current_section.segments or []:
+            segment_text = segment.content or segment.reference
+            if not segment_text:
+                continue
+            segment_topic = segment.topic or current_topic
+            segment_tasks.append((segment_text, segment_topic))
+
+        for subsection in reversed(current_section.subsections or []):
+            pending_sections.append((subsection, current_topic))
+
+    return segment_tasks
+
+
+def _deserialize_benchmark_result(data: Dict) -> BenchmarkResult:
+    return BenchmarkResult(
+        stock_code=data["stock_code"],
+        date=data["date"],
+        human_report_name=data["human_report_name"],
+        new_report_name=data["new_report_name"],
+        structure=StructureMetrics(**data["structure"]),
+        evidence=EvidenceMetrics(**data["evidence"]),
+        content=ContentScore(**data["content"]),
+        timestamp=data.get("timestamp", datetime.now().isoformat()),
+    )
+
+
+async def _load_or_extract_evidences(section: Section, evidence_path: Path) -> List[str]:
+    cached_evidences = _load_json_file(evidence_path)
+    if cached_evidences is not None:
+        if isinstance(cached_evidences, list):
+            print(f"      - 复用evidence缓存: {evidence_path.name}")
+            return cached_evidences
+    return await extract_unique_evidences(section, evidence_path)
 
 
 def _serialize_benchmark_result(result: BenchmarkResult) -> Dict:
@@ -131,13 +271,43 @@ def _build_new_report_patterns(stock_code: str, date: str) -> List[str]:
     return patterns
 
 
-async def evaluate_structure(new_section: Section) -> StructureMetrics:
+def _resolve_report_paths(
+    item: BenchmarkItem,
+    new_reports_dir: Path,
+) -> Tuple[Optional[Path], Optional[Path], Optional[str], Optional[str]]:
+    ref_path = local_file.DEMO_DIR / item.human_report
+    if not ref_path.exists():
+        return None, None, "human_report", item.human_report
+
+    matching_files = list(
+        new_reports_dir.glob(f"{item.stock_code}_{item.date}*.md")
+    )
+
+    if not matching_files:
+        alt_patterns = _build_new_report_patterns(item.stock_code, item.date)[1:]
+        seen_files = set()
+        for pattern in alt_patterns:
+            for path in new_reports_dir.glob(pattern):
+                if path not in seen_files:
+                    seen_files.add(path)
+                    matching_files.append(path)
+
+    if not matching_files:
+        return ref_path, None, "new_report", f"{item.stock_code}_{item.date}*.md"
+
+    if len(matching_files) > 1:
+        print(f"  ! 找到 {len(matching_files)} 个匹配报告，使用第一个")
+
+    return ref_path, matching_files[0], None, None
+
+
+async def evaluate_structure(new_section: Section, human_section: Section) -> StructureMetrics:
     """评估结构指标（包括完整性和逻辑性）"""
     print(f"    - 正在评估structure指标...")
     total_segments, avg_segments_per_section = num_of_segment(new_section)
 
-    # 调用structure_score获取补充指标
-    comprehensiveness, logicality = await structure_score(new_section)
+    # 基于human_report相对评估结构
+    comprehensiveness, logicality = await structure_score(new_section, human_section)
 
     return StructureMetrics(
         total_segments=total_segments,
@@ -149,80 +319,43 @@ async def evaluate_structure(new_section: Section) -> StructureMetrics:
 
 async def evaluate_content(new_section: Section) -> ContentScore:
     """
-    评估内容指标，对每个section应用score_content
-    取各维度所有segment的平均值
-
-    改进：
-    - 异步并发收集所有segment的评分
-    - 更好的错误处理和日志记录
-    - 更高效的平均值计算
+    评估内容指标。
+    - 对所有 segment 逐段评分
+    - 各维度对全文取平均
     """
     print(f"    - 正在评估content指标...")
-
-    # 收集所有segment的tasks
-    segment_tasks = []
-
-    def collect_segments(section: Section, parent_topic: str = ""):
-        """递归收集所有segment及其topic"""
-        topic = section.title or parent_topic or "unknown"
-
-        if section.segments:
-            for segment in section.segments:
-                if segment.content:
-                    segment_tasks.append((segment.content, topic))
-
-        if section.subsections:
-            for subsection in section.subsections:
-                collect_segments(subsection, topic)
-
-    collect_segments(new_section)
-
+    segment_tasks = _collect_segment_tasks_for_content(new_section)
     if not segment_tasks:
-        return ContentScore(
-            insightfulness=0.0,
-            readability=0.0,
-            relevance=0.0,
-            sufficiency=0.0,
+        raise RuntimeError(
+            "新报告缺少可用于content评估的segment内容，请检查评估输入或outline解析结果。"
         )
 
-    # 初始化维度scores
-    dimension_scores = {
-        "insightfulness": [],
-        "readability": [],
-        "relevance": [],
-        "sufficiency": [],
-    }
-
-    # 异步评估所有segment
-    print(f"      - 共需评估 {len(segment_tasks)} 个segment...")
-
-    # 使用 asyncio.gather 并发执行所有评分任务
-    segment_scores = await asyncio.gather(
-        *[get_content_score(llm_reasoning, formatter, content, topic) for content, topic in segment_tasks],
-        return_exceptions=True
+    print(f"      - 共需评估 {len(segment_tasks)} 个segment")
+    segment_score_results = await asyncio.gather(
+        *[
+            get_content_score(llm_reasoning, formatter, content, topic)
+            for content, topic in segment_tasks
+        ],
+        return_exceptions=True,
     )
-
-    # 处理结果
-    evaluated_count = 0
     failed_count = 0
+    score_dicts: List[Dict[str, float]] = []
 
-    for scores in segment_scores:
+    for scores in segment_score_results:
         if isinstance(scores, Exception):
             failed_count += 1
             continue
+        normalized_scores = _content_score_to_dict(scores)
+        if normalized_scores is None:
+            failed_count += 1
+            continue
+        score_dicts.append(normalized_scores)
 
-        for dim in dimension_scores.keys():
-            if dim in scores and isinstance(scores[dim], (int, float)):
-                dimension_scores[dim].append(float(scores[dim]))
-        evaluated_count += 1
+    if not score_dicts:
+        raise RuntimeError("segment content评分失败，未获得任何有效的评分结果。")
 
-    # 计算平均值，使用列表推导式优化
-    avg_scores = {
-        dim: (sum(scores) / len(scores) if scores else 0.0)
-        for dim, scores in dimension_scores.items()
-    }
-
-    print(f"      - 成功评估 {evaluated_count}/{len(segment_tasks)} 个segment")
+    avg_scores = _average_content_scores(score_dicts)
+    print(f"      - 成功评估 {len(score_dicts)}/{len(segment_tasks)} 个segment")
     if failed_count > 0:
         print(f"      - 评估失败 {failed_count} 个segment")
 
@@ -265,17 +398,24 @@ async def benchmark_single_pair(
                                                    llm_instruct, formatter, only_evidence=True)
         human_section = await process_pdf_to_outline(human_report_path, long_term_dir / 'evidences', llm_reasoning,
                                                      llm_instruct, formatter, only_evidence=True)
+        sanitized_new_section = _sanitize_section_for_scoring(new_section)
+        sanitized_human_section = _sanitize_section_for_scoring(human_section)
 
         print(f"[2/4] 抽取论据...")
-        new_evidences = await extract_unique_evidences(new_section,
-                                                       new_report_path.parent / f"{new_report_path.name}_evidences.json")
-        human_evidences = await extract_unique_evidences(human_section,
-                                                         long_term_dir / 'evidences' / f"{human_report_path.name}_evidences.json")
+        new_evidence_path = new_report_path.parent / f"{new_report_path.stem}_evidences.json"
+        human_evidence_path = long_term_dir / 'evidences' / f"{human_report_path.stem}_evidences.json"
+        new_evidences = await _load_or_extract_evidences(new_section, new_evidence_path)
+        human_evidences = await _load_or_extract_evidences(human_section, human_evidence_path)
+        sanitized_new_evidences = _sanitize_evidence_list(new_evidences)
+        sanitized_human_evidences = _sanitize_evidence_list(human_evidences)
 
         print(f"[3/4] 评估指标...")
-        structure_metrics = await evaluate_structure(new_section)
-        coverage_ratio, accuracy_ratio = await evidence_coverage_and_accuracy(new_evidences, human_evidences)
-        content_metrics = await evaluate_content(new_section)
+        structure_metrics = await evaluate_structure(sanitized_new_section, sanitized_human_section)
+        coverage_ratio, accuracy_ratio = await evidence_coverage_and_accuracy(
+            sanitized_new_evidences,
+            sanitized_human_evidences,
+        )
+        content_metrics = await evaluate_content(sanitized_new_section)
 
         # 组装结果
         print(f"[4/4] 汇总结果...")
@@ -358,46 +498,57 @@ async def run_benchmark(
     failed = 0
     NONE = 0
     failure_reasons = {}
-
-    _write_summary(output_path, _build_summary(benchmark_items, results, successful, failed, NONE, failure_reasons))
+    existing_result_cache: Dict[str, BenchmarkResult] = {}
+    cached_summary = _load_json_file(output_path)
+    if isinstance(cached_summary, dict) and isinstance(cached_summary.get("results"), list):
+        for item in cached_summary["results"]:
+            result = _deserialize_benchmark_result(item)
+            cache_key = _build_pair_cache_key(
+                result.stock_code,
+                result.date,
+                result.human_report_name,
+                result.new_report_name,
+            )
+            existing_result_cache[cache_key] = result
+    pending_pairs = []
 
     for idx, item in enumerate(benchmark_items, 1):
-        print(f"[{idx}/{len(benchmark_items)}] 处理 {item.stock_code} ({item.date})")
+        ref_path, new_report_path, missing_type, missing_detail = _resolve_report_paths(item, new_reports_dir)
 
-        # 查找human_report报告
-        ref_path = local_file.DEMO_DIR / item.human_report
-        if not ref_path.exists():
+        if missing_type == "human_report":
+            print(f"[{idx}/{len(benchmark_items)}] 处理 {item.stock_code} ({item.date})")
             print(f"  ✗ 参考报告不存在: {item.human_report}")
             NONE += 1
             failure_reasons[f"human_report_NONE_{item.stock_code}_{item.date}"] = item.human_report
-            _write_summary(output_path, _build_summary(benchmark_items, results, successful, failed, NONE, failure_reasons))
             continue
 
-        # 查找新报告
-        matching_files = list(
-            new_reports_dir.glob(f"{item.stock_code}_{item.date}*.md")
-        )
-
-        if not matching_files:
-            alt_patterns = _build_new_report_patterns(item.stock_code, item.date)[1:]
-            seen_files = set()
-            for pattern in alt_patterns:
-                for path in new_reports_dir.glob(pattern):
-                    if path not in seen_files:
-                        seen_files.add(path)
-                        matching_files.append(path)
-
-        if not matching_files:
-            print(f"  ✗ 未找到新报告（搜索模式: {item.stock_code}_{item.date}*.md）")
+        if missing_type == "new_report":
+            print(f"[{idx}/{len(benchmark_items)}] 处理 {item.stock_code} ({item.date})")
+            print(f"  ✗ 未找到新报告（搜索模式: {missing_detail}）")
             NONE += 1
-            failure_reasons[f"new_report_NONE_{item.stock_code}_{item.date}"] = f"{item.stock_code}_{item.date}*.md"
-            _write_summary(output_path, _build_summary(benchmark_items, results, successful, failed, NONE, failure_reasons))
+            failure_reasons[f"new_report_NONE_{item.stock_code}_{item.date}"] = missing_detail
             continue
 
-        if len(matching_files) > 1:
-            print(f"  ! 找到 {len(matching_files)} 个匹配报告，使用第一个")
+        cache_key = _build_pair_cache_key(
+            item.stock_code,
+            item.date,
+            ref_path.name,
+            new_report_path.name,
+        )
+        cached_result = existing_result_cache.get(cache_key)
+        if cached_result is not None:
+            print(f"[{idx}/{len(benchmark_items)}] 处理 {item.stock_code} ({item.date})")
+            print(f"  ✓ 复用pair缓存: {new_report_path.name} vs {ref_path.name}")
+            results.append(cached_result)
+            successful += 1
+            continue
 
-        new_report_path = matching_files[0]
+        pending_pairs.append((idx, item, ref_path, new_report_path))
+
+    _write_summary(output_path, _build_summary(benchmark_items, results, successful, failed, NONE, failure_reasons))
+
+    for idx, item, ref_path, new_report_path in pending_pairs:
+        print(f"[{idx}/{len(benchmark_items)}] 处理 {item.stock_code} ({item.date})")
 
         # 执行评估
         try:
@@ -527,7 +678,7 @@ async def main(model_name):
     PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
     # 配置路径
-    benchmark_json = PROJECT_ROOT / "benchmark_1.json"
+    benchmark_json = PROJECT_ROOT / "benchmark.json"
     new_reports = PROJECT_ROOT / "data" / "output" / "reports" / model_name
     long_term = PROJECT_ROOT / "data" / "memory" / "long_term"
     output = PROJECT_ROOT / "data" / "output" / f"{model_name}_benchmark_results.json"

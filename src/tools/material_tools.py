@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import traceback
+from bisect import bisect_right
 from typing import Optional, Callable, Any, Dict, Union, List, Tuple
 import asyncio
 import os
@@ -27,6 +28,60 @@ import json
 import copy
 import requests
 
+
+def _normalize_search_keywords(
+    keywords: list[str],
+    min_keyword_len: int = 1,
+    ignore_case: bool = True,
+) -> list[str]:
+    """规范化关键词列表，并按大小写规则去重。"""
+    normalized_keywords: list[str] = []
+    seen_keywords: set[str] = set()
+    for kw in keywords:
+        kw = (kw or "").strip()
+        if len(kw) < min_keyword_len:
+            continue
+        dedupe_key = kw.casefold() if ignore_case else kw
+        if dedupe_key in seen_keywords:
+            continue
+        seen_keywords.add(dedupe_key)
+        normalized_keywords.append(kw)
+    return normalized_keywords
+
+
+def _find_keyword_matches(
+    text: str,
+    keywords: list[str],
+    min_keyword_len: int = 1,
+    ignore_case: bool = True,
+) -> list[dict[str, Any]]:
+    """查找文本中所有关键词命中位置。"""
+    if not text:
+        return []
+
+    normalized_keywords = _normalize_search_keywords(
+        keywords=keywords,
+        min_keyword_len=min_keyword_len,
+        ignore_case=ignore_case,
+    )
+    if not normalized_keywords:
+        return []
+
+    matches: list[dict[str, Any]] = []
+    for kw in normalized_keywords:
+        flags = re.IGNORECASE if ignore_case else 0
+        for match in re.finditer(re.escape(kw), text, flags):
+            matches.append({
+                "start": match.start(),
+                "end": match.end(),
+                "keyword": kw,
+                "matched_text": match.group(0),
+            })
+
+    matches.sort(key=lambda item: (item["start"], item["end"], item["keyword"]))
+    return matches
+
+
 def grep_file_with_context(
     filepath: str,
     keyword: str,
@@ -46,10 +101,10 @@ def grep_file_with_context(
 
     Returns:
         List of dicts containing:
-        - 'line_num': Line number of the match (0-based)
-        - 'matched_line': The line containing the match
-        - 'before': Lines before the match (list of tuples: (line_num, line_text))
-        - 'after': Lines after the match (list of tuples: (line_num, line_text))
+        - 'line_num': First matched line number in the merged window (0-based)
+        - 'matched_line': First matched line text in the merged window
+        - 'context': All lines in the merged context window
+        - 'match_line_numbers': All matched line numbers covered by this window
         - 'context_start': Starting line number of context window
         - 'context_end': Ending line number of context window
     """
@@ -59,45 +114,80 @@ def grep_file_with_context(
     except Exception as e:
         return [{"error": f"Failed to read file: {str(e)}"}]
 
-    results = []
+    if not lines:
+        return []
 
-    # Compile regex if needed
+    matched_line_indices: list[int] = []
+
     if regex:
         try:
             pattern = re.compile(keyword, 0 if case_sensitive else re.IGNORECASE)
         except Exception as e:
             return [{"error": f"Invalid regex pattern: {str(e)}"}]
+
+        for line_idx, line in enumerate(lines):
+            if pattern.search(line):
+                matched_line_indices.append(line_idx)
     else:
-        if not case_sensitive:
-            keyword_lower = keyword.lower()
+        full_text = "".join(lines)
+        line_start_offsets: list[int] = []
+        current_offset = 0
+        for line in lines:
+            line_start_offsets.append(current_offset)
+            current_offset += len(line)
 
-    # Search through lines
-    for line_idx, line in enumerate(lines):
-        match_found = False
+        matches = _find_keyword_matches(
+            text=full_text,
+            keywords=[keyword],
+            min_keyword_len=1,
+            ignore_case=not case_sensitive,
+        )
 
-        if regex:
-            match_found = bool(pattern.search(line))
-        else:
-            match_found = keyword_lower in line.lower() if not case_sensitive else keyword in line
+        unique_line_indices: set[int] = set()
+        for match in matches:
+            line_idx = bisect_right(line_start_offsets, match["start"]) - 1
+            if line_idx >= 0:
+                unique_line_indices.add(line_idx)
+        matched_line_indices = sorted(unique_line_indices)
 
-        if match_found:
-            # Calculate context window
-            start_idx = max(0, line_idx - context_lines)
-            end_idx = min(len(lines), line_idx + context_lines + 1)
+    if not matched_line_indices:
+        return []
 
-            # Gather before and after lines
-            before = [(i, lines[i].rstrip('\n')) for i in range(start_idx, line_idx)]
-            after = [(i, lines[i].rstrip('\n')) for i in range(line_idx + 1, end_idx)]
+    merged_results: list[dict[str, Any]] = []
+    for line_idx in matched_line_indices:
+        start_idx = max(0, line_idx - context_lines)
+        end_idx = min(len(lines), line_idx + context_lines + 1)
 
-            results.append({
-                'line_num': line_idx,
-                'matched_line': line.rstrip('\n'),
-                'before': before,
-                'after': after,
-                'context_start': start_idx,
-                'context_end': end_idx,
-                'context_lines_count': context_lines,
-            })
+        if merged_results and start_idx <= merged_results[-1]["context_end"]:
+            previous = merged_results[-1]
+            previous["context_end"] = max(previous["context_end"], end_idx)
+            previous["match_line_numbers"].append(line_idx)
+            continue
+
+        merged_results.append({
+            "context_start": start_idx,
+            "context_end": end_idx,
+            "match_line_numbers": [line_idx],
+            "context_lines_count": context_lines,
+        })
+
+    results = []
+    for item in merged_results:
+        context = [
+            (i, lines[i].rstrip('\n'))
+            for i in range(item["context_start"], item["context_end"])
+        ]
+        match_line_numbers = sorted(set(item["match_line_numbers"]))
+        first_match_line = match_line_numbers[0]
+        results.append({
+            "line_num": first_match_line,
+            "matched_line": lines[first_match_line].rstrip('\n'),
+            "context": context,
+            "match_line_numbers": match_line_numbers,
+            "context_start": item["context_start"],
+            "context_end": item["context_end"],
+            "context_lines_count": context_lines,
+        })
 
     return results
 
@@ -129,23 +219,24 @@ def print_grep_results(
         if i > 0:
             output.append("\n" + "="*80 + "\n")
 
-        output.append(f"Match #{i+1} at line {result['line_num']}:\n")
+        match_line_numbers = result.get("match_line_numbers") or [result["line_num"]]
+        line_label = ", ".join(str(line_num) for line_num in match_line_numbers)
+        output.append(f"Match #{i+1} at line {line_label}:\n")
 
-        # Before context
-        if result['before']:
-            for line_num, line_text in result['before']:
-                prefix = f"{line_num:5d}: " if show_line_numbers else ""
-                output.append(f"{prefix}{line_text}\n")
+        context = result.get("context")
+        if context is None:
+            context = []
+            before = result.get("before", [])
+            after = result.get("after", [])
+            context.extend(before)
+            context.append((result["line_num"], result["matched_line"]))
+            context.extend(after)
 
-        # Matched line
-        prefix = f"{result['line_num']:5d}: " if show_line_numbers else ""
-        output.append(f"{prefix}{result['matched_line']}\n")
-
-        # After context
-        if result['after']:
-            for line_num, line_text in result['after']:
-                prefix = f"{line_num:5d}: " if show_line_numbers else ""
-                output.append(f"{prefix}{line_text}\n")
+        matched_line_set = set(match_line_numbers)
+        for line_num, line_text in context:
+            prefix = f"{line_num:5d}: " if show_line_numbers else ""
+            marker = ">" if line_num in matched_line_set else " "
+            output.append(f"{marker}{prefix}{line_text}\n")
 
     if len(results) > max_results:
         output.append(f"\n... and {len(results) - max_results} more matches (showing first {max_results})")
@@ -280,6 +371,81 @@ def _clip_end_date(end_date: str | None, cur_date: str) -> str:
     normalized_end = normalize_compact_date(end_date)
     return min(normalized_end, cur_date) if normalized_end else cur_date
 
+
+def extract_keyword_context_snippets(
+    text: str,
+    keywords: list[str],
+    context_chars: int = 100,
+    min_keyword_len: int = 1,
+    ignore_case: bool = True,
+    merge_gap_chars: int = 20,
+    highlight: bool = False,
+    max_snippets: int | None = None,
+) -> list[dict[str, Any]]:
+    """提取关键词命中的上下文片段，并对重复/重叠命中做合并去重。"""
+    if not text:
+        return []
+
+    clean_text = re.sub(r"\s+", " ", text).strip()
+    if not clean_text:
+        return []
+
+    matches = _find_keyword_matches(
+        text=clean_text,
+        keywords=keywords,
+        min_keyword_len=min_keyword_len,
+        ignore_case=ignore_case,
+    )
+
+    intervals: list[list[Any]] = []
+    for match in matches:
+        start_idx = max(0, match["start"] - context_chars)
+        end_idx = min(len(clean_text), match["end"] + context_chars)
+        intervals.append([start_idx, end_idx, {match["keyword"]}])
+
+    if not intervals:
+        return []
+
+    intervals.sort(key=lambda item: item[0])
+    merged_intervals = [intervals[0]]
+    for current in intervals[1:]:
+        previous = merged_intervals[-1]
+        if current[0] <= previous[1] + merge_gap_chars:
+            previous[1] = max(previous[1], current[1])
+            previous[2].update(current[2])
+        else:
+            merged_intervals.append(current)
+
+    snippets: list[dict[str, Any]] = []
+    seen_snippets: set[str] = set()
+    for start_idx, end_idx, matched_keywords in merged_intervals:
+        prefix = "..." if start_idx > 0 else ""
+        suffix = "..." if end_idx < len(clean_text) else ""
+        snippet = prefix + clean_text[start_idx:end_idx] + suffix
+
+        if highlight:
+            for kw in sorted(matched_keywords, key=len, reverse=True):
+                snippet = re.sub(
+                    re.escape(kw),
+                    lambda m: f"【{m.group(0)}】",
+                    snippet,
+                    flags=re.IGNORECASE if ignore_case else 0,
+                )
+
+        snippet_key = snippet.casefold() if ignore_case else snippet
+        if snippet_key in seen_snippets:
+            continue
+        seen_snippets.add(snippet_key)
+
+        snippets.append({
+            "snippet": snippet,
+            "keywords": sorted(matched_keywords),
+        })
+        if max_snippets is not None and len(snippets) >= max_snippets:
+            break
+
+    return snippets
+
 class MaterialTools:
     def __init__(self, short_term: ShortTermMemoryStore, long_term: LongTermMemoryStore) -> None:
         self.short_term = short_term
@@ -404,11 +570,12 @@ class MaterialTools:
 
             # 格式化搜索结果
             formatted_results = print_grep_results(results, max_results=10, show_line_numbers=True)
+            match_line_count = sum(len(result.get("match_line_numbers", [])) for result in results)
 
             text = (
                 f"[read_material] ID: {cite_id}\n"
                 f"关键词: '{keyword}'\n"
-                f"共找到 {len(results)} 个匹配\n"
+                f"共找到 {match_line_count} 处命中，合并为 {len(results)} 段上下文\n"
                 f"带有{context_lines}的上下文如下: \n\n"
                 f"{formatted_results}"
             )
@@ -419,6 +586,7 @@ class MaterialTools:
                     "cite_id": cite_id,
                     "keyword": keyword,
                     "matches": len(results),
+                    "match_lines": match_line_count,
                     "type": "keyword_search",
                     "context_lines": context_lines
                 }
@@ -1666,49 +1834,18 @@ class MaterialTools:
                         # print(f"fetch_and_get_context: 已获取网页文本，长度={len(page_text)}，准备进行关键词检索。")
                         # 2. 在具体内容中做一次上下文检索（检索所有关键词）
                         if page_text and search_kws:
-                            found_contexts = []
-                            all_intervals = []
-                            
-                            # 1. 扫描并收集所有关键词的所有索引区间
-                            for kw in search_kws:
-                                idx = page_text.find(kw)
-                                while idx != -1:
-                                    start_idx = max(0, idx - 150)
-                                    end_idx = min(len(page_text), idx + len(kw) + 150)
-                                    # 保存：[起点, 终点, 包含的关键词集合]
-                                    all_intervals.append([start_idx, end_idx, {kw}])
-                                    
-                                    idx = page_text.find(kw, idx + len(kw))
-                                    
-                            if all_intervals:
-                                # 2. 必须先按起点位置从小到大排序，这是区间合并的前提
-                                all_intervals.sort(key=lambda x: x[0])
-                                
-                                # 3. 全局合并重叠的区间
-                                merged_intervals = [all_intervals[0]]
-                                for current in all_intervals[1:]:
-                                    previous = merged_intervals[-1]
-                                    
-                                    # 如果当前区间的起点 <= 前一个区间的终点，说明发生了重叠
-                                    if current[0] <= previous[1]:
-                                        # 更新终点为两者的最大值
-                                        previous[1] = max(previous[1], current[1])
-                                        # 合并关键词集合（使用 update 可以自动去重）
-                                        previous[2].update(current[2])
-                                    else:
-                                        # 没有重叠，作为独立的新区间加入
-                                        merged_intervals.append(current)
-                                        
-                                # 4. 根据全局合并后的区间提取文本
-                                for start, end, kws_set in merged_intervals:
-                                    snippet = "..." + page_text[start:end].replace("\n", " ") + "..."
-                                    # 将集合中的关键词拼成字符串，如 "新能源, 储能"
-                                    kws_str = ", ".join(kws_set)
-                                    found_contexts.append(f"[{kws_str}] {snippet}")
-
-                            # 如果找到了任何上下文，将它们拼接在一起
-                            if found_contexts:
-                                # print(f"{found_contexts}")
+                            snippet_items = extract_keyword_context_snippets(
+                                text=page_text,
+                                keywords=search_kws,
+                                context_chars=150,
+                                merge_gap_chars=20,
+                                ignore_case=True,
+                            )
+                            if snippet_items:
+                                found_contexts = []
+                                for item in snippet_items:
+                                    kws_str = ", ".join(item["keywords"])
+                                    found_contexts.append(f"[{kws_str}] {item['snippet']}")
                                 context = " ｜ ".join(found_contexts)
 
                             # print(f"getting entity info")

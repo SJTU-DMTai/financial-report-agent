@@ -1,5 +1,6 @@
 import os
 import asyncio
+from functools import partial
 from datetime import datetime
 
 from agentscope.formatter import OpenAIChatFormatter
@@ -8,12 +9,17 @@ from pathlib import Path
 
 from agentscope.model import ChatModelBase
 
-from src.memory.working import Section
+from src.memory.working import (
+    Section,
+    _get_outline_cache_paths,
+    _load_cached_outline,
+    _parse_segment_response,
+)
 from src.prompt import prompt_dict
 from src.utils.call_with_retry import call_chatbot_with_retry
 from src.utils.file_converter import pdf_to_markdown, markdown_to_sections
 from src.utils.image_analyze import inject_vlm_into_demo_markdown
-from src.utils.instance import create_agent_formatter, create_vlm_model, cfg
+from src.utils.instance import create_agent_formatter, create_vlm_model
 
 
 async def process_pdf_to_outline(pdf_path: Path, save_dir: Path,
@@ -23,18 +29,14 @@ async def process_pdf_to_outline(pdf_path: Path, save_dir: Path,
     处理单个PDF，生成完整的Section对象。
     会检查并使用_outline.json缓存，以避免重复处理。
     """
-    outline_json_path = save_dir / cfg.llm_name / f'{pdf_path.name.split(".")[0]}_outline.json'
-    outline_json_path2 = save_dir / f'{pdf_path.name.split(".")[0]}_outline.json'
-    if outline_json_path.exists() or outline_json_path2.exists():
-        if outline_json_path.exists():
-            manuscript = Section.from_json(outline_json_path.read_text(encoding="utf-8"))
-        else:
-            manuscript = Section.from_json(outline_json_path2.read_text(encoding="utf-8"))
+    manuscript = _load_cached_outline(pdf_path, save_dir, only_evidence)
+    if manuscript is not None:
         outline = manuscript.read(read_subsections=True, with_reference=True, with_content=True, with_evidence=True,
                                   fold_other=False)
         print(outline)
         return manuscript
 
+    outline_json_path, _ = _get_outline_cache_paths(pdf_path, save_dir, only_evidence)
     outline_json_path.parent.mkdir(parents=True, exist_ok=True)
     if formatter is None:
         formatter = create_agent_formatter()
@@ -74,6 +76,7 @@ async def process_pdf_to_outline(pdf_path: Path, save_dir: Path,
                 raise AssertionError("Decomposed segments text is None")
             decomposed_segments_text = decomposed_segments_text.split("<SEP>")
             processed_segments = []
+            parse_segment_response = partial(_parse_segment_response, only_evidence=only_evidence)
             for i, segment_text in enumerate(decomposed_segments_text):
                 if not segment_text.strip(): continue
                 segment_res = await call_chatbot_with_retry(
@@ -83,11 +86,12 @@ async def process_pdf_to_outline(pdf_path: Path, save_dir: Path,
                     f"（{'可能是不同公司' if another_stock else '同一公司'}），名为{demo_name}。"
                     f"从中摘出的一段参考片段如下：\n<reference>{segment_text}</reference>\n\n"
                     f"请你考虑时间差和公司异同，抽取用于当前新任务的论据{'' if only_evidence else '、撰写模版、写作要求'}和主题。\n\n",
+                    hook=parse_segment_response,
                     handle_hook_exceptions=(AssertionError,)
                 )
                 if isinstance(segment_res, str) and "<skip>true</skip>" in segment_res.lower():
                     continue
-                segment = (section.parse_evidence if only_evidence else section.parse)(segment_res)
+                segment = segment_res
                 segment.reference = segment_text
                 processed_segments.append(segment)
             section.segments = processed_segments
@@ -96,6 +100,5 @@ async def process_pdf_to_outline(pdf_path: Path, save_dir: Path,
     # outline = manuscript.read(read_subsections=True, with_reference=True, with_content=True, with_evidence=True,
     #                           fold_other=False)
     # print(outline)
-    if not only_evidence:
-        outline_json_path.write_text(manuscript.to_json(ensure_ascii=False), encoding="utf-8")
+    outline_json_path.write_text(manuscript.to_json(ensure_ascii=False), encoding="utf-8")
     return manuscript

@@ -30,6 +30,14 @@ class ContentScore(BaseModel):
     relevance: int | float
     sufficiency: int | float
 
+def _build_content_user_prompt(content: str, topic: str) -> str:
+    return f"""# 评估任务
+**研报片段主题:** {topic}
+**研报片段内容:**
+{content}
+
+请你仔细思考分析后进行打分。"""
+
 async def get_content_score(model: ChatModelBase, formatter: FormatterBase, content: str, topic: str) -> Dict[str, int]:
     """
     评估给定的内容字符串。
@@ -40,17 +48,12 @@ async def get_content_score(model: ChatModelBase, formatter: FormatterBase, cont
     Returns:
         Dict[str, int]: 包含四个维度的评分
     """
-    # 准备评估提示
-    user_prompt = f"""# 评估任务
-**研报片段主题:** {topic}
-**研报片段内容:**
-{content}
-
-请你仔细思考分析后进行打分。"""
+    user_prompt = _build_content_user_prompt(content, topic)
     scores = await call_chatbot_with_retry(model, formatter,
                                            prompt_dict['eval_content'], user_prompt,
                                            structured_model=ContentScore)
     return scores
+
 
 def _extract_score(text: str) -> Dict[str, int]:
     scores_dict = {}
