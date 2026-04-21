@@ -7,8 +7,6 @@ from dataclasses_json import dataclass_json
 from pathlib import Path
 from typing import List
 
-from src.utils.instance import cfg
-
 @dataclass_json
 @dataclass
 class Segment:
@@ -135,6 +133,8 @@ class Section:
 
 
 def _get_outline_cache_paths(pdf_path: Path, save_dir: Path, only_evidence: bool) -> tuple[Path, Path]:
+    from src.utils.instance import cfg
+    
     stem = pdf_path.stem
     suffix = "_outline_only_evidence.json" if only_evidence else "_outline.json"
     model_cache_path = save_dir / cfg.llm_name / f"{stem}{suffix}"
