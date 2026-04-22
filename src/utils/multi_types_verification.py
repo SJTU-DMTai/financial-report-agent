@@ -2,10 +2,10 @@
 Triple-Check Verifier — 论文级三路交叉验证系统
 =================================================
 Architecture:
-    Claim Extractor → [FactChecker, NumericChecker, TemporalChecker] → ConsistencyFusion
+    Claim Extractor → [FactVerifier, NumericVerifier, TemporalVerifier] → Issue Fusion
 
 External API:
-    verify_issues = await verify_segment_content(segment, short_term, long_term)
+    verify_issues = await verify(segment, short_term, long_term)
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ import asyncio
 import json
 import re
 import traceback
-from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import (
@@ -24,21 +23,16 @@ from typing import (
     Optional,
     Tuple,
 )
-from urllib.parse import urlparse
-
 from agentscope.message import Msg
-from agentscope.agent import ReActAgent  
-from agentscope.memory import InMemoryMemory
-from agentscope.tool import Toolkit
 
-from src.agents.verifier import create_three_verifiers, build_verifier_toolkit
+from src.agents.verifier import create_three_verifiers
 from src.memory.short_term import ShortTermMemoryStore, MaterialType
 from src.memory.long_term import LongTermMemoryStore
 from src.utils.instance import create_chat_model, create_agent_formatter
-from src.utils.call_with_retry import call_agent_with_retry
+from src.utils.call_with_retry import call_agent_with_retry, call_chatbot_with_retry
 from src.prompt import prompt_dict
+from src.utils.multi_source_verification import material_source_key
 from pathlib import Path
-from src.memory.short_term import MaterialType
 
 # ---------------------------------------------------------------------------
 # Verifier Trace
@@ -157,6 +151,13 @@ def _safe_parse_json(text: str) -> Dict[str, Any]:
 
     return json.loads(json_str)
 
+class ClaimExtractionError(Exception):
+    """Claim 提取失败的异常，携带原始响应文本。"""
+    def __init__(self, message: str, raw: str = ""):
+        super().__init__(message)
+        self.raw = raw
+
+
 def fix_encoding(s: str) -> str:
     try:
         return s.encode('latin-1').decode('utf-8')
@@ -189,6 +190,17 @@ class ClaimType(str, Enum):
     COMPOSITE = "composite"
 
 
+# claim_type → verifier name 列表的全局映射（避免多处硬编码）
+CLAIM_TYPE_TO_VERIFIERS = {
+    ClaimType.FACTUAL: ["fact"],
+    ClaimType.NUMERIC: ["numeric"],
+    ClaimType.TEMPORAL: ["temporal"],
+    ClaimType.FACTUAL_NUMERIC: ["fact", "numeric"],
+    ClaimType.NUMERIC_TEMPORAL: ["numeric", "temporal"],
+    ClaimType.COMPOSITE: ["fact", "numeric", "temporal"],
+}
+
+
 @dataclass
 class Claim:
     claim_id: str
@@ -196,7 +208,6 @@ class Claim:
     original_text: str
     normalized_text: str
     slots: Dict[str, Any] = field(default_factory=dict)
-    source_span: Tuple[int, int] = (0, 0)
     cite_ids: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -213,69 +224,65 @@ class Claim:
 class ClaimExtractor:
     """
     从文本片段中提取原子声明。
-    使用 ChatAgent（无工具）进行纯文本生成，避免 ReAct 的开销。
+    直接使用 model + formatter 进行纯文本生成，避免 ReActAgent 的开销。
     """
     CITE_RE = re.compile(r"\[\^cite_id:([A-Za-z0-9_\-]+)(?:\|[^\]]*)?\]")
 
-    def __init__(self, agent):
+    def __init__(self, model, formatter, sys_prompt: str):
         """
-        :param agent: AgentScope ChatAgent 实例（已配置好系统提示词）
+        :param model: ChatModel 实例
+        :param formatter: Formatter 实例
+        :param sys_prompt: 系统提示词
         """
-        self.agent = agent
+        self.model = model
+        self.formatter = formatter
+        self.sys_prompt = sys_prompt
 
     # ---------- 主提取方法 ----------
     async def extract(self, text: str) -> List[Claim]:
         if not text.strip():
             return []
 
-        # 构建用户消息
-        msg = Msg(
-            name="extractor",
-            role="user",
-            content=text
-        )
-
-        # 使用 call_agent_with_retry 调用 agent，并额外校验文本响应
-        last_exc: Exception | None = None
+        last_error = None
         raw = ""
 
-        try:
-            response_msg = await call_agent_with_retry(self.agent, msg)
-            raw = _extract_text_response(response_msg)
-        except Exception as e:
-            last_exc = e
-            await append_verifier_trace_log(
-                "ClaimExtractor",
-                f"[ClaimExtractor] invalid text response after call_agent_with_retry: "
-                f"{type(e).__name__}: {e}"
-            )
-            if hasattr(self.agent, "memory") and self.agent.memory is not None:
-                await self.agent.memory.clear()
+        for attempt in range(2):
+            try:
+                raw = await call_chatbot_with_retry(
+                    self.model, self.formatter,
+                    self.sys_prompt, text,
+                    max_retries=3,
+                )
+            except Exception as e:
+                await append_verifier_trace_log(
+                    "ClaimExtractor",
+                    f"[ClaimExtractor] LLM call failed: {type(e).__name__}: {e}"
+                )
+                raise ClaimExtractionError(f"LLM call failed: {e}", raw="")
 
-        if last_exc is not None and not raw:
-            raise last_exc
-
-        # print("\n====== RAW LLM OUTPUT ======")
-        # print(type(raw))
-        # print("====== END ======\n")
-
-        # 安全解析 JSON
-        try:
-            data = _safe_parse_json(raw)
-        except Exception as e:
-            await append_verifier_trace_log(
-                "ClaimExtractor",
-                f"[ClaimExtractor] Failed to parse JSON: {e}",
-                payload=f"Raw text:\n{raw}",
-            )
-            return []
+            try:
+                data = _safe_parse_json(raw)
+                break
+            except Exception as e:
+                last_error = e
+                await append_verifier_trace_log(
+                    "ClaimExtractor",
+                    f"[ClaimExtractor] JSON parse failed (attempt {attempt + 1}): {e}",
+                    payload=f"Raw text:\n{raw[:2000]}",
+                )
+                if attempt == 0:
+                    text = f"{text}\n\n注意：上次输出无法解析为合法 JSON。请严格输出合法 JSON，不要包含任何 markdown 代码块或解释文字。"
+                else:
+                    raise ClaimExtractionError(f"JSON parse failed after retry: {last_error}", raw=raw)
+        else:
+            raise ClaimExtractionError(f"JSON parse failed after retry: {last_error}", raw=raw)
 
         segments = data.get("segments", [])
         if not segments:
             await append_verifier_trace_log(
                 "ClaimExtractor",
                 "[ClaimExtractor] No segments returned from LLM",
-                payload=f"Raw text:\n{raw}",
+                payload=f"Raw text:\n{raw[:2000]}",
             )
             return []
 
@@ -295,7 +302,6 @@ class ClaimExtractor:
                     original_text=item.get("original_text", ""),
                     normalized_text=item.get("normalized_text", ""),
                     slots=item.get("slots", {}),
-                    source_span=(0, 0),  # 可选：后面再做
                     cite_ids=item.get("cite_ids", seg_cite_ids)
                 )
                 claims.append(claim)
@@ -319,10 +325,15 @@ class ClaimExtractor:
             if len(c.original_text.strip()) < 2:
                 continue
 
+            # 交叉校验：提取了 numeric slot 但 claim_type 为 factual → 升级为 factual_numeric
+            if c.claim_type == ClaimType.FACTUAL and c.slots.get("numeric"):
+                c.claim_type = ClaimType.FACTUAL_NUMERIC
+
             c.claim_id = f"c{len(filtered)}"
             filtered.append(c)
 
         return filtered
+
 
 # ---------------------------------------------------------------------------
 # §3  Data Structure
@@ -332,7 +343,7 @@ class ClaimExtractor:
 class EvidenceSpan:
     cite_id: str
     text: str
-    score: Optional[float] = None   # 相关性/置信度
+    source: str = ""           # 证据来源链路：llm / numeric / fact_store
 
 @dataclass
 class ClaimIssue:
@@ -340,23 +351,45 @@ class ClaimIssue:
     type: str
     description: str
     severity: str
+    confidence: float = 1.0
+    source: str = ""           # fact / numeric / temporal
     evidence: List[EvidenceSpan] = field(default_factory=list)
-    suggestion: Dict[str, Any] = field(default_factory=dict)
+    suggestion: str = ""
 
-@dataclass
-class ClaimResult:
-    claim_id: str
-    issues: List[ClaimIssue]
 
 @dataclass
 class ClaimEvaluation:
     """单个声明的评估结果"""
     claim_id: str
     original_text: str
-    claim_score: int          # 1-5, 1最差, 5完美
     issues: List[ClaimIssue]
-    combined_suggestion: str
-    signature: Dict[str, int] = field(default_factory=dict)  # {"critical": n, "major": n, "minor": n}
+
+    @property
+    def claim_score(self) -> float:
+        """连续化评分：5分制，无问题=5.0"""
+        return compute_claim_score(self.issues)
+
+    @property
+    def signature(self) -> Dict[str, int]:
+        return {
+            "critical": sum(1 for i in self.issues if i.severity == "critical"),
+            "major": sum(1 for i in self.issues if i.severity == "major"),
+            "minor": sum(1 for i in self.issues if i.severity == "minor"),
+        }
+
+    @property
+    def combined_suggestion(self) -> str:
+        critical_issues = [i for i in self.issues if i.severity == "critical"]
+        major_issues = [i for i in self.issues if i.severity == "major"]
+        if not self.issues:
+            return ""
+        if critical_issues:
+            return critical_issues[0].suggestion
+        if major_issues:
+            return major_issues[0].suggestion
+        if self.issues[0].suggestion:
+            return self.issues[0].suggestion
+        return ""
 
 @dataclass
 class SegmentEvaluationReport:
@@ -371,45 +404,34 @@ class SegmentEvaluationReport:
 # ---------------------------------------------------------------------------
 # §4  Verifier Router + Issue Fusion
 # ---------------------------------------------------------------------------
-import traceback
 
 
 class VerifierRouter:
-    def __init__(self, verifiers: Dict[str, Any], max_concurrent: int = 3):
+    def __init__(self, verifiers: Dict[str, Any], short_term: Optional[Any] = None, max_concurrent: int = 3):
         """
         :param verifiers: {"fact": agent, "numeric": agent, "temporal": agent}
+        :param short_term: ShortTermMemoryStore，用于 evidence 来源独立性分析
         :param max_concurrent: 最大并行验证请求数（限流）
         """
         self.verifiers = verifiers
+        self.short_term = short_term
         self._semaphore = asyncio.Semaphore(max_concurrent)
 
-    async def verify_claims(self, claims: List[Claim]) -> List[ClaimResult]:
+    async def verify_claims(self, claims: List[Claim]) -> Dict[str, List[ClaimIssue]]:
         """批量验证所有 claims，每个类型只调用一次 agent，并受并发限流控制"""
         # 按类型分组
         claims_by_type: Dict[ClaimType, List[Claim]] = {}
         for claim in claims:
             claims_by_type.setdefault(claim.claim_type, []).append(claim)
 
-        # 需要验证的类型映射（与 agent 类型对应）
-        type_to_verifier = {
-            ClaimType.FACTUAL: "fact",
-            ClaimType.NUMERIC: "numeric",
-            ClaimType.TEMPORAL: "temporal",
-            ClaimType.FACTUAL_NUMERIC: ["fact", "numeric"],
-            ClaimType.NUMERIC_TEMPORAL: ["numeric", "temporal"],
-            ClaimType.COMPOSITE: ["fact", "numeric", "temporal"],
-        }
-
         # 构建 verifier -> claims 映射（可能有重复）
         verifier_to_claims: Dict[str, List[Claim]] = {}
         for ct, clist in claims_by_type.items():
-            needed = type_to_verifier.get(ct, [])
-            if isinstance(needed, str):
-                needed = [needed]
+            needed = CLAIM_TYPE_TO_VERIFIERS.get(ct, [])
             for vname in needed:
                 verifier_to_claims.setdefault(vname, []).extend(clist)
 
-        # ---------- 去重（按 claim_id）----------
+        # 去重（按 claim_id）
         for vname in list(verifier_to_claims.keys()):
             claims_list = verifier_to_claims[vname]
             seen = set()
@@ -430,36 +452,156 @@ class VerifierRouter:
 
         # 合并结果
         claim_issues: Dict[str, List[ClaimIssue]] = {c.claim_id: [] for c in claims}
-        for result in results:   # result 是 {claim_id: [issues]}
+        for result in results:
             for cid, issues in result.items():
                 claim_issues[cid].extend(issues)
 
-        # 构建 ClaimResult 列表，并合并 issues
-        claim_results = []
+        # 按 claim_id 合并 issues 并赋予系统 confidence
+        result: Dict[str, List[ClaimIssue]] = {}
         for c in claims:
             merged = self._merge_issues(claim_issues[c.claim_id])
-            claim_results.append(ClaimResult(claim_id=c.claim_id, issues=merged))
-        return claim_results
+            for issue in merged:
+                self._assign_system_confidence(issue, c.cite_ids)
+            result[c.claim_id] = merged
+        return result
+
+    # ---------- _run_batch 拆分为三步：调用 → 解析 → 校验 ----------
+
+    async def _call_agent(self, verifier_name: str, payload: dict) -> str:
+        """调用 agent 获取原始文本响应。"""
+        agent = self.verifiers[verifier_name]
+        msg = Msg(role="user", content=json.dumps(payload, ensure_ascii=False), name="Verifier")
+        response_msg = await call_agent_with_retry(agent, msg)
+        return _extract_text_response(response_msg)
+
+    async def _parse_response(self, verifier_name: str, raw_text: str, payload: dict) -> Tuple[Optional[Any], str]:
+        """解析 JSON 响应，失败时重试一次 agent 调用。
+        返回: (解析后的数据, 最后使用的 raw_text)。解析彻底失败返回 (None, raw_text)。
+        """
+        data = None
+        parse_error = None
+        for attempt in range(2):
+            try:
+                data = _safe_parse_json(raw_text)
+                return data, raw_text
+            except (json.JSONDecodeError, ValueError) as e:
+                parse_error = e
+                await append_verifier_trace_log(
+                    f"{verifier_name.upper()} PARSE ERROR",
+                    f"JSON parse failed (attempt {attempt + 1}): {e}",
+                    payload=raw_text[:2000]
+                )
+                if attempt == 0:
+                    try:
+                        retry_payload = json.dumps(payload, ensure_ascii=False) + "\n\n注意：上次输出无法解析为合法 JSON。请严格输出合法 JSON 数组，不要包含任何 markdown 代码块或解释文字。"
+                        msg = Msg(role="user", content=retry_payload, name="Verifier")
+                        agent = self.verifiers[verifier_name]
+                        response_msg = await call_agent_with_retry(agent, msg)
+                        raw_text = _extract_text_response(response_msg)
+                    except Exception as retry_e:
+                        await append_verifier_trace_log(
+                            f"{verifier_name.upper()} RETRY ERROR",
+                            f"Retry call failed: {retry_e}",
+                        )
+                        break
+                else:
+                    break
+
+        if data is None:
+            await append_verifier_trace_log(
+                f"{verifier_name.upper()} PARSE FATAL",
+                f"JSON parse failed after retry: {parse_error}",
+                payload=raw_text[:2000]
+            )
+        return data, raw_text
+
+    async def _validate_schema(self, verifier_name: str, items: List[Any], claims: List[Claim]) -> Dict[str, List[ClaimIssue]]:
+        """对解析后的 issue items 做类型安全处理和 schema 校验。"""
+        result: Dict[str, List[ClaimIssue]] = {c.claim_id: [] for c in claims}
+        for item in items:
+            if not isinstance(item, dict):
+                await append_verifier_trace_log(
+                    f"{verifier_name.upper()} SCHEMA ERROR",
+                    "Issue item is not a dict",
+                    payload=str(item)[:200]
+                )
+                continue
+
+            claim_id = item.get("claim_id")
+            if not claim_id or not isinstance(claim_id, str) or claim_id not in result:
+                await append_verifier_trace_log(
+                    f"{verifier_name.upper()} SCHEMA ERROR",
+                    f"Missing or invalid claim_id: {claim_id}",
+                    payload=json.dumps(item, ensure_ascii=False)[:200]
+                )
+                continue
+
+            issue_type = item.get("type")
+            if not isinstance(issue_type, str):
+                issue_type = "unknown"
+
+            description = item.get("description", "")
+            if not isinstance(description, str):
+                description = str(description)
+
+            severity = item.get("severity")
+            if severity and not isinstance(severity, str):
+                severity = "minor"
+
+            evidence_spans = []
+            ev_list = item.get("evidence", [])
+            if isinstance(ev_list, list):
+                for ev in ev_list:
+                    if isinstance(ev, dict):
+                        evidence_spans.append(EvidenceSpan(
+                            cite_id=ev.get("cite_id", ""),
+                            text=ev.get("text", ""),
+                            source="agent",
+                        ))
+                    elif isinstance(ev, EvidenceSpan):
+                        evidence_spans.append(ev)
+
+            suggestion_raw = item.get("suggestion", "")
+            if isinstance(suggestion_raw, dict):
+                suggestion_str = suggestion_raw.get("content", str(suggestion_raw))
+            elif isinstance(suggestion_raw, str):
+                suggestion_str = suggestion_raw
+            else:
+                suggestion_str = ""
+
+            issue = ClaimIssue(
+                claim_id=claim_id,
+                type=issue_type,
+                description=f"[{verifier_name}] {description}",
+                severity=self._normalize_severity(severity),
+                source=verifier_name,
+                evidence=evidence_spans,
+                suggestion=suggestion_str
+            )
+            result[claim_id].append(issue)
+
+        return result
 
     async def _run_batch(self, verifier_name: str, claims: List[Claim]) -> Dict[str, List[ClaimIssue]]:
-        """一次性处理多个 claims，返回 {claim_id: [issues]}，并保证类型安全"""
-        agent = self.verifiers[verifier_name]
+        """一次性处理多个 claims：调用 → 解析 → 校验。"""
         payload = {"claims": [c.to_dict() for c in claims]}
 
         try:
-            msg = Msg(role="user", content=json.dumps(payload, ensure_ascii=False), name="Verifier")
-            response_msg = await call_agent_with_retry(agent, msg)
-            text = _extract_text_response(response_msg)
+            raw_text = await self._call_agent(verifier_name, payload)
+            data, final_text = await self._parse_response(verifier_name, raw_text, payload)
 
-            try:
-                data = _safe_parse_json(text)
-            except (json.JSONDecodeError, ValueError) as e:
-                await append_verifier_trace_log(
-                    f"{verifier_name.upper()} PARSE ERROR",
-                    f"JSON parse failed: {e}",
-                    payload=text[:500]
-                )
-                return {c.claim_id: [] for c in claims}  # 解析失败，返回空 issues
+            if data is None:
+                return {
+                    c.claim_id: [ClaimIssue(
+                        claim_id=c.claim_id,
+                        type="parse_error",
+                        description=f"[{verifier_name}] JSON parse failed",
+                        severity="critical",
+                        evidence=[EvidenceSpan(cite_id="", text=final_text[:2000], source="parser")],
+                        suggestion=f"Verifier {verifier_name} 返回无法解析的响应，请检查输出格式",
+                    )]
+                    for c in claims
+                }
 
             if isinstance(data, list):
                 issues_list = data
@@ -468,72 +610,7 @@ class VerifierRouter:
             else:
                 issues_list = []
 
-            result: Dict[str, List[ClaimIssue]] = {c.claim_id: [] for c in claims}
-            for item in issues_list:
-                if not isinstance(item, dict):
-                    await append_verifier_trace_log(
-                        f"{verifier_name.upper()} SCHEMA ERROR",
-                        "Issue item is not a dict",
-                        payload=str(item)[:200]
-                    )
-                    continue
-
-                claim_id = item.get("claim_id")
-                if not claim_id or not isinstance(claim_id, str) or claim_id not in result:
-                    await append_verifier_trace_log(
-                        f"{verifier_name.upper()} SCHEMA ERROR",
-                        f"Missing or invalid claim_id: {claim_id}",
-                        payload=json.dumps(item, ensure_ascii=False)[:200]
-                    )
-                    continue
-
-                # 类型安全处理
-                issue_type = item.get("type")
-                if not isinstance(issue_type, str):
-                    issue_type = "unknown"
-
-                description = item.get("description", "")
-                if not isinstance(description, str):
-                    description = str(description)
-
-                severity = item.get("severity")
-                if severity and not isinstance(severity, str):
-                    severity = "minor"
-
-                # 转换 evidence
-                evidence_spans = []
-                ev_list = item.get("evidence", [])
-                if isinstance(ev_list, list):
-                    for ev in ev_list:
-                        if isinstance(ev, dict):
-                            evidence_spans.append(EvidenceSpan(
-                                cite_id=ev.get("cite_id", ""),
-                                text=ev.get("text", ""),
-                                score=ev.get("score")
-                            ))
-                        elif isinstance(ev, EvidenceSpan):
-                            evidence_spans.append(ev)
-
-                # 统一 suggestion 为字典
-                suggestion_raw = item.get("suggestion", {})
-                if isinstance(suggestion_raw, str):
-                    suggestion_dict = {"content": suggestion_raw}
-                elif isinstance(suggestion_raw, dict):
-                    suggestion_dict = suggestion_raw
-                else:
-                    suggestion_dict = {}
-
-                issue = ClaimIssue(
-                    claim_id=claim_id,
-                    type=issue_type,
-                    description=f"[{verifier_name}] {description}",
-                    severity=self._normalize_severity(severity),
-                    evidence=evidence_spans,
-                    suggestion=suggestion_dict
-                )
-                result[claim_id].append(issue)
-
-            return result
+            return await self._validate_schema(verifier_name, issues_list, claims)
 
         except Exception as e:
             await append_verifier_trace_log(
@@ -541,24 +618,76 @@ class VerifierRouter:
                 f"{type(e).__name__}: {e}",
                 payload=traceback.format_exc(),
             )
-            return {c.claim_id: [] for c in claims}
+            return {
+                c.claim_id: [ClaimIssue(
+                    claim_id=c.claim_id,
+                    type="parse_error",
+                    description=f"[{verifier_name}] Batch execution failed: {type(e).__name__}: {e}",
+                    severity="critical",
+                    evidence=[EvidenceSpan(cite_id="", text=traceback.format_exc()[:1000], source="system")],
+                    suggestion=f"Verifier {verifier_name} 执行异常，请检查输入或重试",
+                )]
+                for c in claims
+            }
 
-    # ---------- 合并 key 使用标准化 description ----------
+    # ---------- 系统生成 confidence：基于 evidence 独立来源数量 ----------
+    def _assign_system_confidence(self, issue: ClaimIssue, fallback_cite_ids: List[str] = None) -> None:
+        if issue.type in ("parse_error",):
+            issue.confidence = 0.20
+            return
+
+        cite_ids = [ev.cite_id for ev in issue.evidence if ev.cite_id]
+        if not cite_ids and fallback_cite_ids:
+            cite_ids = fallback_cite_ids
+
+        unique_cites = set(cite_ids)
+        n_cites = len(unique_cites)
+
+        if self.short_term and n_cites > 0:
+            source_keys = set()
+            for cid in unique_cites:
+                try:
+                    source_keys.add(material_source_key(self.short_term, cid))
+                except Exception:
+                    source_keys.add(f"cite:{cid}")
+            n_sources = len(source_keys)
+        else:
+            n_sources = n_cites
+
+        if n_sources >= 2:
+            issue.confidence = min(1.0, 0.80 + n_sources * 0.05)
+        elif n_sources == 1:
+            issue.confidence = 0.60
+        else:
+            issue.confidence = 0.30
+
+    # ---------- 合并：用 (type, claim_id, source) 三元组去重 ----------
     def _merge_issues(self, issues: List[ClaimIssue]) -> List[ClaimIssue]:
-        merged = {}
+        merged: Dict[Tuple[str, str, str], ClaimIssue] = {}
         for iss in issues:
-            # 标准化 description：去除首尾空格，转小写
-            norm_desc = iss.description.strip().lower()
-            key = (iss.type, norm_desc)
+            key = (iss.type, iss.claim_id, iss.source)
             if key not in merged:
                 merged[key] = iss
-            else:
-                # 保留更高 severity 的 issue
-                if self._severity_priority(iss.severity) > self._severity_priority(merged[key].severity):
-                    merged[key].severity = iss.severity
-                # 如果已有 issue 没有 suggestion，用新的补充
-                if not merged[key].suggestion and iss.suggestion:
-                    merged[key].suggestion = iss.suggestion
+                continue
+            existing = merged[key]
+            # 保留更高 severity
+            if self._severity_priority(iss.severity) > self._severity_priority(existing.severity):
+                existing.severity = iss.severity
+            # 保留更高 confidence
+            if iss.confidence > existing.confidence:
+                existing.confidence = iss.confidence
+            # 合并 description（不同则拼接）
+            if iss.description and iss.description != existing.description:
+                existing.description = f"{existing.description}; {iss.description}"
+            # 合并 evidence（去重）
+            seen_ev = {(e.cite_id, e.text) for e in existing.evidence}
+            for ev in iss.evidence:
+                if (ev.cite_id, ev.text) not in seen_ev:
+                    existing.evidence.append(ev)
+                    seen_ev.add((ev.cite_id, ev.text))
+            # 补充 suggestion
+            if not existing.suggestion and iss.suggestion:
+                existing.suggestion = iss.suggestion
         return list(merged.values())
 
     # ---------- 辅助方法（保持不变）----------
@@ -589,17 +718,12 @@ class SegmentVerifier:
         self.model = create_chat_model()
         self.formatter = create_agent_formatter()
 
-        # ---------- 创建 ClaimExtractor  ----------
-        self.extractor_agent = ReActAgent(
-            name="ClaimExtractor",
-            sys_prompt=prompt_dict["claim_extract_sys_prompt"],
+        # ---------- 创建 ClaimExtractor（轻量调用，无 ReActAgent 开销）----------
+        self.extractor = ClaimExtractor(
             model=self.model,
-            memory=InMemoryMemory(),
             formatter=self.formatter,
-            toolkit=Toolkit(),          
-            max_iters=1,            
+            sys_prompt=prompt_dict["claim_extract_sys_prompt"],
         )
-        self.extractor = ClaimExtractor(agent=self.extractor_agent)
 
         # ---------- 创建三个 Verifier Agents ----------
         self.verifiers = create_three_verifiers(
@@ -609,11 +733,27 @@ class SegmentVerifier:
             long_term=long_term
         )
 
-        self.router = VerifierRouter(self.verifiers)
+        self.router = VerifierRouter(self.verifiers, short_term=short_term)
 
     async def verify(self, segment: str) -> List[ClaimIssue]:
         """原有接口：只返回 issues（兼容旧代码）"""
-        claims = await self.extractor.extract(segment)
+        try:
+            claims = await self.extractor.extract(segment)
+        except ClaimExtractionError as e:
+            await append_verifier_trace_log(
+                "SegmentVerifier",
+                f"Claim extraction failed: {e}",
+                payload=e.raw[:2000],
+            )
+            return [ClaimIssue(
+                claim_id="extract_failed",
+                type="parse_error",
+                description=f"Claim extraction failed: {e}",
+                severity="critical",
+                evidence=[EvidenceSpan(cite_id="", text=e.raw[:2000], source="parser")],
+                suggestion="请检查输入文本格式或重试",
+            )]
+
         if not claims:
             return []
         await append_verifier_trace_log(
@@ -625,19 +765,36 @@ class SegmentVerifier:
                 indent=2,
             ),
         )
-        
-        claim_results = await self.router.verify_claims(claims)
+
+        claim_issues = await self.router.verify_claims(claims)
         issues = []
-        for cr in claim_results:
-            issues.extend(cr.issues)
+        for iss_list in claim_issues.values():
+            issues.extend(iss_list)
         return issues
 
     async def verify_with_claims(self, segment: str) -> Tuple[List[Claim], List[ClaimIssue]]:
         """新接口：返回提取的 claims 和对应的 issues，用于评估报告"""
-        claims = await self.extractor.extract(segment)
+        try:
+            claims = await self.extractor.extract(segment)
+        except ClaimExtractionError as e:
+            await append_verifier_trace_log(
+                "SegmentVerifier",
+                f"Claim extraction failed: {e}",
+                payload=e.raw[:2000],
+            )
+            issue = ClaimIssue(
+                claim_id="extract_failed",
+                type="parse_error",
+                description=f"Claim extraction failed: {e}",
+                severity="critical",
+                evidence=[EvidenceSpan(cite_id="", text=e.raw[:2000], source="parser")],
+                suggestion="请检查输入文本格式或重试",
+            )
+            return [], [issue]
+
         if not claims:
             return [], []
-        
+
         await append_verifier_trace_log(
             "SegmentVerifier",
             "======== claims抽取已完成 ========",
@@ -647,72 +804,57 @@ class SegmentVerifier:
                 indent=2,
             ),
         )
-        claim_results = await self.router.verify_claims(claims)
+        claim_issues = await self.router.verify_claims(claims)
         issues = []
-        for cr in claim_results:
-            issues.extend(cr.issues)
+        for iss_list in claim_issues.values():
+            issues.extend(iss_list)
         return claims, issues
 
 
 # ---------------------------------------------------------------------------
 # Claim-Centric Evaluation Functions
 # ---------------------------------------------------------------------------
+def compute_claim_score(issues: List[ClaimIssue]) -> float:
+    """连续化评分：5分制，无问题=5.0"""
+    if not issues:
+        return 5.0
+    W_CRITICAL = 0.5
+    W_MAJOR = 0.25
+    W_MINOR = 0.1
+    penalty = 0.0
+    for i in issues:
+        w = W_CRITICAL if i.severity == "critical" else W_MAJOR if i.severity == "major" else W_MINOR if i.severity == "minor" else 0.0
+        multiplier = 1.0 + max(0.0, min(1.0, i.confidence))
+        penalty += w * multiplier
+    return round(max(0.0, 5.0 * (1.0 - penalty)), 2)
+
+
 def evaluate_claims(claims: List[Claim], all_issues: List[ClaimIssue]) -> List[ClaimEvaluation]:
-    issues_by_claim = {c.claim_id: [] for c in claims}
+    issues_by_claim: Dict[str, List[ClaimIssue]] = {c.claim_id: [] for c in claims}
     for iss in all_issues:
         if iss.claim_id in issues_by_claim:
             issues_by_claim[iss.claim_id].append(iss)
         else:
             issues_by_claim[iss.claim_id] = [iss]
 
-    def compute_signature(issues: List[ClaimIssue]) -> Dict[str, int]:
-        return {
-            "critical": sum(1 for i in issues if i.severity == "critical"),
-            "major": sum(1 for i in issues if i.severity == "major"),
-            "minor": sum(1 for i in issues if i.severity == "minor"),
-        }
-
-    def compute_claim_score(signature: Dict[str, int]) -> int:
-        if signature["critical"] > 0:
-            return 1
-        if signature["major"] >= 2:
-            return 2
-        if signature["major"] == 1:
-            return 3
-        if signature["minor"] > 0:
-            return 4
-        return 5
-
-    claim_evaluations = []
-    for claim in claims:
-        issues = issues_by_claim.get(claim.claim_id, [])
-        signature = compute_signature(issues)
-        claim_score = compute_claim_score(signature)
-
-        # 生成 combined_suggestion
-        combined_suggestion = ""
-        critical_issues = [i for i in issues if i.severity == "critical"]
-        major_issues = [i for i in issues if i.severity == "major"]
-        if critical_issues:
-            combined_suggestion = critical_issues[0].suggestion
-        elif major_issues:
-            combined_suggestion = major_issues[0].suggestion
-        elif issues and issues[0].suggestion:
-            combined_suggestion = issues[0].suggestion
-        else:
-            combined_suggestion = "请对照材料核实并修正该声明。"
-
-        claim_evaluations.append(ClaimEvaluation(
+    return [
+        ClaimEvaluation(
             claim_id=claim.claim_id,
             original_text=claim.original_text,
-            claim_score=claim_score,
-            issues=issues,
-            combined_suggestion=combined_suggestion,
-            signature=signature,
-        ))
-    return claim_evaluations
+            issues=issues_by_claim.get(claim.claim_id, []),
+        )
+        for claim in claims
+    ]
 
 def compute_segment_report(claim_evaluations: List[ClaimEvaluation], top_k: int = 3) -> SegmentEvaluationReport:
+    # 按 original_text 去重：同一文本保留问题最多（score 最低）的代表
+    text_to_best: Dict[str, ClaimEvaluation] = {}
+    for ce in claim_evaluations:
+        existing = text_to_best.get(ce.original_text)
+        if existing is None or ce.claim_score < existing.claim_score:
+            text_to_best[ce.original_text] = ce
+    claim_evaluations = list(text_to_best.values())
+
     total_claims = len(claim_evaluations)
     if total_claims == 0:
         return SegmentEvaluationReport(
@@ -723,19 +865,18 @@ def compute_segment_report(claim_evaluations: List[ClaimEvaluation], top_k: int 
             bad_claims_count=0,
             priority_claims=[]
         )
-    
-    # 基础平均分
+
+    # 基础平均分 (claim_score 范围 0.0~5.0)
     avg_score = sum(ce.claim_score for ce in claim_evaluations) / total_claims
     segment_score = int(avg_score * 20)
-    
-    # 惩罚：存在多个 critical 声明时降低分数
+
+    # 连续化惩罚：critical 数量越多分数衰减越明显
     critical_count = sum(1 for ce in claim_evaluations if ce.signature["critical"] > 0)
-    if critical_count >= 2:
-        segment_score = min(segment_score, 40)
-    elif critical_count == 1:
-        segment_score = min(segment_score, 60)
-    
-    # 星数映射
+    if critical_count > 0:
+        factor = max(0.35, 1.0 - 0.18 * critical_count)
+        segment_score = int(segment_score * factor)
+
+    # 星数映射（基于 0~100 的 segment_score）
     if segment_score >= 90:
         star_rating = 5
     elif segment_score >= 75:
@@ -746,26 +887,24 @@ def compute_segment_report(claim_evaluations: List[ClaimEvaluation], top_k: int 
         star_rating = 2
     else:
         star_rating = 1
-    
+
     # 通过条件：分数≥60 且没有 critical 声明
     passed = (segment_score >= 60) and (critical_count == 0)
-    bad_claims = [ce for ce in claim_evaluations if ce.claim_score <= 3]
 
-    # 筛选有问题的声明（score < 5）
-    problematic_claims = [ce for ce in claim_evaluations if ce.claim_score < 5]
-    bad_claims_count = len(problematic_claims)
+    # 筛选有问题的声明（score < 5.0 表示存在问题）
+    problematic_claims = [ce for ce in claim_evaluations if ce.claim_score < 5.0]
+    # bad_claims：严重问题（score < 3.0）
+    bad_claims = [ce for ce in claim_evaluations if ce.claim_score < 3.0]
+    bad_claims_count = len(bad_claims)
 
-     # 排序（按 signature 和 score）
-    sorted_claims = sorted(
-        problematic_claims,  # 只排序有问题的
-        key=lambda ce: (
-            -ce.signature["critical"],
-            -ce.signature["major"],
-            ce.claim_score,
-            -len(ce.issues)
-        )
+    # 保留全部 critical，非 critical 按 top_k 截断
+    critical_claims = [ce for ce in problematic_claims if ce.signature["critical"] > 0]
+    non_critical = sorted(
+        [ce for ce in problematic_claims if ce.signature["critical"] == 0],
+        key=lambda ce: (-ce.signature["major"], ce.claim_score, -len(ce.issues))
     )
-    priority = sorted_claims[:top_k]
+    remaining = max(0, top_k - len(critical_claims))
+    priority = critical_claims + non_critical[:remaining]
     
     return SegmentEvaluationReport(
         segment_score=segment_score,
@@ -793,7 +932,8 @@ def format_report_for_writer(report: SegmentEvaluationReport) -> str:
     
     for idx, ce in enumerate(report.priority_claims, 1):
         # 显示 claim_id，方便 writer 定位
-        lines.append(f"### 声明 {idx} (ID: `{ce.claim_id}`, 得分: {ce.claim_score}/5, 严重问题: critical={ce.signature['critical']}, major={ce.signature['major']})")
+        score_display = f"{ce.claim_score:.1f}/5.0"
+        lines.append(f"### 声明 {idx} (ID: `{ce.claim_id}`, 得分: {score_display}, 严重问题: critical={ce.signature['critical']}, major={ce.signature['major']})")
         lines.append(f"> {ce.original_text}\n")
         lines.append("**问题汇总**：")
         for iss in ce.issues:
@@ -856,6 +996,10 @@ def format_report_for_writer(report: SegmentEvaluationReport) -> str:
 #             print(f"警告：材料文件 {material_path} 不存在，请检查路径")
 #     else:
 #         print(f"材料 {cite_id} 已在元数据中")
+
+#     trace_path = PROJECT_ROOT / "verifier_trace.log"
+#     set_verifier_trace_path(trace_path)
+    
     
 #     verifier = SegmentVerifier(short_term=short_term, long_term=long_term)
 
