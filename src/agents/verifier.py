@@ -7,7 +7,6 @@ from agentscope.formatter import DashScopeChatFormatter
 from agentscope.tool import Toolkit
 
 from ..tools.material_tools import MaterialTools
-from ..tools.search_tools import SearchTools
 from ..memory.short_term import ShortTermMemoryStore
 from ..memory.long_term import LongTermMemoryStore
 from ..prompt import prompt_dict
@@ -60,12 +59,7 @@ def build_verifier_toolkit(
     long_term: LongTermMemoryStore,
 ) -> Toolkit:
     toolkit = Toolkit()
-
-    # manuscript_tools = ManuscriptTools(short_term=short_term)
-    # toolkit.register_tool_function(manuscript_tools.read_manuscript_section)
-    # toolkit.register_tool_function(manuscript_tools.count_manuscript_words)
     material_tools = MaterialTools(short_term=short_term, long_term=long_term)
-    search_tools = SearchTools(short_term=short_term, long_term=long_term)
     toolkit.register_tool_function(material_tools.read_material)
     return toolkit
 

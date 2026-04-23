@@ -396,19 +396,6 @@ async def process_section_concurrently(section: Section, parent_id, task_desc, d
                                        multi_source_verification_enabled, max_verify_rounds):
     """递归并发处理章节"""
 
-    tools = MaterialTools(short_term=short_term, long_term=long_term)
-    end_date = normalize_compact_date(cur_date)
-    start_date = (
-        pd.to_datetime(end_date, format="%Y%m%d") - pd.DateOffset(months=6)
-    ).strftime("%Y%m%d")
-    stats = await preload_task_materials(
-        tools=tools,
-        symbol=stock_symbol,
-        start_date=start_date,
-        end_date=end_date,
-        disclosure_categories=DEFAULT_DISCLOSURE_CATEGORIES,
-    )
-
     # 1. 处理子章节 (递归) - 优先启动子任务
     sub_tasks = []
     if section.subsections:
@@ -563,6 +550,19 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
                 time={"point": str(demo_date)},
             )
         _normalize_section_titles(manuscript)
+
+        tools = MaterialTools(short_term=short_term, long_term=long_term)
+        end_date = normalize_compact_date(cur_date)
+        start_date = (
+            pd.to_datetime(end_date, format="%Y%m%d") - pd.DateOffset(months=6)
+        ).strftime("%Y%m%d")
+        await preload_task_materials(
+            tools=tools,
+            symbol=stock_symbol,
+            start_date=start_date,
+            end_date=end_date,
+            disclosure_categories=DEFAULT_DISCLOSURE_CATEGORIES,
+        )
 
         def unfinished(section: Section) -> bool:
             if section.segments:

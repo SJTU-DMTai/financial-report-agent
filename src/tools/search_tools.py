@@ -438,42 +438,24 @@ class SearchTools:
 
                     # ================= 关键词上下文检索 =================
                     page_text_i = item.get("page_text", "")
-                    page_text_clean = re.sub(r"\s+", " ", page_text_i) # 清理多余换行和空格
-
-                    matched_contexts = []
-                    if page_text_clean:
-                        for kw in valid_keywords:
-                            # 忽略过短的无意义词语匹配（如只有1个字的词）
-                            if len(kw) < 2: 
-                                continue
-                            
-                            # 查找关键词出现的位置
-                            for match in re.finditer(re.escape(kw), page_text_clean, re.IGNORECASE):
-                                # 截取关键词前后各约 100 个字符的上下文窗口
-                                start_idx = max(0, match.start() - 100)
-                                end_idx = min(len(page_text_clean), match.end() + 100)
-                                
-                                prefix = "..." if start_idx > 0 else ""
-                                suffix = "..." if end_idx < len(page_text_clean) else ""
-                                
-                                chunk = prefix + page_text_clean[start_idx:end_idx] + suffix
-                                
-                                # 高亮关键词，方便大模型一眼看到重点
-                                chunk = chunk.replace(kw, f"【{kw}】")
-                                matched_contexts.append(chunk)
-                                
-                            #     # 为了防止单篇网页过长，限制每篇网页最多提取 3 处包含关键词的片段
-                            #     if len(matched_contexts) >= 3:
-                            #         break
-                            # if len(matched_contexts) >= 3:
-                            #     break
+                    matched_contexts = extract_keyword_context_snippets(
+                        text=page_text_i,
+                        keywords=valid_keywords,
+                        context_chars=100,
+                        min_keyword_len=2,
+                        ignore_case=True,
+                        merge_gap_chars=20,
+                        highlight=True,
+                    )
 
                     if matched_contexts:
                         lines.append("   页面正文关键词命中上下文:")
                         for idx, ctx in enumerate(matched_contexts):
-                            lines.append(f"      片段{idx+1}: {ctx}")
+                            kws_str = ", ".join(ctx["keywords"])
+                            lines.append(f"      片段{idx+1} [{kws_str}]: {ctx['snippet']}")
                     else:
                         # 兜底：如果正文中没有匹配到提取词（可能只在标题中），则默认返回开头片段
+                        page_text_clean = re.sub(r"\s+", " ", page_text_i).strip()
                         snippet = page_text_clean[:500] + ("......[后续内容已截断]" if len(page_text_clean) > 500 else "")
                         lines.append(f"   未在正文中精确命中关键词，页面正文开头摘录: {snippet}")
                     
