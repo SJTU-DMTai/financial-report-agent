@@ -1019,7 +1019,7 @@ async def main():
 
     existing_results = []
     output_json_path = PROJECT_ROOT / "output" / "comparison_results.json"
-    output_txt_path = PROJECT_ROOT / "data"  / "output" / "comparison_results.txt"
+    output_txt_path = PROJECT_ROOT  / "output" / "comparison_results.txt"
     if output_json_path.exists():
         with open(output_json_path, 'r', encoding='utf-8') as f:
             try: existing_results = json.load(f)
