@@ -190,15 +190,16 @@ class ClaimType(str, Enum):
     COMPOSITE = "composite"
 
 
-# claim_type → verifier name 列表的全局映射（避免多处硬编码）
-CLAIM_TYPE_TO_VERIFIERS = {
-    ClaimType.FACTUAL: ["fact"],
-    ClaimType.NUMERIC: ["numeric"],
-    ClaimType.TEMPORAL: ["temporal"],
-    ClaimType.FACTUAL_NUMERIC: ["fact", "numeric"],
-    ClaimType.NUMERIC_TEMPORAL: ["numeric", "temporal"],
-    ClaimType.COMPOSITE: ["fact", "numeric", "temporal"],
-}
+def route_verifiers(claim: Claim) -> List[str]:
+    """Slot-level routing：claim 实际有什么 slot，就送哪里去。"""
+    v = []
+    if claim.slots.get("factual"):
+        v.append("fact")
+    if claim.slots.get("numeric"):
+        v.append("numeric")
+    if claim.slots.get("temporal"):
+        v.append("temporal")
+    return v
 
 
 @dataclass
@@ -419,17 +420,11 @@ class VerifierRouter:
 
     async def verify_claims(self, claims: List[Claim]) -> Dict[str, List[ClaimIssue]]:
         """批量验证所有 claims，每个类型只调用一次 agent，并受并发限流控制"""
-        # 按类型分组
-        claims_by_type: Dict[ClaimType, List[Claim]] = {}
-        for claim in claims:
-            claims_by_type.setdefault(claim.claim_type, []).append(claim)
-
-        # 构建 verifier -> claims 映射（可能有重复）
+        # 构建 verifier -> claims 映射（slot-level routing）
         verifier_to_claims: Dict[str, List[Claim]] = {}
-        for ct, clist in claims_by_type.items():
-            needed = CLAIM_TYPE_TO_VERIFIERS.get(ct, [])
-            for vname in needed:
-                verifier_to_claims.setdefault(vname, []).extend(clist)
+        for claim in claims:
+            for vname in route_verifiers(claim):
+                verifier_to_claims.setdefault(vname, []).append(claim)
 
         # 去重（按 claim_id）
         for vname in list(verifier_to_claims.keys()):
@@ -649,7 +644,7 @@ class VerifierRouter:
                 try:
                     source_keys.add(material_source_key(self.short_term, cid))
                 except Exception:
-                    source_keys.add(f"cite:{cid}")
+                    pass  # 解析失败不计入 source
             n_sources = len(source_keys)
         else:
             n_sources = n_cites
@@ -661,11 +656,11 @@ class VerifierRouter:
         else:
             issue.confidence = 0.30
 
-    # ---------- 合并：用 (type, claim_id, source) 三元组去重 ----------
+    # ---------- 合并：用 (type, claim_id, description) 去重 ----------
     def _merge_issues(self, issues: List[ClaimIssue]) -> List[ClaimIssue]:
         merged: Dict[Tuple[str, str, str], ClaimIssue] = {}
         for iss in issues:
-            key = (iss.type, iss.claim_id, iss.source)
+            key = (iss.type, iss.claim_id, iss.description)
             if key not in merged:
                 merged[key] = iss
                 continue
@@ -676,9 +671,6 @@ class VerifierRouter:
             # 保留更高 confidence
             if iss.confidence > existing.confidence:
                 existing.confidence = iss.confidence
-            # 合并 description（不同则拼接）
-            if iss.description and iss.description != existing.description:
-                existing.description = f"{existing.description}; {iss.description}"
             # 合并 evidence（去重）
             seen_ev = {(e.cite_id, e.text) for e in existing.evidence}
             for ev in iss.evidence:
@@ -818,13 +810,13 @@ def compute_claim_score(issues: List[ClaimIssue]) -> float:
     """连续化评分：5分制，无问题=5.0"""
     if not issues:
         return 5.0
-    W_CRITICAL = 0.5
-    W_MAJOR = 0.25
+    W_CRITICAL = 0.8
+    W_MAJOR = 0.5
     W_MINOR = 0.1
     penalty = 0.0
     for i in issues:
         w = W_CRITICAL if i.severity == "critical" else W_MAJOR if i.severity == "major" else W_MINOR if i.severity == "minor" else 0.0
-        multiplier = 1.0 + max(0.0, min(1.0, i.confidence))
+        multiplier = 0.5 + 0.5 * max(0.0, min(1.0, i.confidence))
         penalty += w * multiplier
     return round(max(0.0, 5.0 * (1.0 - penalty)), 2)
 
@@ -944,103 +936,103 @@ def format_report_for_writer(report: SegmentEvaluationReport) -> str:
     lines.append("**要求**：请优先重写上述声明，一次性修正其所有问题。其他声明可保持不变或微调。")
     return "\n".join(lines)
 
-# # ---------------------------------------------------------------------------
-# # §6  Test / Demo
-# # ---------------------------------------------------------------------------
-# if __name__ == "__main__":
-#     segment = (
-#         """公司已逐步将产业链一体化优势转化为产品力优势。通过实现新能源汽车产业链的全覆盖，有效降低了原材料价格剧烈变化的风险，同时有效降低成本，提高生产效率，并因此拥有了一定的定价主动权 [^cite_id:2024-06-24_reference_report]。
+# ---------------------------------------------------------------------------
+# §6  Test / Demo
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    segment = (
+        """公司已逐步将产业链一体化优势转化为产品力优势。通过实现新能源汽车产业链的全覆盖，有效降低了原材料价格剧烈变化的风险，同时有效降低成本，提高生产效率，并因此拥有了一定的定价主动权 [^cite_id:2024-06-24_reference_report]。
 
-# 从产品策略来看，公司已将成本端与企业运营端优势转化为产品力优势：2024年2月，王朝/海洋系列在短短两周内密集投放五波荣耀版车型，包括秦PLUS、驱逐舰05、海豚、汉、唐以及宋PLUS、宋Pro，覆盖从7.98万元到24.98万元的小型、紧凑型以及中大型车市场，较冠军版起售价最高降低了6万元，实现了"加量还降价" [^cite_id:2024-06-24_reference_report]。其中，秦PLUS荣耀版以"日系省油、德系驾驶、美系智能"的赞誉上市，首周便取得了23,590辆的新车订单 [^cite_id:2024-06-24_reference_report]。
+从产品策略来看，公司已将成本端与企业运营端优势转化为产品力优势：2024年2月，王朝/海洋系列在短短两周内密集投放五波荣耀版车型，包括秦PLUS、驱逐舰05、海豚、汉、唐以及宋PLUS、宋Pro，覆盖从7.98万元到24.98万元的小型、紧凑型以及中大型车市场，较冠军版起售价最高降低了6万元，实现了"加量还降价" [^cite_id:2024-06-24_reference_report]。其中，秦PLUS荣耀版以"日系省油、德系驾驶、美系智能"的赞誉上市，首周便取得了23,590辆的新车订单 [^cite_id:2024-06-24_reference_report]。
 
-# 2024年5月，公司开启了基于全新混动平台DM5.0的全新车型序列的逐步上市，率先上市的比亚迪秦L与海豹06定位紧凑型级别，但车身尺寸和轴距已经是中型轿车水平 [^cite_id:2024-06-24_reference_report]。该车型序列叠加同级领先的油耗、智能化与电气化水平，在"油电同价"的基础上进一步升级为"电比油低"，充分体现了公司对于10万至20万元细分市场的竞争力与志在必得的决心 [^cite_id:2024-06-24_reference_report]。上市不到2周的时间已经累计获得8万台订单，充分体现了消费者对该系列车型的充分认可 [^cite_id:2024-06-24_reference_report]。
+2024年5月，公司开启了基于全新混动平台DM5.0的全新车型序列的逐步上市，率先上市的比亚迪秦L与海豹06定位紧凑型级别，但车身尺寸和轴距已经是中型轿车水平 [^cite_id:2024-06-24_reference_report]。该车型序列叠加同级领先的油耗、智能化与电气化水平，在"油电同价"的基础上进一步升级为"电比油低"，充分体现了公司对于10万至20万元细分市场的竞争力与志在必得的决心 [^cite_id:2024-06-24_reference_report]。上市不到2周的时间已经累计获得8万台订单，充分体现了消费者对该系列车型的充分认可 [^cite_id:2024-06-24_reference_report]。
 
-# ![新车型与竞品核心参数对比](chart:chart_1774964357334)
+![新车型与竞品核心参数对比](chart:chart_1774964357334)
 
-# 数据显示，2026年5月上市的秦L DM-i与海豹06 DM-i在核心参数上显著优于同级别传统燃油竞品：WLTC综合油耗分别为1.11L/100km和1.36L/100km，远低于轩逸2024款经典（5.94L/100km）和朗逸2024款（5.92L/100km）[^cite_id:2024-06-24_reference_report]。车身尺寸方面，秦L与海豹06的轴距达到2790mm，已超过轩逸（2700mm）和朗逸（2688mm）的中型轿车水平 [^cite_id:2024-06-24_reference_report]。智能化配置上，秦L与海豹06标配倒车影像、定速巡航、车载智能系统及完整的手机App远程控制功能，而轩逸和朗逸在同价位车型中上述配置多数缺失 [^cite_id:2024-06-24_reference_report]。
-# """
-#     )
+数据显示，2026年5月上市的秦L DM-i与海豹06 DM-i在核心参数上显著优于同级别传统燃油竞品：WLTC综合油耗分别为1.11L/100km和1.36L/100km，远低于轩逸2024款经典（5.94L/100km）和朗逸2024款（5.92L/100km）[^cite_id:2024-06-24_reference_report]。车身尺寸方面，秦L与海豹06的轴距达到2790mm，已超过轩逸（2700mm）和朗逸（2688mm）的中型轿车水平 [^cite_id:2024-06-24_reference_report]。智能化配置上，秦L与海豹06标配倒车影像、定速巡航、车载智能系统及完整的手机App远程控制功能，而轩逸和朗逸在同价位车型中上述配置多数缺失 [^cite_id:2024-06-24_reference_report]。
+"""
+    )
 
-#     PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
-#     long_term_dir = PROJECT_ROOT / "data" / "memory" / "long_term"
+    long_term_dir = PROJECT_ROOT / "data" / "memory" / "long_term"
     
-#     long_term = LongTermMemoryStore(
-#         base_dir=long_term_dir,
-#     )
+    long_term = LongTermMemoryStore(
+        base_dir=long_term_dir,
+    )
 
-#     short_term_dir = PROJECT_ROOT / "data" / "memory" / "short_term" / "002594_20260411"
+    short_term_dir = PROJECT_ROOT / "data" / "memory" / "short_term" / "002594_20260411"
 
-#     short_term = ShortTermMemoryStore(
-#         base_dir=short_term_dir,
-#     )
+    short_term = ShortTermMemoryStore(
+        base_dir=short_term_dir,
+    )
 
-#     # ---- 注册缺失的材料 ----
-#     cite_id = "2024-06-24_reference_report"
-#     material_path = short_term_dir / "material" / f"{cite_id}.txt"
+    # ---- 注册缺失的材料 ----
+    cite_id = "2024-06-24_reference_report"
+    material_path = short_term_dir / "material" / f"{cite_id}.txt"
 
-#     # 检查元数据中是否已有
-#     meta = short_term.get_material_meta(cite_id)
-#     if not meta:
-#         if material_path.exists():
-#             with open(material_path, "r", encoding="utf-8") as f:
-#                 content = f.read()
-#             short_term.save_material(
-#                 cite_id=cite_id,
-#                 content=content,
-#                 description="比亚迪首次覆盖报告（2024-06-24）",
-#                 source="测试材料",
-#             )
-#             print(f"材料 {cite_id} 已注册")
-#         else:
-#             print(f"警告：材料文件 {material_path} 不存在，请检查路径")
-#     else:
-#         print(f"材料 {cite_id} 已在元数据中")
+    # 检查元数据中是否已有
+    meta = short_term.get_material_meta(cite_id)
+    if not meta:
+        if material_path.exists():
+            with open(material_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            short_term.save_material(
+                cite_id=cite_id,
+                content=content,
+                description="比亚迪首次覆盖报告（2024-06-24）",
+                source="测试材料",
+            )
+            print(f"材料 {cite_id} 已注册")
+        else:
+            print(f"警告：材料文件 {material_path} 不存在，请检查路径")
+    else:
+        print(f"材料 {cite_id} 已在元数据中")
 
-#     trace_path = PROJECT_ROOT / "verifier_trace.log"
-#     set_verifier_trace_path(trace_path)
+    trace_path = PROJECT_ROOT / "verifier_trace.log"
+    set_verifier_trace_path(trace_path)
     
     
-#     verifier = SegmentVerifier(short_term=short_term, long_term=long_term)
+    verifier = SegmentVerifier(short_term=short_term, long_term=long_term)
 
-#     async def test():
-#         print("\n================ STEP 1: Claim Extraction ================\n")
+    async def test():
+        print("\n================ STEP 1: Claim Extraction ================\n")
 
-#         claims, issues = await verifier.verify_with_claims(segment)
+        claims, issues = await verifier.verify_with_claims(segment)
 
-#         print(f"Total Claims: {len(claims)}")
-#         for c in claims:
-#             print(f"[{c.claim_id}] ({c.claim_type}) {c.original_text}")
+        print(f"Total Claims: {len(claims)}")
+        for c in claims:
+            print(f"[{c.claim_id}] ({c.claim_type}) {c.original_text}")
 
-#         print("\n================ STEP 2: Issues ================\n")
+        print("\n================ STEP 2: Issues ================\n")
 
-#         for iss in issues:
-#             print(f"[{iss.severity}] {iss.type} → {iss.description}")
+        for iss in issues:
+            print(f"[{iss.severity}] {iss.type} → {iss.description}")
 
-#         print("\n================ STEP 3: Claim Evaluation (Rubrics) ================\n")
+        print("\n================ STEP 3: Claim Evaluation (Rubrics) ================\n")
 
-#         claim_evals = evaluate_claims(claims, issues)
+        claim_evals = evaluate_claims(claims, issues)
 
-#         for ce in claim_evals:
-#             print(f"\n--- Claim {ce.claim_id} ---")
-#             print(f"Text: {ce.original_text}")
-#             print(f"Score: {ce.claim_score}/5")
-#             print(f"Signature: {ce.signature}")
-#             print(f"Issues: {len(ce.issues)}")
-#             print(f"Suggestion: {ce.combined_suggestion}")
+        for ce in claim_evals:
+            print(f"\n--- Claim {ce.claim_id} ---")
+            print(f"Text: {ce.original_text}")
+            print(f"Score: {ce.claim_score}/5")
+            print(f"Signature: {ce.signature}")
+            print(f"Issues: {len(ce.issues)}")
+            print(f"Suggestion: {ce.combined_suggestion}")
 
-#         print("\n================ STEP 4: Segment Report ================\n")
+        print("\n================ STEP 4: Segment Report ================\n")
 
-#         report = compute_segment_report(claim_evals)
+        report = compute_segment_report(claim_evals)
 
-#         print(f"Segment Score: {report.segment_score}")
-#         print(f"Stars: {report.star_rating}")
-#         print(f"Passed: {report.passed}")
-#         print(f"Bad Claims: {report.bad_claims_count}")
+        print(f"Segment Score: {report.segment_score}")
+        print(f"Stars: {report.star_rating}")
+        print(f"Passed: {report.passed}")
+        print(f"Bad Claims: {report.bad_claims_count}")
 
-#         print("\n================ STEP 5: Writer Feedback ================\n")
+        print("\n================ STEP 5: Writer Feedback ================\n")
 
-#         feedback = format_report_for_writer(report)
-#         print(feedback)
+        feedback = format_report_for_writer(report)
+        print(feedback)
 
-#     asyncio.run(test())
+    asyncio.run(test())

@@ -276,46 +276,31 @@ async def process_single_segment(segment: Segment,
                 print(segment.content, flush=True)
 
         if multi_source_verification_enabled:
-            prev_priority_ids = None
-            prev_score = None
-            
+            prev_priority_sigs = None
+            prev_issue_sig = None
+
             for round_idx in range(max_verify_rounds):
                 current_text = segment.content
                 print(f"[Verifier Loop] round={round_idx + 1}/{max_verify_rounds} topic={segment.topic}", flush=True)
                 print("[Verifier Checked Text]", flush=True)
                 print(current_text, flush=True)
-                
-                # 获取 claims 和 issues
-                claims, all_issues = await verifier.verify_with_claims(segment.content)
+
+                claims, all_issues = await verifier.verify_with_claims(current_text)
                 if not claims:
                     print("[Verifier Loop] No claims extracted, stop")
                     break
-                
-                # 生成 claim 级评估报告
+
                 claim_evals = evaluate_claims(claims, all_issues)
-                report = compute_segment_report(claim_evals, top_k=5)
+                critical_count = sum(ce.signature["critical"] for ce in claim_evals)
+
+                # 动态计算 top_k，避免重复调用 compute_segment_report
+                bad_count = sum(1 for ce in claim_evals if ce.claim_score < 3.0)
+                top_k = min(5, max(2, bad_count))
+                report = compute_segment_report(claim_evals, top_k=top_k)
                 print(f"[Verifier Loop] segment_score={report.segment_score}, passed={report.passed}, bad_claims={report.bad_claims_count}", flush=True)
 
-                # 3. 动态调整 top_k（基于当前 bad_claims_count）
-                top_k = min(5, max(2, report.bad_claims_count))
-                if top_k != 5:
-                    report = compute_segment_report(claim_evals, top_k=top_k)
-                
-                 # 4. 收敛检测（使用调整后的报告）
-                current_priority_ids = {ce.claim_id for ce in report.priority_claims}
-                same_priority = (prev_priority_ids is not None and current_priority_ids == prev_priority_ids)
-                small_improve = (prev_score is not None and (report.segment_score - prev_score) < 5)
-                
-                if same_priority and small_improve:
-                    print(f"[Verifier Loop] Early stop: priority unchanged and score improvement <5 ({prev_score} -> {report.segment_score})", flush=True)
-                    break
-                
-                prev_priority_ids = current_priority_ids
-                prev_score = report.segment_score
-                
-                # ---------- 5. 停止条件----------
-                # 分数 >= 80 视为高质量，直接通过
-                if report.segment_score >= 80:
+                # 高分通过（必须无 critical issue）
+                if report.segment_score >= 80 and critical_count == 0:
                     print(f"[Verifier Loop] High quality (score={report.segment_score}) → stop", flush=True)
                     await append_verifier_trace(
                         topic=segment.topic,
@@ -329,14 +314,28 @@ async def process_single_segment(segment: Segment,
                         priority_claims_count=0,
                     )
                     break
-                
-                    
+
+                # 收敛检测：priority claims 文本不变 + issue 数量不变
+                current_priority_sigs = {ce.original_text.strip()[:80] for ce in report.priority_claims}
+                current_issue_sig = (
+                    sum(len(ce.issues) for ce in report.priority_claims),
+                    sum(ce.signature["critical"] for ce in report.priority_claims),
+                )
+                if prev_priority_sigs is not None and prev_issue_sig is not None:
+                    same_priority = current_priority_sigs == prev_priority_sigs
+                    same_issues = current_issue_sig == prev_issue_sig
+                    if same_priority and same_issues:
+                        print(f"[Verifier Loop] Early stop: priority unchanged, issues stuck at {current_issue_sig}", flush=True)
+                        break
+
+                prev_priority_sigs = current_priority_sigs
+                prev_issue_sig = current_issue_sig
+
                 verify_feedback = format_report_for_writer(report)
                 print(f"[Verifier Loop] feedback_chars={len(verify_feedback)}", flush=True)
                 print("[Verifier Feedback To Writer]", flush=True)
                 print(verify_feedback, flush=True)
-                
-                # ---------- 5. Writer 改写 ----------
+
                 writer_input = Msg(
                     name="user",
                     content=(
@@ -351,20 +350,18 @@ async def process_single_segment(segment: Segment,
                     ),
                     role="user",
                 )
-                
+
                 draft_msg = await call_agent_with_retry(writer, writer_input)
                 new_content = extract_writer_content(draft_msg.get_text_content())
-                
-                # ---------- 6. 检测 rewrite 无变化 ----------
+
                 if new_content.strip() == current_text.strip():
                     print("[Verifier Loop] Early stop: rewrite produced no change", flush=True)
                     break
                 segment.content = new_content
-                
+
                 print("[Writer Rewritten After Verifier]", flush=True)
                 print(segment.content, flush=True)
-                
-                # ---------- 7. Trace 记录 ----------
+
                 priority_issue_count = sum(len(ce.issues) for ce in report.priority_claims)
                 await append_verifier_trace(
                     topic=segment.topic,
