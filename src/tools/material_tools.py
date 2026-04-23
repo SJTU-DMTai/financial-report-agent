@@ -28,7 +28,6 @@ import json
 import copy
 import requests
 
-
 def _normalize_search_keywords(
     keywords: list[str],
     min_keyword_len: int = 1,
@@ -47,7 +46,6 @@ def _normalize_search_keywords(
         seen_keywords.add(dedupe_key)
         normalized_keywords.append(kw)
     return normalized_keywords
-
 
 def _find_keyword_matches(
     text: str,

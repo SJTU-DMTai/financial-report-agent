@@ -20,21 +20,14 @@ def create_verifier_agent(
 ) -> ReActAgent:
     """
     verifier_type 可选值：
-    - numeric: 数值一致性
-    - reference: 引用正确性
-    - logic: 逻辑与语言
-    - quality: 写作水平与参考对比
-    - final: 最终质量审核
+    - fact: 事实核查
+    - numeric: 数值核查
+    - temporal: 时间核查
     """
     sys_prompt_map = {
         "fact": prompt_dict['verifier_fact_prompt'],
         "numeric": prompt_dict['verifier_numeric_prompt'],
         "temporal": prompt_dict['verifier_temporal_prompt'],
-
-        "reference": prompt_dict['verifier_reference_prompt'],
-        "logic": prompt_dict['verifier_logic_prompt'],
-        "quality": prompt_dict['verifier_quality_prompt'],
-        "final": prompt_dict['verifier_final_check'],
     }
 
     sys_prompt = sys_prompt_map.get(verifier_type)
@@ -64,29 +57,12 @@ def build_verifier_toolkit(
     return toolkit
 
 
-# ---- 工厂函数：创建四个环节 Verifier ----
-def create_all_verifiers(model, formatter, short_term: ShortTermMemoryStore, long_term: LongTermMemoryStore):
-    verifiers = {}
-    for verifier_name in ["numeric", "reference", "logic", "quality"]:
-        # 每个 verifier 用独立 toolkit
-        toolkit = build_verifier_toolkit(short_term,long_term)
-        verifiers[verifier_name] = create_verifier_agent(model, formatter, toolkit, verifier_name)
-
-    return verifiers
-
+# ---- 工厂函数：创建三路 Verifier ----
 def create_three_verifiers(model, formatter, short_term: ShortTermMemoryStore, long_term: LongTermMemoryStore):
     verifiers = {}
-
     for name in ["fact", "numeric", "temporal"]:
         toolkit = build_verifier_toolkit(short_term, long_term)
         verifiers[name] = create_verifier_agent(
             model, formatter, toolkit, verifier_type=name
         )
-
     return verifiers
-
-
-# ---- 创建最终审核 Verifier ----
-def create_final_verifier(model, formatter, short_term: ShortTermMemoryStore,long_term: LongTermMemoryStore):
-    toolkit = build_verifier_toolkit(short_term, long_term)
-    return create_verifier_agent(model, formatter, toolkit, "final")
