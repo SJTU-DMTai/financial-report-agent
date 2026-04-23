@@ -20,7 +20,7 @@ from agentscope.message import Msg
 
 from src.evaluation.eval_content import evaluate_segment
 from src.pipelines.planning import process_pdf_to_outline
-from src.memory.working import Section, Segment
+from src.memory.working import Evidence, Section, Segment, load_section_from_json_text
 from src.prompt import prompt_dict
 from src.utils.instance import create_chat_model, create_agent_formatter
 from src.memory.short_term import ShortTermMemoryStore
@@ -50,6 +50,7 @@ from src.utils.multi_types_verification import (
     format_report_for_writer,
 )
 from src.utils.local_file import STOCK_REPORT_PATHS
+from src.utils.outline_refine import refine_outline
 from src.utils.task_date import normalize_compact_date
 import config
 from src.utils.call_with_retry import call_chatbot_with_retry
@@ -215,6 +216,33 @@ async def search_evidence(query, known_evidence, task_desc, demo_date, segment_t
         traceback.print_exc()
         raise  # Re-raise the exception to propagate it properly
 
+
+def _build_known_evidence_context(evidences: List[Evidence], end_index: int) -> str:
+    known_evidence_texts = []
+    for evidence in evidences[:end_index]:
+        if evidence and evidence.text:
+            known_evidence_texts.append(evidence.text)
+    if not known_evidence_texts:
+        return ""
+    return "当前已收集的论据：\n" + "\n".join(known_evidence_texts) + "\n"
+
+
+def _build_writer_input_content(task_desc: str, segment: Segment) -> str:
+    if segment.template:
+        outline_context_intro = "参考写作模版、写作要求和可能谈及的论据如下："
+    else:
+        outline_context_intro = (
+            "当前没有提供写作模版，请主要依据 topic、写作要求和论据材料自行组织结构。"
+            "相关信息如下："
+        )
+    return (
+        f"任务：{task_desc}\n"
+        f"当前步骤需要你撰写要点：\n{segment.topic}\n"
+        f"{outline_context_intro}\n\n{str(segment)}\n\n"
+        "请你开始搜索和撰写。"
+    )
+
+
 async def process_single_segment(segment: Segment,
                                  task_desc,
                                  demo_date,
@@ -227,23 +255,27 @@ async def process_single_segment(segment: Segment,
     print(f"[{time.strftime('%H:%M:%S')}]  ✍️ 开始写作: {segment.topic[:15]}...", flush=True)
 
     searcher, writer, verifier = agent_factory()
-    for i, evidence in enumerate(segment.evidences):
+    for i, evidence in enumerate(segment.evidences or []):
         if segment.reference and '【画图内容要求】' in segment.reference:
             continue
-        evidences = [e for e in segment.evidences[:i] if e]
-        known_evidence = ("当前已搜索到的论据：\n" + "\n".join(evidences) + "\n") if evidences else ""
-        segment.evidences[i] = await search_evidence(evidence, known_evidence, task_desc, demo_date, segment.topic, searcher, reference=segment.reference)
+        if evidence is None or not evidence.text or evidence.is_static:
+            continue
+        known_evidence = _build_known_evidence_context(segment.evidences, i)
+        evidence.text = await search_evidence(
+            evidence.text,
+            known_evidence,
+            task_desc,
+            demo_date,
+            segment.topic,
+            searcher,
+            reference=segment.reference,
+        )
         await searcher.memory.clear()
 
     try:
         writer_input = Msg(
             name="user",
-            content=(
-                f"任务：{task_desc}\n"
-                f"当前步骤需要你撰写要点：\n{segment.topic}\n"
-                f"参考写作模版、写作要求和可能谈及的论据如下：\n\n{str(segment)}\n\n"
-                f"请你开始搜索和撰写。"
-            ),
+            content=_build_writer_input_content(task_desc, segment),
             role="user",
         )
 
@@ -541,9 +573,17 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
         outline = await process_pdf_to_outline(demo_pdf_path, long_term_dir / "demonstration",
                                                   llm_reasoning, llm_instruct, formatter,)
         _normalize_section_titles(outline)
+        outline = await refine_outline(
+            outline=outline,
+            task_desc=task_desc,
+            cur_date=cur_date,
+            model=llm_reasoning,
+            formatter=formatter,
+        )
+        _normalize_section_titles(outline)
         manuscript_path = output_pth / f"{stock_symbol}_{cur_date}.json"
         if manuscript_path.exists():
-            manuscript = Section.from_json(manuscript_path.read_text(encoding='utf-8'))
+            manuscript = load_section_from_json_text(manuscript_path.read_text(encoding='utf-8'))
             print("加载已有的 manuscript:", manuscript_path)
         else:
             manuscript = outline

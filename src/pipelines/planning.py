@@ -85,7 +85,8 @@ async def process_pdf_to_outline(pdf_path: Path, save_dir: Path,
                     f"为了撰写一份新研报，我找到了某机构在过去{demo_date}撰写的一份研报"
                     f"（{'可能是不同公司' if another_stock else '同一公司'}），名为{demo_name}。"
                     f"从中摘出的一段参考片段如下：\n<reference>{segment_text}</reference>\n\n"
-                    f"请你考虑时间差和公司异同，抽取用于当前新任务的论据{'' if only_evidence else '、撰写模版、写作要求'}和主题。\n\n",
+                    f"请你考虑时间差和公司异同，抽取用于当前新任务的论据{'' if only_evidence else '、撰写模版、写作要求'}和主题。\n"
+                    f"{'' if only_evidence else '当某条论据既属于几乎不会随时间变化的静态事实、又能直接从参考片段中确定其具体值或具体情况时，在该条论据末尾标注 (static)。对于被标注为 (static) 的论据，请在 <template> 中直接保留这个具体值，不要替换成占位符。'}\n\n",
                     hook=parse_segment_response,
                     handle_hook_exceptions=(AssertionError,)
                 )

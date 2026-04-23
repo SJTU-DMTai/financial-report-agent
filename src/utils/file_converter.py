@@ -117,8 +117,7 @@ def _replace_chart_placeholders(md_text: str, manuscript_dir: Path) -> str:
         alt = match.group("alt")
         chart_id = match.group("chart_id")
         img_path = manuscript_dir / f"{chart_id}.png"
-        # 使用 POSIX 路径，避免反斜杠问题
-        return f'![{alt}]({img_path.as_posix()})'
+        return f'![{alt}]({_as_file_uri(str(img_path))})'
 
     return pattern.sub(repl, md_text)
 
@@ -730,9 +729,9 @@ def md_to_pdf(
         "load-error-handling": "ignore",
         "load-media-error-handling": "ignore",
 
-        "header-html": str(header_path),
+        "header-html": _as_file_uri(str(header_path)),
         "header-spacing": "6",
-        "footer-html": str(footer_path),
+        "footer-html": _as_file_uri(str(footer_path)),
         "footer-spacing": "6",
 
         # 建议固定边距，避免页眉覆盖正文

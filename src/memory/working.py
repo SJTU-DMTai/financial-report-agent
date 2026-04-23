@@ -2,10 +2,19 @@
 from __future__ import annotations
 
 import re
+import json
 from dataclasses import dataclass
 from dataclasses_json import dataclass_json
 from pathlib import Path
-from typing import List
+from typing import List, Optional
+
+
+@dataclass_json
+@dataclass
+class Evidence:
+    text: str
+    # 仅当该论据是静态事实，且其确定值已经能直接从参考片段中得到时，才标记为 True。
+    is_static: bool = False
 
 @dataclass_json
 @dataclass
@@ -16,7 +25,10 @@ class Segment:
     reference: str = None
     content: str = None
     template: str = None
-    evidences: List[str] = None
+    evidences: List[Evidence] = None
+
+    def __post_init__(self):
+        self.evidences = _normalize_evidences(self.evidences)
 
     def __str__(self, with_requirements=True, with_reference=False, with_content=True, with_evidence=True):
         ctx = ""
@@ -42,8 +54,8 @@ class Segment:
             ctx += f"\t+ **写作要求**\n{requirements}\n\n"
         if with_evidence and self.evidences is not None:
             evidence_text = "\n".join(
-                "\t\t- " + e.replace("\n\n", "\n")
-                for e in self.evidences if e
+                "\t\t- " + e.text.replace("\n\n", "\n")
+                for e in self.evidences if e and e.text
             )
             ctx += f"\t+ **论据材料**\n{evidence_text}\n\n"
 
@@ -99,14 +111,8 @@ class Section:
         print(contents, flush=True)
         res = re.findall(r"<evidence>(.+?)(?:</evidence>)?\s*<template>(.+?)(?:</template>)?\s*<requirement>(.+?)(?:</requirement>)?\s*<topic>(.+?)</topic>", contents, re.DOTALL)
         assert len(res) > 0, "Format error. You did not correctly warp template, evidence, requirement, or topic with the corresponding blocks and put them in order. Please Retry."
-        evidences, template, requirements, topic = [s.strip() for s in res[0]]
-        evidences = evidences.replace("\n", "").replace(";", "；").split("；")
-        evidences = [e.strip() for e in evidences if e.strip() != ""]
-        _evidences = []
-        for e in evidences:
-            if e not in _evidences:
-                _evidences.append(e)
-        evidences = None if len(_evidences) == 0 else _evidences
+        evidences_text, template, requirements, topic = [s.strip() for s in res[0]]
+        evidences = _parse_evidences(evidences_text)
         return Segment(template=template, requirements=requirements, topic=topic, evidences=evidences)
 
     @staticmethod
@@ -121,15 +127,108 @@ class Section:
         print(contents, flush=True)
         res = re.findall(r"<evidence>(.+?)(?:</evidence>)?\s*<topic>(.+?)</topic>", contents, re.DOTALL)
         assert len(res) > 0, "Format error. You did not correctly warp evidence or topic with the corresponding blocks and put them in order. Please Retry."
-        evidences, topic = [s.strip() for s in res[0]]
-        evidences = evidences.replace("\n", "").replace(";", "；").split("；")
-        evidences = [e.strip() for e in evidences if e.strip() != ""]
-        _evidences = []
-        for e in evidences:
-            if e not in _evidences:
-                _evidences.append(e)
-        evidences = None if len(_evidences) == 0 else _evidences
+        evidences_text, topic = [s.strip() for s in res[0]]
+        evidences = _parse_evidences(evidences_text)
         return Segment(template=None, requirements=None, topic=topic, evidences=evidences)
+
+
+def _parse_evidence_item(raw_text: str) -> Optional[Evidence]:
+    text = raw_text.strip()
+    if not text:
+        return None
+    is_static = False
+    static_match = re.search(r"\s*\((static|静态)\)\s*$", text, re.IGNORECASE)
+    if static_match:
+        is_static = True
+        text = re.sub(r"\s*\((static|静态)\)\s*$", "", text, flags=re.IGNORECASE).strip()
+    if not text:
+        return None
+    return Evidence(text=text, is_static=is_static)
+
+
+def _parse_evidences(evidences_text: str) -> Optional[List[Evidence]]:
+    parsed_evidences = []
+    raw_items = evidences_text.replace("\n", "").replace(";", "；").split("；")
+    for raw_item in raw_items:
+        evidence = _parse_evidence_item(raw_item)
+        if evidence is None:
+            continue
+        if any(existing.text == evidence.text for existing in parsed_evidences):
+            continue
+        parsed_evidences.append(evidence)
+    if not parsed_evidences:
+        return None
+    return parsed_evidences
+
+
+def _normalize_evidences(evidences: Optional[List[Evidence]]) -> Optional[List[Evidence]]:
+    if evidences is None:
+        return None
+    normalized_evidences = []
+    for item in evidences:
+        if isinstance(item, Evidence):
+            evidence = item
+        elif isinstance(item, str):
+            evidence = _parse_evidence_item(item)
+        elif isinstance(item, dict):
+            text = (item.get("text") or "").strip()
+            if not text:
+                continue
+            evidence = Evidence(text=text, is_static=bool(item.get("is_static")))
+        else:
+            continue
+        if evidence is None:
+            continue
+        if any(existing.text == evidence.text for existing in normalized_evidences):
+            continue
+        normalized_evidences.append(evidence)
+    if not normalized_evidences:
+        return None
+    return normalized_evidences
+
+
+def evidence_texts(evidences: Optional[List[Evidence]]) -> List[str]:
+    if not evidences:
+        return []
+    return [e.text for e in evidences if e and e.text]
+
+
+def _upgrade_section_payload(payload):
+    segments = payload.get("segments") or []
+    for segment in segments:
+        evidences = segment.get("evidences")
+        if not evidences:
+            continue
+        normalized_evidences = []
+        for item in evidences:
+            if isinstance(item, str):
+                evidence = _parse_evidence_item(item)
+                if evidence is None:
+                    continue
+                normalized_evidences.append({
+                    "text": evidence.text,
+                    "is_static": evidence.is_static,
+                })
+                continue
+            if isinstance(item, dict):
+                text = (item.get("text") or "").strip()
+                if not text:
+                    continue
+                normalized_evidences.append({
+                    "text": text,
+                    "is_static": bool(item.get("is_static")),
+                })
+        segment["evidences"] = normalized_evidences
+    subsections = payload.get("subsections") or []
+    for subsection in subsections:
+        _upgrade_section_payload(subsection)
+    return payload
+
+
+def load_section_from_json_text(json_text: str) -> Section:
+    payload = json.loads(json_text)
+    upgraded_payload = _upgrade_section_payload(payload)
+    return Section.from_dict(upgraded_payload)
 
 
 def _get_outline_cache_paths(pdf_path: Path, save_dir: Path, only_evidence: bool) -> tuple[Path, Path]:
@@ -154,7 +253,7 @@ def _get_outline_cache_candidates(pdf_path: Path, save_dir: Path, only_evidence:
 def _load_cached_outline(pdf_path: Path, save_dir: Path, only_evidence: bool) -> Section | None:
     for cache_path in _get_outline_cache_candidates(pdf_path, save_dir, only_evidence):
         if cache_path.exists():
-            return Section.from_json(cache_path.read_text(encoding="utf-8"))
+            return load_section_from_json_text(cache_path.read_text(encoding="utf-8"))
     return None
 
 

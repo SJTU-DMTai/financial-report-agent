@@ -819,6 +819,7 @@ class SegmentVerifier:
     async def verify_with_claims(self, segment: str) -> Tuple[List[Claim], List[ClaimIssue]]:
         """新接口：返回提取的 claims 和对应的 issues，用于评估报告"""
         try:
+            segment_for_extract = _strip_chart_references_for_claim_extract(segment)
             claims = await self.extractor.extract(segment)
         except ClaimExtractionError as e:
             await append_verifier_trace_log(

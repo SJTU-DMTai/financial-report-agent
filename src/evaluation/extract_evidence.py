@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from filelock import FileLock
 
 from src.pipelines.planning import process_pdf_to_outline
-from src.memory.working import Section
+from src.memory.working import Section, evidence_texts
 from src.utils.call_with_retry import call_chatbot_with_retry
 from src.utils.local_file import DEMO_DIR
 from src.utils.instance import llm_reasoning, llm_instruct, formatter, cfg
@@ -46,7 +46,7 @@ def get_all_evidences_from_section(section: Section) -> List[str]:
     if section.segments:
         for segment in section.segments:
             if segment.evidences:
-                evidences.extend([e for e in segment.evidences if e and e.strip()])
+                evidences.extend(evidence_texts(segment.evidences))
     if section.subsections:
         for subsection in section.subsections:
             evidences.extend(get_all_evidences_from_section(subsection))
