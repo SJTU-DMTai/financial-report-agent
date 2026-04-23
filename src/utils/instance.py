@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+
+from agentscope.embedding import OpenAITextEmbedding
 from agentscope.model import DashScopeChatModel
 from agentscope.token import HuggingFaceTokenCounter
 from agentscope.formatter import (
@@ -18,6 +20,7 @@ from openai import OpenAI
 
 from src.utils.format import PatchedOpenAIChatFormatter
 import config
+from src.utils.format import KaLMChatModel
 
 cfg = config.Config()
 
@@ -85,21 +88,20 @@ def create_chat_model(reasoning=True, model_cfg=None):
     elif provider in ["kalm"]:
 
         client = OpenAI(api_key=os.environ.get("API_KEY"), base_url=base_url)
-        headers = {"ADAMS-BUSINESS": "3939",
+        headers = {"ADAMS-BUSINESS": "1564",
                    "Adams-Platform-User": os.environ.get("USER_NAME"),
                    "Adams-User-Token": os.environ.get("USER_TOKEN"),
-                   "ADAMS-PREDICT-LIMIT-S": "300",  # 配置前端超时为300秒
+                   "ADAMS-PREDICT-LIMIT-S": "600",  # 配置前端超时为600秒
                    }
         model_name = client.models.list(extra_headers=headers).data[0].id  # 获取服务对应的模型名
-        return OpenAIChatModel(
+        return KaLMChatModel(
             model_name=model_name,
             api_key=os.environ.get("API_KEY"),
             stream=stream,
             client_kwargs={"base_url": base_url},
-            generate_kwargs={'extra_body': {"thinking":{"type": 'enabled' if reasoning else 'disabled'}},
+            generate_kwargs={'extra_body': {"chat_template_kwargs": {"enable_thinking": reasoning}},
                              "extra_headers": headers,
-                             "temperature": temperature,
-                             'max_tokens': 16384},
+                             "temperature": temperature},
         )
 
     else:
@@ -111,6 +113,36 @@ def create_chat_model(reasoning=True, model_cfg=None):
             generate_kwargs={"extra_body": {"reasoning": {"enabled": reasoning, "exclude": False}},
                              "temperature": temperature},
         )
+
+
+
+def create_emb_model(model_cfg=None):
+    """统一创建一个聊天模型实例。
+    """
+    m = model_cfg or cfg.get_model_cfg()
+
+    provider = m["provider"]
+    model_name = m["model_name"]
+
+    base_url = m.get("base_url_env", "")
+
+    if provider in ["kalm"]:
+        headers = {"ADAMS-BUSINESS": "1564",
+                   "Adams-Platform-User": os.environ.get("USER_NAME"),
+                   "Adams-User-Token": os.environ.get("USER_TOKEN"),
+                   "ADAMS-PREDICT-LIMIT-S": "600",  # 配置前端超时为600秒
+                   }
+        return OpenAITextEmbedding(
+            base_url="http://mmdcadamsminiserverproxy.polaris:25340/service/15049/v1",
+            model_name="KaLM-Qwen-7B-Chat",
+            api_key=os.environ.get("API_KEY"),
+            default_headers=headers,
+            dimensions=None,
+        )
+
+    else:
+        raise NotImplementedError
+
 
 def create_agent_formatter():
     m = cfg.get_model_cfg()
@@ -131,7 +163,7 @@ def create_agent_formatter():
     # else:
     #     raise ValueError(f"未知 provider: {provider}")
 
-    if provider in ("openrouter", "xiaomi"):
+    if provider in ("openrouter", "xiaomi", "kalm"):
         return OpenAIChatFormatter()
     elif provider == "modelscope":
         return OpenAIChatFormatter()
@@ -197,15 +229,14 @@ def create_vlm_model():
             stream=stream,
             client_kwargs={"base_url": base_url},
             generate_kwargs={"extra_headers": headers,
-                             "temperature": temperature,
-                             'max_tokens': 16384},
+                             "temperature": temperature},
         )
 
     else:
         raise ValueError(f"未知 provider: {provider}")
 
 
-llm_reasoning = create_chat_model()
+llm_reasoning = create_chat_model(reasoning=True)
 llm_instruct = create_chat_model(reasoning=False)
 llm_judge = create_chat_model(model_cfg=config.Config(llm_name=os.getenv("JUDGE_NAME", None)).get_model_cfg())
 formatter = create_agent_formatter()

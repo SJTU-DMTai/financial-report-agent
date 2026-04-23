@@ -1,25 +1,43 @@
 import os
 import asyncio
-from functools import partial
 from datetime import datetime
+from collections import OrderedDict
+from typing import Optional, List
 
 from agentscope.formatter import OpenAIChatFormatter
 from agentscope.message import Msg
 from pathlib import Path
+from pydantic import BaseModel, Field
 
 from agentscope.model import ChatModelBase
 
-from src.memory.working import (
-    Section,
-    _get_outline_cache_paths,
-    _load_cached_outline,
-    _parse_segment_response,
-)
+from src.memory.working import Section, Segment
 from src.prompt import prompt_dict
 from src.utils.call_with_retry import call_chatbot_with_retry
 from src.utils.file_converter import pdf_to_markdown, markdown_to_sections
 from src.utils.image_analyze import inject_vlm_into_demo_markdown
-from src.utils.instance import create_agent_formatter, create_vlm_model
+from src.utils.instance import create_agent_formatter, create_vlm_model, cfg
+
+
+class SegmentModel(BaseModel):
+    """用于 only_evidence=False 时的结构化输出，对应 Segment 的可填充字段"""
+    skip: bool = Field(default=False, description="该片段如果与公司无关可以跳过")
+    evidences: Optional[List[str]] = Field(default=None, description="论据列表，每条为简短的论据描述")
+    template: Optional[str] = Field(default=None, description="写作示例模版")
+    topic: str = Field(description="该片段的主题")
+    requirements: Optional[str] = Field(default=None, description="写作要求")
+
+class EvidenceEntry(BaseModel):
+    description: str = Field(description="论据描述")
+    fact: str = Field(description="该论据对应的具体事实或数据")
+
+class EvidenceModel(BaseModel):
+    """用于 only_evidence=True 时的结构化输出"""
+    skip: bool = Field(default=False, description="该片段如果与公司无关可以跳过")
+    evidences: list[EvidenceEntry] = Field(
+        description="论据列表，每项为包含抽象描述和具体事实的条目"
+    )
+    topic: str = Field(description="该片段的主题")
 
 
 async def process_pdf_to_outline(pdf_path: Path, save_dir: Path,
@@ -29,14 +47,19 @@ async def process_pdf_to_outline(pdf_path: Path, save_dir: Path,
     处理单个PDF，生成完整的Section对象。
     会检查并使用_outline.json缓存，以避免重复处理。
     """
-    manuscript = _load_cached_outline(pdf_path, save_dir, only_evidence)
-    if manuscript is not None:
+    outline_json_path = save_dir / cfg.llm_name / f'{pdf_path.name.split(".")[0]}_outline{"_onlyw_evidence" if only_evidence else ""}.json'
+    print(outline_json_path, flush=True)
+    outline_json_path2 = save_dir / cfg.llm_name / f'{pdf_path.name.split(".")[0]}_outline{"_onlyw_evidence" if only_evidence else ""}.json'
+    if outline_json_path.exists() or outline_json_path2.exists():
+        if outline_json_path.exists():
+            manuscript = Section.model_validate_json(outline_json_path.read_text(encoding="utf-8"))
+        else:
+            manuscript = Section.model_validate_json(outline_json_path2.read_text(encoding="utf-8"))
         outline = manuscript.read(read_subsections=True, with_reference=True, with_content=True, with_evidence=True,
                                   fold_other=False)
         print(outline)
         return manuscript
 
-    outline_json_path, _ = _get_outline_cache_paths(pdf_path, save_dir, only_evidence)
     outline_json_path.parent.mkdir(parents=True, exist_ok=True)
     if formatter is None:
         formatter = create_agent_formatter()
@@ -76,29 +99,44 @@ async def process_pdf_to_outline(pdf_path: Path, save_dir: Path,
                 raise AssertionError("Decomposed segments text is None")
             decomposed_segments_text = decomposed_segments_text.split("<SEP>")
             processed_segments = []
-            parse_segment_response = partial(_parse_segment_response, only_evidence=only_evidence)
             for i, segment_text in enumerate(decomposed_segments_text):
                 if not segment_text.strip(): continue
-                segment_res = await call_chatbot_with_retry(
+                _structured_model = EvidenceModel if only_evidence else SegmentModel
+                raw = await call_chatbot_with_retry(
                     llm_instruct, formatter,
                     prompt_dict["extract_evidence" if only_evidence else "plan_outline"],
                     f"为了撰写一份新研报，我找到了某机构在过去{demo_date}撰写的一份研报"
                     f"（{'可能是不同公司' if another_stock else '同一公司'}），名为{demo_name}。"
                     f"从中摘出的一段参考片段如下：\n<reference>{segment_text}</reference>\n\n"
                     f"请你考虑时间差和公司异同，抽取用于当前新任务的论据{'' if only_evidence else '、撰写模版、写作要求'}和主题。\n\n",
-                    hook=parse_segment_response,
-                    handle_hook_exceptions=(AssertionError,)
+                    structured_model=_structured_model
                 )
-                if isinstance(segment_res, str) and "<skip>true</skip>" in segment_res.lower():
+                print(raw, flush=True)
+                if raw.skip:
                     continue
-                segment = segment_res
-                segment.reference = segment_text
-                processed_segments.append(segment)
+                if only_evidence:
+                    # raw: EvidenceModel
+                    segment = Segment(
+                        topic=raw.topic,
+                        evidences=[(e.description, e.fact) for e in raw.evidences] if raw.evidences else None,
+                    )
+                else:
+                    # raw: SegmentModel
+                    segment = Segment(
+                        topic=raw.topic,
+                        template=raw.template,
+                        requirements=raw.requirements,
+                        evidences=raw.evidences,
+                    )
+                if segment:
+                    segment.reference = segment_text
+                    processed_segments.append(segment)
             section.segments = processed_segments
 
     await dfs_process_section(manuscript)
     # outline = manuscript.read(read_subsections=True, with_reference=True, with_content=True, with_evidence=True,
     #                           fold_other=False)
     # print(outline)
-    outline_json_path.write_text(manuscript.to_json(ensure_ascii=False), encoding="utf-8")
+    # if not only_evidence:
+    outline_json_path.write_text(manuscript.model_dump_json(ensure_ascii=False), encoding="utf-8")
     return manuscript

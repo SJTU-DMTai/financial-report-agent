@@ -9,7 +9,7 @@ from pathlib import Path
 
 CURRENT_FILE = Path(__file__).resolve()
 PROJECT_ROOT = CURRENT_FILE.parent.parent
-DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "data" / "output" / "reports"
+DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "output" / "reports"
 DEFAULT_SHORT_TERM_ROOT = PROJECT_ROOT / "data" / "memory" / "short_term"
 
 
@@ -107,7 +107,7 @@ def render_report_pdf(
         base_dir=short_term_dir,
         do_post_init=False,
     )
-    manuscript = Section.from_json(report_json_path.read_text(encoding="utf-8"))
+    manuscript = Section.json(report_json_path.read_text(encoding="utf-8"))
     markdown_text = section_to_markdown(manuscript)
 
     if save_markdown_path is not None:

@@ -5,22 +5,6 @@ import os
 import sys
 import warnings
 
-
-# Windows 特定编码修复
-if sys.platform == 'win32':
-    try:
-        import io
-        # 修复标准输出的编码
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='ignore')
-        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='ignore')
-
-        # 设置控制台代码页为 UTF-8
-        import ctypes
-        kernel32 = ctypes.windll.kernel32
-        kernel32.SetConsoleOutputCP(65001)
-    except:
-        pass
-
 from src.memory.working import Section, Segment
 from src.memory.short_term import ShortTermMemoryStore
 from src.utils.generate_palette import generate_palette
@@ -582,6 +566,9 @@ def md_to_pdf(
     body_font_uri = _as_file_uri(style.get("body_font_path", ""))
     heading_font_uri = _as_file_uri(style.get("heading_font_path", ""))
     mono_font_uri = _as_file_uri(style.get("mono_font_path", ""))
+    body_font_uri = ""
+    heading_font_uri = ""
+    mono_font_uri = ""
 
     fallback_sans = '"Noto Sans CJK SC","Microsoft YaHei","SimSun","Songti SC","Segoe UI Emoji",sans-serif'
     fallback_mono = '"JetBrains Mono","Consolas","Courier New",monospace'

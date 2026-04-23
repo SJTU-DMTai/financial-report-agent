@@ -194,13 +194,13 @@ async def search_evidence(query, known_evidence, task_desc, demo_date, segment_t
             f"任务：{task_desc}\n"
             f"当前需要你撰写要点：{segment_topic}\n"
             f"{known_evidence}\n"
-            f"论据还需要的材料：{query}\n\n"
-            f"如果该材料并非可以搜索得到的（例如画图要求）、或者不需要搜索的声明（例如数据来源）、或者已收集材料已覆盖的，可以直接返回“{query}”，不做搜索和修改。否则，可以查看\n\n"
-            + (f"{demo_date}发布了一份历史研报，以下一段内容可能包含所需材料：{reference}\n"
+            f"论据还需要的材料：**{query}**\n\n"
+            f"如果该材料并非可以搜索得到的（例如画图要求）、或者不需要搜索的声明（例如数据来源）、或者已收集材料已覆盖的，可以直接返回“{query}”，不做搜索和修改。"
+            + (f"否则，可以查看{demo_date}发布的一份历史研报，其中一段内容可能包含所需材料：\n<reference>\n{reference}\n</reference>\n"
               f"如果该内容包含所需材料，并且一定不会因时间变化，在当前撰写时间依然成立，则不必调用搜索，摘取出涉及该材料的两三句话作为论据即可，"
               f"并加上 [^cite_id:{demo_date}_reference_report] 作为markdown风格引用。"
-              f"如果没有符合时效性论据，\n\n"
-            if reference else "") +
+              f"如果没有符合时效性论据，"
+            if reference else "\n\n") +
             f"请你调用工具搜索，尽量根据多个信息源交叉验证后给出搜索结果。最终给出的答案需要简洁明了。"
         ),
         role="user",
@@ -231,7 +231,10 @@ async def process_single_segment(segment: Segment,
         if segment.reference and '【画图内容要求】' in segment.reference:
             continue
         evidences = [e for e in segment.evidences[:i] if e]
-        known_evidence = ("当前已搜索到的论据：\n" + "\n".join(evidences) + "\n") if evidences else ""
+        if evidences:
+            known_evidence = ("当前已搜索到的论据：\n<evidences>\n" + "\n".join(list(set(evidences))) + "\n</evidences>\n").replace("\n\n", "\n") + ""
+        else:
+            known_evidence = ""
         segment.evidences[i] = await search_evidence(evidence, known_evidence, task_desc, demo_date, segment.topic, searcher, reference=segment.reference)
         await searcher.memory.clear()
 
@@ -275,22 +278,23 @@ async def process_single_segment(segment: Segment,
                 print(f"[Writer] Segment finished: {segment.topic}")
                 print(segment.content, flush=True)
 
+
         if multi_source_verification_enabled:
             prev_priority_ids = None
             prev_score = None
-            
+
             for round_idx in range(max_verify_rounds):
                 current_text = segment.content
                 print(f"[Verifier Loop] round={round_idx + 1}/{max_verify_rounds} topic={segment.topic}", flush=True)
                 print("[Verifier Checked Text]", flush=True)
                 print(current_text, flush=True)
-                
+
                 # 获取 claims 和 issues
                 claims, all_issues = await verifier.verify_with_claims(segment.content)
                 if not claims:
                     print("[Verifier Loop] No claims extracted, stop")
                     break
-                
+
                 # 生成 claim 级评估报告
                 claim_evals = evaluate_claims(claims, all_issues)
                 report = compute_segment_report(claim_evals, top_k=5)
@@ -300,19 +304,19 @@ async def process_single_segment(segment: Segment,
                 top_k = min(5, max(2, report.bad_claims_count))
                 if top_k != 5:
                     report = compute_segment_report(claim_evals, top_k=top_k)
-                
+
                  # 4. 收敛检测（使用调整后的报告）
                 current_priority_ids = {ce.claim_id for ce in report.priority_claims}
                 same_priority = (prev_priority_ids is not None and current_priority_ids == prev_priority_ids)
                 small_improve = (prev_score is not None and (report.segment_score - prev_score) < 5)
-                
+
                 if same_priority and small_improve:
                     print(f"[Verifier Loop] Early stop: priority unchanged and score improvement <5 ({prev_score} -> {report.segment_score})", flush=True)
                     break
-                
+
                 prev_priority_ids = current_priority_ids
                 prev_score = report.segment_score
-                
+
                 # ---------- 5. 停止条件----------
                 # 分数 >= 80 视为高质量，直接通过
                 if report.segment_score >= 80:
@@ -329,13 +333,13 @@ async def process_single_segment(segment: Segment,
                         priority_claims_count=0,
                     )
                     break
-                
-                    
+
+
                 verify_feedback = format_report_for_writer(report)
                 print(f"[Verifier Loop] feedback_chars={len(verify_feedback)}", flush=True)
                 print("[Verifier Feedback To Writer]", flush=True)
                 print(verify_feedback, flush=True)
-                
+
                 # ---------- 5. Writer 改写 ----------
                 writer_input = Msg(
                     name="user",
@@ -351,19 +355,19 @@ async def process_single_segment(segment: Segment,
                     ),
                     role="user",
                 )
-                
+
                 draft_msg = await call_agent_with_retry(writer, writer_input)
                 new_content = extract_writer_content(draft_msg.get_text_content())
-                
+
                 # ---------- 6. 检测 rewrite 无变化 ----------
                 if new_content.strip() == current_text.strip():
                     print("[Verifier Loop] Early stop: rewrite produced no change", flush=True)
                     break
                 segment.content = new_content
-                
+
                 print("[Writer Rewritten After Verifier]", flush=True)
                 print(segment.content, flush=True)
-                
+
                 # ---------- 7. Trace 记录 ----------
                 priority_issue_count = sum(len(ce.issues) for ce in report.priority_claims)
                 await append_verifier_trace(
@@ -379,7 +383,7 @@ async def process_single_segment(segment: Segment,
                     passed=report.passed,
                     priority_claims_count=len(report.priority_claims),
                 )
-            
+
         await writer.memory.clear()
         segment.finished = True
         print(f"[{time.strftime('%H:%M:%S')}] ✅ 完成写作: {segment.topic[:15]}.", flush=True)
@@ -478,7 +482,7 @@ async def process_section_concurrently(section: Section, parent_id, task_desc, d
     # 6. 保存中间结果 (可选，防止崩溃全丢)
     # 注意：并发写入文件可能冲突，这里简单处理，实际生产建议用单独的 save 协程或锁
     async with SAVE_LOCK:
-        (output_pth / f"{stock_symbol}_{cur_date}.json").write_text(manuscript_root.to_json(ensure_ascii=False) ,encoding="utf-8")
+        (output_pth / f"{stock_symbol}_{cur_date}.json").write_text(manuscript_root.model_dump_json(ensure_ascii=False) ,encoding="utf-8")
 
 
 async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
@@ -506,26 +510,26 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
     original_stderr = sys.stderr
     log_file = open(log_filename, "w", encoding="utf-8")
     set_verifier_trace_path(PROJECT_ROOT / verifier_trace_filename)
-    sys.stdout = log_file
-    sys.stderr = log_file
+    # sys.stdout = log_file
+    # sys.stderr = log_file
 
     try:
         cfg = config.Config()
         multi_source_verification_enabled = cfg.is_multi_source_verification_enabled()
         max_verify_rounds = cfg.get_max_verify_rounds()
-        
+
         filename = f"{stock_symbol}_{cur_date}"
         short_term_dir = PROJECT_ROOT / "data" / "memory" / "short_term" / filename
 
         short_term = ShortTermMemoryStore(
             base_dir=short_term_dir,
         )
-        
+
         if demo_pdf_path is None:
             demo_pdf_path = STOCK_REPORT_PATHS[stock_symbol][-1]
         demo_date = demo_pdf_path.name.split("_")[1]
 
-        output_pth = PROJECT_ROOT / "data" / "output" / "reports" / cfg.llm_name
+        output_pth = PROJECT_ROOT / "output" / "reports" / cfg.llm_name
         output_pth.mkdir(parents=True, exist_ok=True)
 
         outline = await process_pdf_to_outline(demo_pdf_path, long_term_dir / "demonstration",
@@ -533,7 +537,7 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
         _normalize_section_titles(outline)
         manuscript_path = output_pth / f"{stock_symbol}_{cur_date}.json"
         if manuscript_path.exists():
-            manuscript = Section.from_json(manuscript_path.read_text(encoding='utf-8'))
+            manuscript = Section.model_validate_json(manuscript_path.read_text(encoding='utf-8'))
             print("加载已有的 manuscript:", manuscript_path)
         else:
             manuscript = outline
@@ -632,7 +636,7 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
 
         _normalize_section_titles(manuscript)
         _normalize_report_title(manuscript, entity, task_desc)
-        (output_pth / f"{filename}.json").write_text(manuscript.to_json(ensure_ascii=False), encoding="utf-8")
+        (output_pth / f"{filename}.json").write_text(manuscript.model_dump_json(ensure_ascii=False), encoding="utf-8")
         markdown_text = section_to_markdown(manuscript)
         (output_pth / f"{filename}.md").write_text(markdown_text, encoding="utf-8")
         md_to_pdf(

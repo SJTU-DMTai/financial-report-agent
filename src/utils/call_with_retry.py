@@ -2,6 +2,7 @@
 import asyncio
 import os
 import random
+import time
 import traceback
 import warnings
 from copy import deepcopy
@@ -52,19 +53,29 @@ async def call_chatbot_with_retry(
                 _messages = await formatter.format(messages)
                 response = await model(_messages, structured_model=structured_model)
                 if structured_model is not None:
-                    res = response.metadata
+                    metadata = response.metadata
+                    if isinstance(metadata, structured_model):
+                        res = metadata
+                    elif isinstance(metadata, dict):
+                        res = structured_model(**metadata)
+                    else:
+                        res = metadata
                 else:
                     res = Msg(role='assistant', content=response.content, name='assistant').get_text_content()
             except RateLimitError as e:
+                print(e)
                 if cfg.get_model_cfg()['provider'] == 'ark' and os.getenv("LLM_NAME") == 'deepseek-v3.2' and isinstance(e, RateLimitError):
-                    print(e)
                     exceed_tpm_models.add(model.model_name)
                     if len(exceed_tpm_models) >= len(endpoints):
                         await asyncio.sleep(60)
                         exceed_tpm_models = set()
                     model.model_name = list(endpoints - exceed_tpm_models)[0]
                     print("切换为", model.model_name, flush=True)
+                else:
+                    time.sleep(60)
             except Exception as e:
+                if "服务限流，请稍后重试" in str(e) or "quota" in str(e).lower() or "tpm" in str(e).lower() or "qpm" in str(e).lower():
+                    time.sleep(60)
                 warnings.warn(f"[调用 ChatModel 失败] 第 {_} 次尝试异常：{type(e).__name__}: {e}，")
                 continue
             if res:
@@ -82,7 +93,6 @@ async def call_chatbot_with_retry(
                         warnings.warn(f"[调用 ChatModel 失败] prompt:{user_prompt} res:{response} 第 {_} 次尝试异常：{type(e).__name__}: {e}，")
                 else:
                     return res
-        # traceback.print_exc()
         warnings.warn(f"失败 user: {user_prompt}\nres: {res}")
         raise Exception("调用 ChatModel 多次失败，放弃重试。")
 
@@ -132,18 +142,23 @@ async def call_agent_with_retry(
                         if msg.id == agent.memory.content[pos_id][0].id:
                             agent.memory.content = agent.memory.content[:pos_id]
                             break
+                else:
+                    time.sleep(60)
             except Exception as e:
-                print(agent.memory.content, flush=True)
-                await agent.memory.clear()
-                last_exc = e
-                if attempt == max_retries:
-                    warnings.warn(f"[重试失败] 第 {attempt} 次仍然报错，放弃重试。异常：{type(e).__name__}: {e}")
-                    raise last_exc
+                if "服务限流，请稍后重试" in str(e) or "quota" in str(e).lower() or "tpm" in str(e).lower() or "qpm" in str(e).lower():
+                    time.sleep(60)
+                else:
+                    print(agent.memory.content, flush=True)
+                    await agent.memory.clear()
+                    last_exc = e
+                    if attempt == max_retries:
+                        warnings.warn(f"[重试失败] 第 {attempt} 次仍然报错，放弃重试。异常：{type(e).__name__}: {e}")
+                        raise last_exc
 
-                sleep_time = base_delay * (backoff_factor ** (attempt - 1))
-                traceback.print_exc()
-                warnings.warn(
-                    f"[调用 agent 失败] 第 {attempt} 次尝试异常：{type(e).__name__}: {e}，"
-                    f"{sleep_time:.1f} 秒后重试..."
-                )
-                await asyncio.sleep(sleep_time)
+                    sleep_time = base_delay * (backoff_factor ** (attempt - 1))
+                    traceback.print_exc()
+                    warnings.warn(
+                        f"[调用 agent 失败] 第 {attempt} 次尝试异常：{type(e).__name__}: {e}，"
+                        f"{sleep_time:.1f} 秒后重试..."
+                    )
+                    await asyncio.sleep(sleep_time)
