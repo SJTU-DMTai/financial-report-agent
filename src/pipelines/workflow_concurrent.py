@@ -232,7 +232,7 @@ async def process_single_segment(segment: Segment,
             continue
         evidences = [e for e in segment.evidences[:i] if e]
         if evidences:
-            known_evidence = ("当前已搜索到的论据：\n<evidences>\n" + "\n".join(evidences) + "\n</evidences>\n").replace("\n\n", "\n") + ""
+            known_evidence = ("当前已搜索到的论据：\n<evidences>\n" + "\n".join(list(set(evidences))) + "\n</evidences>\n").replace("\n\n", "\n") + ""
         else:
             known_evidence = ""
         segment.evidences[i] = await search_evidence(evidence, known_evidence, task_desc, demo_date, segment.topic, searcher, reference=segment.reference)
@@ -495,7 +495,7 @@ async def process_section_concurrently(section: Section, parent_id, task_desc, d
     # 6. 保存中间结果 (可选，防止崩溃全丢)
     # 注意：并发写入文件可能冲突，这里简单处理，实际生产建议用单独的 save 协程或锁
     async with SAVE_LOCK:
-        (output_pth / f"{stock_symbol}_{cur_date}.json").write_text(manuscript_root.to_json(ensure_ascii=False) ,encoding="utf-8")
+        (output_pth / f"{stock_symbol}_{cur_date}.json").write_text(manuscript_root.model_dump_json(ensure_ascii=False) ,encoding="utf-8")
 
 
 async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):

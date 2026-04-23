@@ -519,6 +519,7 @@ class MaterialTools:
                     if isinstance(item, dict):
                         # 删除 relevance 字段
                         item.pop("relevance", None)
+                        item.pop("link", None)
 
         # 如果有 key_path，则提取每条对应字段，否则展示整个条目
         if key_path:
