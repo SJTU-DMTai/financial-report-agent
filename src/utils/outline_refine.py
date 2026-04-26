@@ -20,7 +20,6 @@ from src.memory.working import Evidence, Section, Segment
 from src.prompt import prompt_dict
 
 MAX_REQUIREMENTS_CHARS = 360
-MAX_TEMPLATE_CHARS = 480
 MAX_TOPIC_CHARS = 80
 MAX_EVIDENCE_CHARS = 120
 
@@ -50,13 +49,6 @@ class OutlineEvidencePayload(BaseModel):
     text: str
 
 
-class OutlineSegmentPayload(BaseModel):
-    topic: str
-    requirements: Optional[str] = None
-    template: Optional[str] = None
-    evidences: Optional[List[OutlineEvidencePayload]] = None
-
-
 class OutlineNewSegmentPayload(BaseModel):
     topic: str
     requirements: str
@@ -66,6 +58,7 @@ class OutlineNewSegmentPayload(BaseModel):
 class OutlineSectionPayload(BaseModel):
     title: str
     segments: List[OutlineNewSegmentPayload] = Field(default_factory=list)
+    subsections: List["OutlineSectionPayload"] = Field(default_factory=list)
 
 
 class OutlinePatch(BaseModel):
@@ -81,20 +74,20 @@ class OutlineRefineOperation(BaseModel):
         "modify_section",
         "add_section",
         "delete_section",
+        "merge_section",
+        "split_section",
         "modify_segment",
         "add_segment",
         "delete_segment",
-        "merge_segments",
-        "split_segment",
     ]
     section_id: Optional[str] = None
+    section_ids: List[str] = Field(default_factory=list)
     parent_section_id: Optional[str] = None
     segment_id: Optional[str] = None
-    segment_ids: List[str] = Field(default_factory=list)
     insert_index: Optional[int] = None
     new_section: Optional[OutlineSectionPayload] = None
     new_segment: Optional[OutlineNewSegmentPayload] = None
-    new_segments: List[OutlineNewSegmentPayload] = Field(default_factory=list)
+    new_sections: List[OutlineSectionPayload] = Field(default_factory=list)
     updates: Optional[OutlinePatch] = None
 
 
@@ -102,10 +95,21 @@ class OutlineRefineResponse(BaseModel):
     operations: List[OutlineRefineOperation] = Field(default_factory=list)
 
 
-def _model_validate(model_cls, payload):
-    if hasattr(model_cls, "model_validate"):
-        return model_cls.model_validate(payload)
-    return model_cls.parse_obj(payload)
+if hasattr(OutlineSectionPayload, "model_rebuild"):
+    OutlineSectionPayload.model_rebuild()
+else:
+    OutlineSectionPayload.update_forward_refs()
+
+
+def _parse_outline_refine_response_text(text: str) -> OutlineRefineResponse:
+    start = text.find("{")
+    end = text.rfind("}")
+    if start < 0 or end < start:
+        raise ValueError("Outline refine response 中未找到 JSON 对象")
+    payload = json.loads(text[start : end + 1])
+    if hasattr(OutlineRefineResponse, "model_validate"):
+        return OutlineRefineResponse.model_validate(payload)
+    return OutlineRefineResponse.parse_obj(payload)
 
 
 def _normalize_text(text: Optional[str]) -> Optional[str]:
@@ -146,10 +150,7 @@ def _serialize_segment_for_refine(segment: Segment, segment_id: str) -> Dict:
         "id": segment_id,
         "topic": _truncate_text(segment.topic, MAX_TOPIC_CHARS),
         "requirements": _truncate_text(segment.requirements, MAX_REQUIREMENTS_CHARS),
-        "template": _truncate_text(segment.template, MAX_TEMPLATE_CHARS),
         "evidences": _serialize_evidences_for_refine(segment.evidences),
-        "reference_available": bool(segment.reference),
-        "finished": bool(segment.finished),
     }
 
 
@@ -225,24 +226,6 @@ def serialize_outline_for_refine(outline: Section) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
-def _clone_evidences(evidences: Optional[List[Evidence]]) -> Optional[List[Evidence]]:
-    if evidences is None:
-        return None
-    cloned: List[Evidence] = []
-    seen = set()
-    for evidence in evidences:
-        if evidence is None or not evidence.text:
-            continue
-        key = evidence.text.strip()
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        cloned.append(Evidence(text=key, is_static=bool(evidence.is_static)))
-    if not cloned:
-        return None
-    return cloned
-
-
 def _build_evidences(payload_evidences: Optional[List[OutlineEvidencePayload]]) -> Optional[List[Evidence]]:
     if payload_evidences is None:
         return None
@@ -266,69 +249,31 @@ def _build_required_evidences(payload_evidences: List[OutlineEvidencePayload]) -
     return evidences
 
 
-def _collect_combined_reference(segments: List[Segment]) -> Optional[str]:
-    references: List[str] = []
-    seen = set()
-    for segment in segments:
-        reference = _normalize_text(segment.reference)
-        if reference is None or reference in seen:
-            continue
-        seen.add(reference)
-        references.append(reference)
-    if not references:
-        return None
-    return "\n\n".join(references)
-
-
-def _collect_combined_evidences(segments: List[Segment]) -> Optional[List[Evidence]]:
-    evidences: List[Evidence] = []
-    seen = set()
-    for segment in segments:
-        for evidence in segment.evidences or []:
-            if evidence is None or not evidence.text:
-                continue
-            key = evidence.text.strip()
-            if not key or key in seen:
-                continue
-            seen.add(key)
-            evidences.append(Evidence(text=key, is_static=bool(evidence.is_static)))
-    if not evidences:
-        return None
-    return evidences
-
-
-def _build_segment_from_payload(
-    payload: OutlineSegmentPayload | OutlineNewSegmentPayload,
-    fallback_reference: Optional[str] = None,
-    fallback_evidences: Optional[List[Evidence]] = None,
-) -> Segment:
-    template = None
-    if isinstance(payload, OutlineNewSegmentPayload):
-        evidences = _build_required_evidences(payload.evidences)
-    else:
-        evidences = _build_evidences(payload.evidences)
-        if evidences is None:
-            evidences = _clone_evidences(fallback_evidences)
-        template = _normalize_text(payload.template)
+def _build_segment_from_payload(payload: OutlineNewSegmentPayload) -> Segment:
+    evidences = _build_required_evidences(payload.evidences)
     return Segment(
         finished=False,
         topic=_normalize_text(payload.topic),
         requirements=_normalize_text(payload.requirements),
-        reference=_normalize_text(fallback_reference),
+        reference=None,
         content=None,
-        template=template,
+        template=None,
         evidences=evidences,
     )
 
 
 def _build_section_from_payload(payload: OutlineSectionPayload, parent_level: int) -> Section:
     segments = [_build_segment_from_payload(segment_payload) for segment_payload in payload.segments]
+    subsections = [
+        _build_section_from_payload(subsection_payload, parent_level + 1)
+        for subsection_payload in payload.subsections
+    ]
     return Section(
         section_id=0,
         level=parent_level + 1,
         title=_normalize_text(payload.title) or "未命名章节",
         segments=segments,
-        subsections=[],
+        subsections=subsections,
         content=None,
     )
 
@@ -430,6 +375,72 @@ def _apply_delete_section_operation(operation: OutlineRefineOperation, context: 
     return True
 
 
+def _resolve_merge_sections(operation: OutlineRefineOperation, context: OutlineRefineContext) -> List[SectionRef]:
+    resolved: List[SectionRef] = []
+    for section_id in operation.section_ids:
+        section_ref = context.section_refs.get(section_id)
+        if section_ref is None:
+            warnings.warn(f"[Outline Refine] 未找到 section_id={section_id}，跳过 merge_section")
+            return []
+        if section_ref.parent is None:
+            warnings.warn(f"[Outline Refine] section_id={section_id} 不能作为 merge_section 目标，已跳过")
+            return []
+        if _find_child_section_index(section_ref.parent, section_ref.section) < 0:
+            warnings.warn(f"[Outline Refine] section_id={section_id} 已不存在，跳过 merge_section")
+            return []
+        resolved.append(section_ref)
+    return resolved
+
+
+def _apply_merge_section_operation(operation: OutlineRefineOperation, context: OutlineRefineContext) -> bool:
+    if len(operation.section_ids) < 2 or operation.new_section is None:
+        return False
+    section_refs = _resolve_merge_sections(operation, context)
+    if not section_refs:
+        return False
+
+    parent = section_refs[0].parent
+    for section_ref in section_refs[1:]:
+        if section_ref.parent is not parent:
+            warnings.warn("[Outline Refine] merge_section 仅支持同一父 section 下的 sections，已跳过")
+            return False
+
+    current_indices = [_find_child_section_index(parent, section_ref.section) for section_ref in section_refs]
+    sorted_indices = sorted(current_indices)
+    expected_indices = list(range(sorted_indices[0], sorted_indices[0] + len(sorted_indices)))
+    if sorted_indices != expected_indices:
+        warnings.warn("[Outline Refine] merge_section 仅支持合并当前父 section 下相邻 sections，已跳过")
+        return False
+
+    merged_section = _build_section_from_payload(operation.new_section, parent.level or 1)
+    start_index = sorted_indices[0]
+    parent.subsections[start_index : sorted_indices[-1] + 1] = [merged_section]
+    return True
+
+
+def _apply_split_section_operation(operation: OutlineRefineOperation, context: OutlineRefineContext) -> bool:
+    if operation.section_id is None or len(operation.new_sections) < 2:
+        return False
+    section_ref = context.section_refs.get(operation.section_id)
+    if section_ref is None:
+        warnings.warn(f"[Outline Refine] 未找到 section_id={operation.section_id}，跳过 split_section")
+        return False
+    if section_ref.parent is None:
+        warnings.warn(f"[Outline Refine] section_id={operation.section_id} 不能作为 split_section 目标，已跳过")
+        return False
+    child_index = _find_child_section_index(section_ref.parent, section_ref.section)
+    if child_index < 0:
+        warnings.warn(f"[Outline Refine] section_id={operation.section_id} 已不存在，跳过 split_section")
+        return False
+
+    replacement_sections = [
+        _build_section_from_payload(payload, section_ref.parent.level or 1)
+        for payload in operation.new_sections
+    ]
+    section_ref.parent.subsections[child_index : child_index + 1] = replacement_sections
+    return True
+
+
 def _apply_modify_segment_operation(operation: OutlineRefineOperation, context: OutlineRefineContext) -> bool:
     if operation.segment_id is None or operation.updates is None:
         return False
@@ -472,75 +483,6 @@ def _apply_delete_segment_operation(operation: OutlineRefineOperation, context: 
     return True
 
 
-def _resolve_merge_segments(operation: OutlineRefineOperation, context: OutlineRefineContext) -> List[SegmentRef]:
-    resolved: List[SegmentRef] = []
-    for segment_id in operation.segment_ids:
-        segment_ref = context.segment_refs.get(segment_id)
-        if segment_ref is None:
-            warnings.warn(f"[Outline Refine] 未找到 segment_id={segment_id}，跳过 merge_segments")
-            return []
-        if _find_child_segment_index(segment_ref.parent, segment_ref.segment) < 0:
-            warnings.warn(f"[Outline Refine] segment_id={segment_id} 已不存在，跳过 merge_segments")
-            return []
-        resolved.append(segment_ref)
-    return resolved
-
-
-def _apply_merge_segments_operation(operation: OutlineRefineOperation, context: OutlineRefineContext) -> bool:
-    if len(operation.segment_ids) < 2 or operation.new_segment is None:
-        return False
-    segment_refs = _resolve_merge_segments(operation, context)
-    if not segment_refs:
-        return False
-
-    parent = segment_refs[0].parent
-    for segment_ref in segment_refs[1:]:
-        if segment_ref.parent is not parent:
-            warnings.warn("[Outline Refine] merge_segments 仅支持同一 section 下的 segments，已跳过")
-            return False
-
-    current_indices = [_find_child_segment_index(parent, segment_ref.segment) for segment_ref in segment_refs]
-    sorted_indices = sorted(current_indices)
-    expected_indices = list(range(sorted_indices[0], sorted_indices[0] + len(sorted_indices)))
-    if sorted_indices != expected_indices:
-        warnings.warn("[Outline Refine] merge_segments 仅支持合并当前 section 内相邻 segments，已跳过")
-        return False
-
-    segments_to_merge = [parent.segments[index] for index in sorted_indices]
-    merged_segment = _build_segment_from_payload(
-        operation.new_segment,
-        fallback_reference=_collect_combined_reference(segments_to_merge),
-        fallback_evidences=_collect_combined_evidences(segments_to_merge),
-    )
-    start_index = sorted_indices[0]
-    parent.segments[start_index : sorted_indices[-1] + 1] = [merged_segment]
-    return True
-
-
-def _apply_split_segment_operation(operation: OutlineRefineOperation, context: OutlineRefineContext) -> bool:
-    if operation.segment_id is None or len(operation.new_segments) < 2:
-        return False
-    segment_ref = context.segment_refs.get(operation.segment_id)
-    if segment_ref is None:
-        warnings.warn(f"[Outline Refine] 未找到 segment_id={operation.segment_id}，跳过 split_segment")
-        return False
-    child_index = _find_child_segment_index(segment_ref.parent, segment_ref.segment)
-    if child_index < 0:
-        warnings.warn(f"[Outline Refine] segment_id={operation.segment_id} 已不存在，跳过 split_segment")
-        return False
-
-    replacement_segments: List[Segment] = []
-    for payload in operation.new_segments:
-        replacement_segments.append(
-            _build_segment_from_payload(
-                payload,
-                fallback_reference=segment_ref.segment.reference,
-            )
-        )
-    segment_ref.parent.segments[child_index : child_index + 1] = replacement_segments
-    return True
-
-
 def _apply_outline_refine_operation(operation: OutlineRefineOperation, context: OutlineRefineContext) -> bool:
     if operation.action == "modify_section":
         return _apply_modify_section_operation(operation, context)
@@ -548,16 +490,16 @@ def _apply_outline_refine_operation(operation: OutlineRefineOperation, context: 
         return _apply_add_section_operation(operation, context)
     if operation.action == "delete_section":
         return _apply_delete_section_operation(operation, context)
+    if operation.action == "merge_section":
+        return _apply_merge_section_operation(operation, context)
+    if operation.action == "split_section":
+        return _apply_split_section_operation(operation, context)
     if operation.action == "modify_segment":
         return _apply_modify_segment_operation(operation, context)
     if operation.action == "add_segment":
         return _apply_add_segment_operation(operation, context)
     if operation.action == "delete_segment":
         return _apply_delete_segment_operation(operation, context)
-    if operation.action == "merge_segments":
-        return _apply_merge_segments_operation(operation, context)
-    if operation.action == "split_segment":
-        return _apply_split_segment_operation(operation, context)
     warnings.warn(f"[Outline Refine] 未知操作类型={operation.action}，已跳过")
     return False
 
@@ -614,15 +556,16 @@ async def _call_chatbot_with_message_history_retry(
     model: ChatModelBase,
     formatter: FormatterBase,
     messages: List[Msg],
+    model_cfg: Optional[Dict] = None,
     structured_model: Optional[Type[BaseModel]] = None,
     max_retries: int = 5,
 ):
     from src.utils.call_with_retry import endpoints
     from src.utils.global_semaphore import get_global_semaphore
-    from src.utils.instance import cfg
 
     semaphore = get_global_semaphore()
     result = ""
+    active_model_cfg = model_cfg or {}
     async with semaphore:
         exceed_tpm_models = set()
         for _ in range(max_retries):
@@ -634,7 +577,7 @@ async def _call_chatbot_with_message_history_retry(
                 else:
                     result = Msg(role="assistant", content=response.content, name="assistant").get_text_content()
             except RateLimitError as exc:
-                if cfg.get_model_cfg()["provider"] == "ark" and os.getenv("LLM_NAME") == "deepseek-v3.2":
+                if active_model_cfg.get("provider") == "ark" and model.model_name == active_model_cfg.get("model_name"):
                     print(exc)
                     exceed_tpm_models.add(model.model_name)
                     if len(exceed_tpm_models) >= len(endpoints):
@@ -672,8 +615,32 @@ def _log_outline_refine_operations(response: OutlineRefineResponse) -> List[Outl
         flush=True,
     )
     for index, operation in enumerate(operations, start=1):
+        parts = [f"action={operation.action}"]
+        if operation.section_id:
+            parts.append(f"section_id={operation.section_id}")
+        if operation.section_ids:
+            parts.append(f"section_ids={','.join(operation.section_ids)}")
+        if operation.parent_section_id:
+            parts.append(f"parent_section_id={operation.parent_section_id}")
+        if operation.segment_id:
+            parts.append(f"segment_id={operation.segment_id}")
+        if operation.insert_index is not None:
+            parts.append(f"insert_index={operation.insert_index}")
+        if operation.new_section is not None:
+            parts.append(f"new_section_title={operation.new_section.title}")
+        if operation.new_segment is not None:
+            parts.append(f"new_segment_topic={operation.new_segment.topic}")
+        if operation.new_sections:
+            titles = [section.title for section in operation.new_sections]
+            parts.append(f"new_section_titles={','.join(titles)}")
+        if operation.updates is not None:
+            if hasattr(operation.updates, "model_fields_set"):
+                update_fields = operation.updates.model_fields_set
+            else:
+                update_fields = operation.updates.__fields_set__
+            parts.append(f"updates={','.join(sorted(update_fields))}")
         print(
-            f"[Outline Refine] op{index}: action={operation.action}",
+            f"[Outline Refine] op{index}: {' '.join(parts)}",
             flush=True,
         )
     return operations
@@ -685,6 +652,7 @@ async def refine_outline(
     cur_date: Optional[str],
     model: ChatModelBase,
     formatter: FormatterBase,
+    model_cfg: Optional[Dict] = None,
     debug_print: bool = False,
 ) -> Section:
     outline_copy = deepcopy(outline)
@@ -717,6 +685,7 @@ async def refine_outline(
             model=model,
             formatter=formatter,
             messages=conversation,
+            model_cfg=model_cfg,
         )
         if debug_print:
             _print_outline_refine_debug_block("round1 assistant response", issues_markdown)
@@ -735,11 +704,11 @@ async def refine_outline(
             model=model,
             formatter=formatter,
             messages=conversation,
-            structured_model=OutlineRefineResponse,
+            model_cfg=model_cfg,
         )
         if debug_print:
             _print_outline_refine_debug_block("round2 assistant response", raw_response)
-        response = _model_validate(OutlineRefineResponse, raw_response)
+        response = _parse_outline_refine_response_text(raw_response)
         operations = _log_outline_refine_operations(response)
         apply_outline_refine_operations(outline_copy, context, operations)
         return outline_copy

@@ -71,7 +71,7 @@ async def run_benchmark(batch_size=1):
         batch_size: 最大任务级并发数（注意：LLM调用的并发由全局semaphore控制）
     """
     # 读取 benchmark.json
-    benchmark_path = Path(__file__).parent / "benchmark_1.json"
+    benchmark_path = Path(__file__).parent / "benchmark.json"
 
     if not benchmark_path.exists():
         print(f"错误：找不到 benchmark.json 文件：{benchmark_path}")

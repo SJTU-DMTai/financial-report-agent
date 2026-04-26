@@ -989,7 +989,7 @@ def _adjust_content_headers(content: str, min_level: int) -> str:
         # 检测markdown标题
         if match := re.match(r'^(#{1,6})\s+(.+)', line):
             current_hashes = len(match.group(1))
-            title_text = match.group(2);
+            title_text = _strip_section_number_prefix(match.group(2))
 
             # 如果当前标题级别 <= min_level，需要增加井号数量
             # 确保content中的标题至少比当前section多一级
@@ -1050,7 +1050,8 @@ def _convert_headings_to_strong_paragraphs(content: str) -> str:
     for line in content.split('\n'):
         match = re.match(r'^(#{1,6})\s+(.+)', line.strip())
         if match:
-            converted_lines.append(f"**{match.group(2).strip()}**")
+            title_text = _strip_section_number_prefix(match.group(2))
+            converted_lines.append(f"**{title_text}**")
         else:
             converted_lines.append(line)
     return '\n'.join(converted_lines).strip()

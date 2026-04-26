@@ -3,25 +3,51 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+import calendar
 import math
 import re
 import hashlib
 import pandas as pd
 
 from ..utils.get_entity_info import get_entity_info
-from ..utils.format import fmt_yyyymmdd
-from ..memory.short_term import ShortTermMemoryStore, MaterialMeta
-from ..memory.long_term import LongTermMemoryStore
+
+if TYPE_CHECKING:
+    from ..memory.short_term import ShortTermMemoryStore, MaterialMeta
+    from ..memory.long_term import LongTermMemoryStore
+
+
+def fmt_yyyymmdd(s: str) -> str:
+    s = (s or "").strip()
+    if not s:
+        return s
+    try:
+        return pd.to_datetime(s).strftime("%Y-%m-%d")
+    except Exception:
+        return s
 
 # ========= 时间解析 =========
-_RE_YEAR = re.compile(r"\b(20\d{2})\b")
-_RE_DATE1 = re.compile(r"\b(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})\b")
-_RE_DATE2 = re.compile(r"\b(20\d{2})(\d{2})(\d{2})\b")  # yyyymmdd
-_RE_Q = re.compile(r"\b(20\d{2})\s*[qQ]\s*([1-4])\b")
-_RE_Q_ZH = re.compile(r"(20\d{2})\s*年?\s*第?\s*([一二三四1-4])\s*季(?:度)?")
+_RE_YEAR = re.compile(r"(?<!\d)(20\d{2})(?!\d)")
+_RE_DATE1 = re.compile(r"(?<!\d)(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})(?!\d)")
+_RE_DATE2 = re.compile(r"(?<!\d)(20\d{2})(\d{2})(\d{2})(?!\d)")  # yyyymmdd
+_RE_DATE_ZH = re.compile(r"(?<!\d)(20\d{2})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*(?:日|号)?")
+_RE_Q = re.compile(r"(?<!\d)(20\d{2})\s*[qQ]\s*([1-4])(?!\d)")
+_RE_Q_ZH = re.compile(r"(?<!\d)(20\d{2})\s*年?\s*第?\s*([一二三四1-4])\s*季(?:度|报)?")
+_RE_HALF_YEAR_ZH = re.compile(r"(?<!\d)(20\d{2})\s*年?\s*(?:半年度?报告|半年报|中报)")
 
 _Q_ZH_MAP = {"一": "1", "二": "2", "三": "3", "四": "4"}
+
+def _format_valid_date(y: str, mm: int, dd: int) -> str:
+    try:
+        year = int(y)
+        if not 1 <= mm <= 12:
+            return ""
+        if not 1 <= dd <= calendar.monthrange(year, mm)[1]:
+            return ""
+    except Exception:
+        return ""
+    return f"{year:04d}-{mm:02d}-{dd:02d}"
+
 
 def _extract_query_time_signals(q: str) -> Dict[str, Any]:
     q = (q or "")
@@ -30,12 +56,19 @@ def _extract_query_time_signals(q: str) -> Dict[str, Any]:
     dates = set()
     for m in _RE_DATE1.finditer(q):
         y, mm, dd = m.group(1), int(m.group(2)), int(m.group(3))
-        dates.add(f"{y}-{mm:02d}-{dd:02d}")
+        d = _format_valid_date(y, mm, dd)
+        if d:
+            dates.add(d)
     for m in _RE_DATE2.finditer(q):
         y, mm, dd = m.group(1), int(m.group(2)), int(m.group(3))
-        # 粗过滤：防止把 6 位股票代码误判为日期
-        if 1 <= mm <= 12 and 1 <= dd <= 31:
-            dates.add(f"{y}-{mm:02d}-{dd:02d}")
+        d = _format_valid_date(y, mm, dd)
+        if d:
+            dates.add(d)
+    for m in _RE_DATE_ZH.finditer(q):
+        y, mm, dd = m.group(1), int(m.group(2)), int(m.group(3))
+        d = _format_valid_date(y, mm, dd)
+        if d:
+            dates.add(d)
 
     quarters = set()
     for m in _RE_Q.finditer(q):
@@ -45,6 +78,8 @@ def _extract_query_time_signals(q: str) -> Dict[str, Any]:
         qq = _Q_ZH_MAP.get(m.group(2), m.group(2))
         if qq in {"1", "2", "3", "4"}:
             quarters.add((y, qq))
+    for m in _RE_HALF_YEAR_ZH.finditer(q):
+        quarters.add((m.group(1), "2"))
 
     return {"years": years, "dates": dates, "quarters": quarters}
 

@@ -25,7 +25,7 @@ prompt_dict["outline_refine_sys_prompt"] = """
 
 prompt_dict['writer_sys_prompt'] = """
 你是 Writer agent，负责根据给定的大纲撰写金融深度研报的某个**中文**片段，并将你撰写的研报片段使用<content>和</content>包裹住并输出。
-- 检查**论据材料**是否充足、逻辑是否通顺。如果需要获取更多信息，请调用 Searcher 工具收集支撑观点的材料和数据。
+- 检查**论据材料**是否充足、逻辑是否通顺。如果需要获取更多信息，请调用 search_with_searcher 工具收集支撑观点的材料和数据。
 - 如果需要获取材料的具体内容或者原文，可以通过调用 read_material 工具。
 - 如果论据材料本身或工具返回的结果带有 [^cite_id:xxxxxx] 形式的引用，请务必在正文中保留这些引用标志。对于搜索结果，xxxxxx的取值请根据tool response中提及的cite_id赋值，**一定不要用纯序号等没有辨识力的id**。
 - 研报中出现的任何数据、新闻、公告、行情或其他事实类信息，都必须标注来源，在引用内容后使用 [^cite_id:xxxxxx] 格式给出唯一标识。

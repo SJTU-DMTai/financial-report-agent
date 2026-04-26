@@ -2,7 +2,34 @@
 models:
   default: qwen3.5-397b-a17b   # 默认使用的模型 id
   vlm_default: grok
+  outline_refine_default: qwen3.5-397b-a17b
 
+  deepseek-v4-flash:
+    provider: deepseek
+    model_name: deepseek-v4-flash
+    base_url_env: https://api.deepseek.com
+    reasoning_effort: high
+    stream: false
+    
+  deepseek-v4-pro:
+    provider: deepseek
+    model_name: deepseek-v4-pro
+    base_url_env: https://api.deepseek.com
+    reasoning_effort: high
+    stream: false
+
+  deepseek-v4-flash-openrouter:
+    provider: openrouter
+    model_name: deepseek/deepseek-v4-flash
+    base_url_env: https://openrouter.ai/api/v1
+    stream: false
+
+  deepseek-v4-pro-openrouter:
+    provider: openrouter
+    model_name: deepseek/deepseek-v4-pro
+    base_url_env: https://openrouter.ai/api/v1
+    stream: false
+    
   qwen3.5-Flash:
     provider: openrouter
     model_name: qwen/qwen3.5-flash-02-23
@@ -194,4 +221,28 @@ verify_config:
 
 wkhtmltopdf_path:
   path: /usr/local/bin/wkhtmltopdf
+
+planner:
+  max_evidences_per_segment: 6
+
+evaluation:
+  citation_extraction:
+    openai-deepresearch:
+      reference_section_pattern: '^\s*(?:#{1,6}\s*主要数据来源清单\s*$|\[(?:\*{1,2})?\[\d+\\?\](?:\*{1,2})?\]\()'
+      citation_patterns:
+        - match_pattern: '\[(?:\*{1,2})?\[\d+\\?\](?:\*{1,2})?\]\([^)]+\)'
+          split_pattern: '\d+'
+    ours:
+      citation_patterns:
+        - match_pattern: '\[\^cite_id:[^\]]+\]'
+    gemini-deepresearch:
+      reference_section_pattern: '^\s*#{1,6}\s*\*{0,2}引用的著作\*{0,2}\s*$'
+      citation_patterns:
+        - match_pattern: '(?<=[\u4e00-\u9fffA-Za-z）)])(?<!\d)\d{1,2}(?!\d)(?=[，。；：！？,.!?])'
+        - match_pattern: '(?<=\s)(?<!\d)\d{1,2}(?!\d)(?=\s*\|)'
+    finsight:
+      reference_section_pattern: '^\s*#{1,6}\s*Reference Data Sources\s*$'
+      citation_patterns:
+        - match_pattern: '\[\d+(?:\s*,\s*\d+)*\]'
+          split_pattern: '\d+'
 

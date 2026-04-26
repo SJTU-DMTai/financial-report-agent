@@ -7,6 +7,7 @@ from agentscope.token import HuggingFaceTokenCounter
 from agentscope.formatter import (
     DashScopeChatFormatter,
     DashScopeMultiAgentFormatter,
+    DeepSeekChatFormatter,
     OpenAIChatFormatter
 )
 
@@ -53,6 +54,27 @@ def create_chat_model(reasoning=True, model_cfg=None):
             client_kwargs={"base_url": base_url},
             generate_kwargs={"extra_body": extra_body,
                              "temperature": temperature},
+        )
+
+    elif provider == "deepseek":
+        thinking_enabled = reasoning or reasoning_only
+        generate_kwargs = {
+            "extra_body": {
+                "thinking": {
+                    "type": "enabled" if thinking_enabled else "disabled",
+                },
+            },
+        }
+        if thinking_enabled:
+            generate_kwargs["reasoning_effort"] = m.get("reasoning_effort", "high")
+        else:
+            generate_kwargs["temperature"] = temperature
+        return OpenAIChatModel(
+            model_name=model_name,
+            api_key=os.environ.get("API_KEY"),
+            stream=stream,
+            client_kwargs={"base_url": base_url},
+            generate_kwargs=generate_kwargs,
         )
 
     elif provider == "dashscope":
@@ -112,8 +134,8 @@ def create_chat_model(reasoning=True, model_cfg=None):
                              "temperature": temperature},
         )
 
-def create_agent_formatter():
-    m = cfg.get_model_cfg()
+def create_agent_formatter(model_cfg=None):
+    m = model_cfg or cfg.get_model_cfg()
     provider = m["provider"]
     # token_counter = HuggingFaceTokenCounter(
     #     "Qwen/Qwen2.5-7B-Instruct",
@@ -131,7 +153,9 @@ def create_agent_formatter():
     # else:
     #     raise ValueError(f"未知 provider: {provider}")
 
-    if provider in ("openrouter", "xiaomi"):
+    if provider == "deepseek":
+        return DeepSeekChatFormatter()
+    elif provider in ("openrouter", "xiaomi"):
         return OpenAIChatFormatter()
     elif provider == "modelscope":
         return OpenAIChatFormatter()
@@ -207,5 +231,7 @@ def create_vlm_model():
 
 llm_reasoning = create_chat_model()
 llm_instruct = create_chat_model(reasoning=False)
+llm_outline_refine = create_chat_model(model_cfg=cfg.get_outline_refine_model_cfg())
 llm_judge = create_chat_model(model_cfg=config.Config(llm_name=os.getenv("JUDGE_NAME", None)).get_model_cfg())
 formatter = create_agent_formatter()
+outline_refine_formatter = create_agent_formatter(model_cfg=cfg.get_outline_refine_model_cfg())

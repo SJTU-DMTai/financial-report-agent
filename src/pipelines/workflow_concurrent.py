@@ -50,11 +50,19 @@ from src.utils.multi_types_verification import (
     format_report_for_writer,
 )
 from src.utils.local_file import STOCK_REPORT_PATHS
+from src.utils.evidence_merge import merge_outline_evidences
 from src.utils.outline_refine import refine_outline
 from src.utils.task_date import normalize_compact_date
 import config
 from src.utils.call_with_retry import call_chatbot_with_retry
-from src.utils.instance import llm_reasoning, llm_instruct, llm_judge, formatter
+from src.utils.instance import (
+    llm_reasoning,
+    llm_instruct,
+    llm_judge,
+    llm_outline_refine,
+    formatter,
+    outline_refine_formatter,
+)
 import logging
 from typing import List, Optional, Dict, Any
 from src.tools.material_tools import MaterialTools
@@ -202,7 +210,7 @@ async def search_evidence(query, known_evidence, task_desc, demo_date, segment_t
               f"并加上 [^cite_id:{demo_date}_reference_report] 作为markdown风格引用。"
               f"如果没有符合时效性论据，\n\n"
             if reference else "") +
-            f"请你调用工具搜索，尽量根据多个信息源交叉验证后给出搜索结果。最终给出的答案需要简洁明了。"
+            f"请你调用工具搜索，最终给出的答案需要简洁明了。"
         ),
         role="user",
     )
@@ -225,22 +233,6 @@ def _build_known_evidence_context(evidences: List[Evidence], end_index: int) -> 
     if not known_evidence_texts:
         return ""
     return "当前已收集的论据：\n" + "\n".join(known_evidence_texts) + "\n"
-
-
-def _build_writer_input_content(task_desc: str, segment: Segment) -> str:
-    if segment.template:
-        outline_context_intro = "参考写作模版、写作要求和可能谈及的论据如下："
-    else:
-        outline_context_intro = (
-            "当前没有提供写作模版，请主要依据 topic、写作要求和论据材料自行组织结构。"
-            "相关信息如下："
-        )
-    return (
-        f"任务：{task_desc}\n"
-        f"当前步骤需要你撰写要点：\n{segment.topic}\n"
-        f"{outline_context_intro}\n\n{str(segment)}\n\n"
-        "请你开始搜索和撰写。"
-    )
 
 
 async def process_single_segment(segment: Segment,
@@ -273,9 +265,19 @@ async def process_single_segment(segment: Segment,
         await searcher.memory.clear()
 
     try:
+        if segment.template:
+            outline_context_intro = "参考写作模版、写作要求和可能用到的论据如下："
+        else:
+            outline_context_intro = "写作要求和可能用到的论据如下："
+        writer_input_content = (
+            f"任务：{task_desc}\n"
+            f"当前步骤需要你撰写要点：\n{segment.topic}\n"
+            f"{outline_context_intro}\n\n{str(segment)}\n\n"
+            "请你开始搜索和撰写。"
+        )
         writer_input = Msg(
             name="user",
-            content=_build_writer_input_content(task_desc, segment),
+            content=writer_input_content,
             role="user",
         )
 
@@ -555,6 +557,7 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
         cfg = config.Config()
         multi_source_verification_enabled = cfg.is_multi_source_verification_enabled()
         max_verify_rounds = cfg.get_max_verify_rounds()
+        max_evidences_per_segment = cfg.get_max_evidences_per_segment()
         
         filename = f"{stock_symbol}_{cur_date}"
         short_term_dir = PROJECT_ROOT / "data" / "memory" / "short_term" / filename
@@ -570,15 +573,33 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
         output_pth = PROJECT_ROOT / "data" / "output" / "reports" / cfg.llm_name
         output_pth.mkdir(parents=True, exist_ok=True)
 
-        outline = await process_pdf_to_outline(demo_pdf_path, long_term_dir / "demonstration",
-                                                  llm_reasoning, llm_instruct, formatter,)
+        outline = await process_pdf_to_outline(
+            demo_pdf_path,
+            long_term_dir / "demonstration",
+            llm_reasoning,
+            llm_instruct,
+            formatter,
+        )
         _normalize_section_titles(outline)
+        before_refine_outline_path = output_pth / f"{filename}_before_refine_outline.json"
+        before_refine_outline_path.write_text(outline.to_json(ensure_ascii=False), encoding="utf-8")
+        print(f"[Outline Debug] saved before_refine_outline: {before_refine_outline_path}", flush=True)
         outline = await refine_outline(
             outline=outline,
             task_desc=task_desc,
             cur_date=cur_date,
-            model=llm_reasoning,
-            formatter=formatter,
+            model=llm_outline_refine,
+            formatter=outline_refine_formatter,
+            model_cfg=cfg.get_outline_refine_model_cfg(),
+        )
+        after_refine_outline_path = output_pth / f"{filename}_after_refine_outline.json"
+        after_refine_outline_path.write_text(outline.to_json(ensure_ascii=False), encoding="utf-8")
+        print(f"[Outline Debug] saved after_refine_outline: {after_refine_outline_path}", flush=True)
+        merge_outline_evidences(
+            outline,
+            max_evidences_per_segment,
+            long_term,
+            entity,
         )
         _normalize_section_titles(outline)
         manuscript_path = output_pth / f"{stock_symbol}_{cur_date}.json"

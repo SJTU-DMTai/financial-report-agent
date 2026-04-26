@@ -27,6 +27,9 @@ from src.evaluation.eval_content import get_content_score, ContentScore
 from src.utils.instance import llm_reasoning, llm_instruct, formatter
 from src.pipelines.planning import process_pdf_to_outline
 from src.utils import local_file
+import config
+
+CONFIG = config.Config()
 
 
 @dataclass
@@ -52,6 +55,7 @@ class EvidenceMetrics:
     """论据指标"""
     coverage_ratio: float  # 覆盖率
     accuracy_ratio: float  # 准确率
+    citiation_density: float = 0.0  # 每千字引用数
 
 
 @dataclass
@@ -79,6 +83,57 @@ def _load_json_file(json_path: Path) -> Optional[Any]:
             return json.load(f)
     except json.JSONDecodeError:
         return None
+
+
+def _compute_citation_density(report_path: Path) -> float:
+    report_format = report_path.parent.name
+    citation_cfg = CONFIG.get_citation_extraction_cfg(report_format)
+    citation_patterns = citation_cfg.get("citation_patterns", []) or []
+    if not citation_patterns:
+        print(f"      - 未配置 citation 提取规则，跳过: {report_format}")
+        return 0.0
+
+    text = report_path.read_text(encoding="utf-8")
+    reference_section_pattern = citation_cfg.get("reference_section_pattern")
+    if reference_section_pattern:
+        reference_match = re.search(reference_section_pattern, text, flags=re.MULTILINE)
+        if reference_match is not None:
+            text = text[:reference_match.start()].rstrip()
+
+    citations: List[str] = []
+    cleaned_text = text
+    for pattern_cfg in citation_patterns:
+        match_pattern = pattern_cfg.get("match_pattern")
+        if not match_pattern:
+            continue
+
+        split_pattern = pattern_cfg.get("split_pattern")
+        for match in re.finditer(match_pattern, text, flags=re.MULTILINE):
+            matched_text = match.group(0)
+            if split_pattern:
+                citations.extend(re.findall(split_pattern, matched_text))
+            else:
+                citations.append(matched_text)
+
+        cleaned_text = re.sub(match_pattern, "", cleaned_text, flags=re.MULTILINE)
+
+    cleaned_text = re.sub(r"```[\s\S]*?```", " ", cleaned_text)
+    cleaned_text = re.sub(r"`[^`]*`", " ", cleaned_text)
+    cleaned_text = re.sub(r"!\[[^\]]*]\([^)]+\)", " ", cleaned_text)
+    cleaned_text = re.sub(r"\[([^\]]+)]\([^)]+\)", r"\1", cleaned_text)
+    cleaned_text = re.sub(r"https?://\S+", " ", cleaned_text)
+    cleaned_text = re.sub(r"[#>*_~\-\|]+", " ", cleaned_text)
+    cleaned_text = re.sub(r"\s+", " ", cleaned_text).strip()
+    text_units = len(re.findall(r"[\u4e00-\u9fff]", cleaned_text)) + len(re.findall(r"[A-Za-z0-9]+", cleaned_text))
+    if text_units == 0:
+        return 0.0
+
+    citation_density = len(citations) * 1000 / text_units
+    print(
+        f"      - citation 数量: {len(citations)}, 文本字数: {text_units}, "
+        f"citation_density: {citation_density:.2f}/千字"
+    )
+    return citation_density
 
 
 _CITE_REFERENCE_PATTERN = re.compile(r"\[\^cite_id[:=][^\]]+?\]")
@@ -415,6 +470,7 @@ async def benchmark_single_pair(
             sanitized_new_evidences,
             sanitized_human_evidences,
         )
+        citation_density = _compute_citation_density(new_report_path)
         content_metrics = await evaluate_content(sanitized_new_section)
 
         # 组装结果
@@ -426,7 +482,9 @@ async def benchmark_single_pair(
             new_report_name=new_report_path.name,
             structure=structure_metrics,
             evidence=EvidenceMetrics(
-                coverage_ratio=coverage_ratio, accuracy_ratio=accuracy_ratio
+                coverage_ratio=coverage_ratio,
+                accuracy_ratio=accuracy_ratio,
+                citiation_density=citation_density,
             ),
             content=content_metrics,
         )
@@ -626,6 +684,7 @@ def print_benchmark_summary(results_json_path: Path) -> None:
     structure_logicality = [r["structure"]["logicality"] for r in results]
     evidence_coverage = [r["evidence"]["coverage_ratio"] for r in results]
     evidence_accuracy = [r["evidence"]["accuracy_ratio"] for r in results]
+    evidence_citation_density = [r["evidence"].get("citiation_density", 0.0) for r in results]
     content_scores = [_get_content_average(r["content"]) for r in results]
     content_insightfulness = [r["content"]["insightfulness"] for r in results]
     content_readability = [r["content"]["readability"] for r in results]
@@ -644,6 +703,7 @@ def print_benchmark_summary(results_json_path: Path) -> None:
     print("\nEvidence指标:")
     print(f"  - 平均覆盖率: {safe_avg(evidence_coverage):.2%}")
     print(f"  - 平均准确率: {safe_avg(evidence_accuracy):.2%}")
+    print(f"  - 平均引用密度: {safe_avg(evidence_citation_density):.2f}/千字")
 
     print("\nContent指标:")
     print(f"  - 平均总分: {safe_avg(content_scores):.2f}/10")
@@ -660,7 +720,8 @@ def print_benchmark_summary(results_json_path: Path) -> None:
               f"comprehensiveness={r['structure']['comprehensiveness']:.2f}, "
               f"logicality={r['structure']['logicality']:.2f}")
         print(f"    Evidence: {r['evidence']['coverage_ratio']:.2%} coverage, "
-              f"{r['evidence']['accuracy_ratio']:.2%} accuracy")
+              f"{r['evidence']['accuracy_ratio']:.2%} accuracy, "
+              f"citiation_density={r['evidence'].get('citiation_density', 0.0):.2f}/千字")
         print(f"    Content: {_get_content_average(r['content']):.2f}/10 overall, "
               f"insightfulness={r['content']['insightfulness']:.2f}, "
               f"readability={r['content']['readability']:.2f}, "

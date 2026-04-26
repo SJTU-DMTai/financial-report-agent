@@ -84,9 +84,9 @@ def _infer_report_title(task_desc: str, entity: dict) -> str:
 
 
 def _normalize_report_title(manuscript: Section, entity: dict, task_desc: str) -> None:
-    manuscript.title = _strip_section_number_prefix(manuscript.title)
-    if _count_renderable_top_level_sections(manuscript) == 1:
-        manuscript.title = _infer_report_title(task_desc, entity)
+    company_name = str(entity.get("name", "")).strip()
+    stock_code = str(entity.get("code", "")).strip()
+    manuscript.title = f"{company_name}（{stock_code}）深度研究报告".strip()
 
 def extract_tagged_text(text: str, tag: str = "content") -> str | None:
     if not text:

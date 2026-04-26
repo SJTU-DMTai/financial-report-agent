@@ -13,7 +13,13 @@ from src.memory.long_term import LongTermMemoryStore
 from src.pipelines.planning import process_pdf_to_outline
 from src.utils.format import _normalize_section_titles
 from src.utils.get_entity_info import get_entity_info
-from src.utils.instance import formatter, llm_instruct, llm_reasoning
+from src.utils.instance import (
+    formatter,
+    llm_instruct,
+    llm_outline_refine,
+    llm_reasoning,
+    outline_refine_formatter,
+)
 from src.utils.local_file import DEMO_DIR
 from src.utils.outline_refine import refine_outline
 
@@ -75,7 +81,7 @@ def build_default_save_dir(project_root: Path) -> Path:
 
 def build_default_output_dir(project_root: Path) -> Path:
     cfg = config.Config()
-    return project_root / "data" / "output" / "outline_refine_debug" / cfg.llm_name
+    return project_root / "data" / "output" / "outline_refine_debug" / cfg.outline_refine_name
 
 
 def print_outline_snapshot(title: str, outline) -> None:
@@ -163,8 +169,9 @@ async def main() -> None:
         outline=outline,
         task_desc=task_desc,
         cur_date=cur_date,
-        model=llm_reasoning,
-        formatter=formatter,
+        model=llm_outline_refine,
+        formatter=outline_refine_formatter,
+        model_cfg=config.Config().get_outline_refine_model_cfg(),
         debug_print=True,
     )
     _normalize_section_titles(refined_outline)

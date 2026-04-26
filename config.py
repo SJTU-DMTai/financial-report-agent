@@ -7,7 +7,13 @@ from pathlib import Path
 
 
 class Config:
-    def __init__(self, path: str | None = None, llm_name: str = None, vlm_name: str = None):
+    def __init__(
+        self,
+        path: str | None = None,
+        llm_name: str = None,
+        vlm_name: str = None,
+        outline_refine_name: str = None,
+    ):
         """
         加载顺序：
         1. 显式传入 path
@@ -33,6 +39,12 @@ class Config:
         models = self.data["models"]
         self.llm_name = llm_name or os.getenv("LLM_NAME") or models["default"]
         self.vlm_name = vlm_name or os.getenv("VLM_NAME") or models.get("vlm_default") or models.get("default")
+        self.outline_refine_name = (
+            outline_refine_name
+            or os.getenv("OUTLINE_REFINE_NAME")
+            or models.get("outline_refine_default")
+            or self.llm_name
+        )
 
     def get_pdf_style(self) -> dict:
         style = self.data.get("pdf_style", {}) or {}
@@ -58,6 +70,16 @@ class Config:
         model_cfg.setdefault("non_reasoning_model_name", None)
         return model_cfg
 
+    def get_outline_refine_model_cfg(self):
+        models = self.data["models"]
+        model_id = self.outline_refine_name
+        if model_id is None:
+            raise KeyError("未配置 models.outline_refine_default/models.default，且未设置 OUTLINE_REFINE_NAME")
+        model_cfg = deepcopy(models[model_id])
+        model_cfg.setdefault("reasoning_only", False)
+        model_cfg.setdefault("non_reasoning_model_name", None)
+        return model_cfg
+
     def get_max_verify_rounds(self) -> int:
         verify_config = self.data.get("verify_config", {}) or {}
         return int(verify_config.get("max_verify_rounds", 2))
@@ -72,3 +94,14 @@ class Config:
     
     def get_planner_cfg(self) -> dict:
         return self.data.get("planner", {})
+
+    def get_max_evidences_per_segment(self) -> int:
+        planner_cfg = self.get_planner_cfg() or {}
+        return int(planner_cfg.get("max_evidences_per_segment", 6))
+
+    def get_citation_extraction_cfg(self, report_format: str | None = None) -> dict:
+        evaluation_cfg = self.data.get("evaluation", {}) or {}
+        citation_cfg = evaluation_cfg.get("citation_extraction", {}) or {}
+        if report_format is None:
+            return deepcopy(citation_cfg)
+        return deepcopy(citation_cfg.get(report_format, {}) or {})
