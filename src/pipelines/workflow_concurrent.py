@@ -276,8 +276,8 @@ async def process_single_segment(segment: Segment,
                 print(segment.content, flush=True)
 
         if multi_source_verification_enabled:
-            prev_priority_sigs = None
-            prev_issue_sig = None
+            # prev_priority_sigs = None
+            # prev_issue_sig = None
 
             for round_idx in range(max_verify_rounds):
                 current_text = segment.content
@@ -315,21 +315,21 @@ async def process_single_segment(segment: Segment,
                     )
                     break
 
-                # 收敛检测：priority claims 文本不变 + issue 数量不变
-                current_priority_sigs = {ce.original_text.strip()[:80] for ce in report.priority_claims}
-                current_issue_sig = (
-                    sum(len(ce.issues) for ce in report.priority_claims),
-                    sum(ce.signature["critical"] for ce in report.priority_claims),
-                )
-                if prev_priority_sigs is not None and prev_issue_sig is not None:
-                    same_priority = current_priority_sigs == prev_priority_sigs
-                    same_issues = current_issue_sig == prev_issue_sig
-                    if same_priority and same_issues:
-                        print(f"[Verifier Loop] Early stop: priority unchanged, issues stuck at {current_issue_sig}", flush=True)
-                        break
+                # # 收敛检测：priority claims 文本不变 + issue 数量不变
+                # current_priority_sigs = {ce.original_text.strip()[:80] for ce in report.priority_claims}
+                # current_issue_sig = (
+                #     sum(len(ce.issues) for ce in report.priority_claims),
+                #     sum(ce.signature["critical"] for ce in report.priority_claims),
+                # )
+                # if prev_priority_sigs is not None and prev_issue_sig is not None:
+                #     same_priority = current_priority_sigs == prev_priority_sigs
+                #     same_issues = current_issue_sig == prev_issue_sig
+                #     if same_priority and same_issues:
+                #         print(f"[Verifier Loop] Early stop: priority unchanged, issues stuck at {current_issue_sig}", flush=True)
+                #         break
 
-                prev_priority_sigs = current_priority_sigs
-                prev_issue_sig = current_issue_sig
+                # prev_priority_sigs = current_priority_sigs
+                # prev_issue_sig = current_issue_sig
 
                 verify_feedback = format_report_for_writer(report)
                 print(f"[Verifier Loop] feedback_chars={len(verify_feedback)}", flush=True)
@@ -370,7 +370,7 @@ async def process_single_segment(segment: Segment,
                     verify_feedback=verify_feedback,
                     rewritten_text=segment.content,
                     issue_count=priority_issue_count,
-                    status=f"score={report.segment_score}" if report.segment_score < 75 else "passed",
+                    status=f"score={report.segment_score}" if report.segment_score < 80 else "passed",
                     score=report.segment_score,
                     star_rating=report.star_rating,
                     passed=report.passed,
@@ -388,6 +388,19 @@ async def process_section_concurrently(section: Section, parent_id, task_desc, d
                                        agent_factory, stock_symbol, output_pth, manuscript_root, short_term, long_term,
                                        multi_source_verification_enabled, max_verify_rounds):
     """递归并发处理章节"""
+
+    tools = MaterialTools(short_term=short_term, long_term=long_term)
+    end_date = normalize_compact_date(cur_date)
+    start_date = (
+        pd.to_datetime(end_date, format="%Y%m%d") - pd.DateOffset(months=6)
+    ).strftime("%Y%m%d")
+    stats = await preload_task_materials(
+        tools=tools,
+        symbol=stock_symbol,
+        start_date=start_date,
+        end_date=end_date,
+        disclosure_categories=DEFAULT_DISCLOSURE_CATEGORIES,
+    )
 
     # 1. 处理子章节 (递归) - 优先启动子任务
     sub_tasks = []
@@ -543,19 +556,6 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
                 time={"point": str(demo_date)},
             )
         _normalize_section_titles(manuscript)
-
-        tools = MaterialTools(short_term=short_term, long_term=long_term)
-        end_date = normalize_compact_date(cur_date)
-        start_date = (
-            pd.to_datetime(end_date, format="%Y%m%d") - pd.DateOffset(months=6)
-        ).strftime("%Y%m%d")
-        await preload_task_materials(
-            tools=tools,
-            symbol=stock_symbol,
-            start_date=start_date,
-            end_date=end_date,
-            disclosure_categories=DEFAULT_DISCLOSURE_CATEGORIES,
-        )
 
         def unfinished(section: Section) -> bool:
             if section.segments:
