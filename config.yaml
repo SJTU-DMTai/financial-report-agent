@@ -231,7 +231,6 @@ evaluation:
       reference_section_pattern: '^\s*(?:#{1,6}\s*主要数据来源清单\s*$|\[(?:\*{1,2})?\[\d+\\?\](?:\*{1,2})?\]\()'
       citation_patterns:
         - match_pattern: '\[(?:\*{1,2})?\[\d+\\?\](?:\*{1,2})?\]\([^)]+\)'
-          split_pattern: '\d+'
     ours:
       citation_patterns:
         - match_pattern: '\[\^cite_id:[^\]]+\]'
