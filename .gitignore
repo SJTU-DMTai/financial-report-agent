@@ -1,6 +1,6 @@
 ### Python template
 
-
+output/*
 log*.txt
 logs/*
 *.out
