@@ -69,6 +69,35 @@ from src.tools.material_tools import MaterialTools
 
 DEFAULT_DISCLOSURE_CATEGORIES = ["年报", "半年报", "一季报", "三季报"]
 
+
+def _section_has_unfinished(section: Section) -> bool:
+    if section.segments:
+        for segment in section.segments:
+            if not segment.finished:
+                return True
+    if section.subsections:
+        for subsection in section.subsections:
+            if _section_has_unfinished(subsection):
+                return True
+    return False
+
+
+def _create_searcher_writer_verifier(short_term: ShortTermMemoryStore, long_term: LongTermMemoryStore):
+    searcher_toolkit = build_searcher_toolkit(
+        short_term=short_term,
+        long_term=long_term,
+    )
+    searcher = create_searcher_agent(model=llm_reasoning, formatter=formatter, toolkit=searcher_toolkit)
+    writer_toolkit = build_writer_toolkit(
+        short_term=short_term,
+        long_term=long_term,
+        searcher=searcher,
+    )
+    writer = create_writer_agent(model=llm_reasoning, formatter=formatter, toolkit=writer_toolkit)
+    verifier = SegmentVerifier(short_term, long_term)
+    return searcher, writer, verifier
+
+
 def _has_preloaded_disclosures(
     short_term: ShortTermMemoryStore,
     symbol: str,
@@ -436,11 +465,13 @@ async def process_section_concurrently(section: Section, parent_id, task_desc, d
 
     # 2. 处理当前章节的 Segments (并发)
     seg_tasks = []
+    unfinished_segments = []
     if section.segments:
         print(f"\n====== 启动章节 Segments 并发处理: {parent_id} ======\n")
         for segment in section.segments:
             if segment.finished:
                 continue
+            unfinished_segments.append(segment)
             seg_tasks.append(process_single_segment(
                 segment, task_desc, demo_date, agent_factory, short_term, long_term, multi_source_verification_enabled, max_verify_rounds
             ))
@@ -454,7 +485,8 @@ async def process_section_concurrently(section: Section, parent_id, task_desc, d
         for i, result in enumerate(results):
             if isinstance(result, Exception):
                 failed_count += 1
-                warnings.warn(f"❌ Segment 处理失败: {section.segments[i].topic[:30]}... - {type(result).__name__}: {str(result)}")
+                segment = unfinished_segments[i]
+                warnings.warn(f"❌ Segment 处理失败: {segment.topic[:30]}... - {type(result).__name__}: {str(result)}")
 
         if failed_count > 0:
             warnings.warn(f"⚠️  警告: {failed_count}/{len(seg_tasks)} 个 Segment 处理失败")
@@ -551,6 +583,7 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
 
         short_term = ShortTermMemoryStore(
             base_dir=short_term_dir,
+            current_date=cur_date
         )
         
         if demo_pdf_path is None:
@@ -560,40 +593,49 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
         output_pth = PROJECT_ROOT / "data" / "output" / "reports" / cfg.llm_name
         output_pth.mkdir(parents=True, exist_ok=True)
 
-        outline = await process_pdf_to_outline(
-            demo_pdf_path,
-            long_term_dir / "demonstration",
-            llm_reasoning,
-            llm_instruct,
-            formatter,
-        )
-        _normalize_section_titles(outline)
-        before_refine_outline_path = output_pth / f"{filename}_before_refine_outline.json"
-        before_refine_outline_path.write_text(outline.to_json(ensure_ascii=False), encoding="utf-8")
-        print(f"[Outline Debug] saved before_refine_outline: {before_refine_outline_path}", flush=True)
-        outline = await refine_outline(
-            outline=outline,
-            task_desc=task_desc,
-            cur_date=cur_date,
-            model=llm_outline_refine,
-            formatter=outline_refine_formatter,
-            model_cfg=cfg.get_outline_refine_model_cfg(),
-        )
-        after_refine_outline_path = output_pth / f"{filename}_after_refine_outline.json"
-        after_refine_outline_path.write_text(outline.to_json(ensure_ascii=False), encoding="utf-8")
-        print(f"[Outline Debug] saved after_refine_outline: {after_refine_outline_path}", flush=True)
-        merge_outline_evidences(
-            outline,
-            max_evidences_per_segment,
-            long_term,
-            entity,
-        )
-        _normalize_section_titles(outline)
         manuscript_path = output_pth / f"{stock_symbol}_{cur_date}.json"
+        manuscript = None
         if manuscript_path.exists():
             manuscript = load_section_from_json_text(manuscript_path.read_text(encoding='utf-8'))
             print("加载已有的 manuscript:", manuscript_path)
-        else:
+            _normalize_section_titles(manuscript)
+
+        if manuscript is None or _section_has_unfinished(manuscript):
+            before_refine_outline_path = output_pth / f"{filename}_before_refine_outline.json"
+            after_refine_outline_path = output_pth / f"{filename}_after_refine_outline.json"
+            if after_refine_outline_path.exists():
+                outline = load_section_from_json_text(after_refine_outline_path.read_text(encoding="utf-8"))
+                print(f"[Outline Debug] loaded after_refine_outline: {after_refine_outline_path}", flush=True)
+            else:
+                outline = await process_pdf_to_outline(
+                    demo_pdf_path,
+                    long_term_dir / "demonstration",
+                    llm_reasoning,
+                    llm_instruct,
+                    formatter,
+                )
+                _normalize_section_titles(outline)
+                before_refine_outline_path.write_text(outline.to_json(ensure_ascii=False), encoding="utf-8")
+                print(f"[Outline Debug] saved before_refine_outline: {before_refine_outline_path}", flush=True)
+                outline = await refine_outline(
+                    outline=outline,
+                    task_desc=task_desc,
+                    cur_date=cur_date,
+                    model=llm_outline_refine,
+                    formatter=outline_refine_formatter,
+                    model_cfg=cfg.get_outline_refine_model_cfg(),
+                )
+                after_refine_outline_path.write_text(outline.to_json(ensure_ascii=False), encoding="utf-8")
+                print(f"[Outline Debug] saved after_refine_outline: {after_refine_outline_path}", flush=True)
+            merge_outline_evidences(
+                outline,
+                max_evidences_per_segment,
+                long_term,
+                entity,
+            )
+            _normalize_section_titles(outline)
+
+        if manuscript is None:
             manuscript = outline
             short_term.save_material(
                 cite_id=f"{demo_date}_reference_report",
@@ -605,71 +647,36 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
             )
         _normalize_section_titles(manuscript)
 
-        tools = MaterialTools(short_term=short_term, long_term=long_term)
-        end_date = normalize_compact_date(cur_date)
-        start_date = (
-            pd.to_datetime(end_date, format="%Y%m%d") - pd.DateOffset(months=6)
-        ).strftime("%Y%m%d")
-        await preload_task_materials(
-            tools=tools,
-            symbol=stock_symbol,
-            start_date=start_date,
-            end_date=end_date,
-            disclosure_categories=DEFAULT_DISCLOSURE_CATEGORIES,
-        )
+        if _section_has_unfinished(manuscript):
+            section_pairs = [(manuscript, outline)]
+            while section_pairs:
+                manuscript_section, outline_section = section_pairs.pop()
+                replaced_segment = False
+                if manuscript_section.segments and outline_section.segments:
+                    for i, segment in enumerate(manuscript_section.segments):
+                        if not segment.finished and i < len(outline_section.segments):
+                            manuscript_section.segments[i] = outline_section.segments[i]
+                            replaced_segment = True
+                if replaced_segment:
+                    manuscript_section.content = None
 
-        def unfinished(section: Section) -> bool:
-            if section.segments:
-                for segment in section.segments:
-                    if not segment.finished:
-                        return True
-            if section.subsections:
-                for subsection in section.subsections:
-                    if unfinished(subsection):
-                        return True
-            return False
+                if manuscript_section.subsections and outline_section.subsections:
+                    for i, subsection in enumerate(manuscript_section.subsections):
+                        if i < len(outline_section.subsections):
+                            section_pairs.append((subsection, outline_section.subsections[i]))
 
-        if unfinished(manuscript):
-            def replace_unfinished_sections(manuscript: Section, outline: Section) -> None:
-                """递归替换包含未完成 segment 的 section"""
-                # 检查当前 section 是否有未完成的 segment
-                has_unfinished = False
-                if manuscript.segments:
-                    for segment in manuscript.segments:
-                        if not segment.finished:
-                            has_unfinished = True
-                            break
-
-                # 如果当前 section 有未完成的 segment，整体替换
-                if has_unfinished:
-                    # 复制 outline 对应 section 的所有属性
-                    manuscript.title = outline.title
-                    manuscript.content = outline.content
-                    manuscript.segments = outline.segments
-                    manuscript.subsections = outline.subsections
-                    return
-
-                # 递归处理子 section
-                if manuscript.subsections and outline.subsections:
-                    for i, subsection in enumerate(manuscript.subsections):
-                        if i < len(outline.subsections):
-                            replace_unfinished_sections(subsection, outline.subsections[i])
-
-            replace_unfinished_sections(manuscript, outline)
-            def create_searcher_writer_verifier():
-                searcher_toolkit = build_searcher_toolkit(
-                    short_term=short_term,
-                    long_term=long_term,
-                )
-                searcher = create_searcher_agent(model=llm_reasoning, formatter=formatter, toolkit=searcher_toolkit)
-                writer_toolkit = build_writer_toolkit(
-                    short_term=short_term,
-                    long_term=long_term,
-                    searcher=searcher,
-                )
-                writer = create_writer_agent(model=llm_reasoning, formatter=formatter, toolkit=writer_toolkit)
-                verifier = SegmentVerifier(short_term, long_term)
-                return searcher, writer,verifier
+            tools = MaterialTools(short_term=short_term, long_term=long_term)
+            end_date = normalize_compact_date(cur_date)
+            start_date = (
+                pd.to_datetime(end_date, format="%Y%m%d") - pd.DateOffset(months=6)
+            ).strftime("%Y%m%d")
+            await preload_task_materials(
+                tools=tools,
+                symbol=stock_symbol,
+                start_date=start_date,
+                end_date=end_date,
+                disclosure_categories=DEFAULT_DISCLOSURE_CATEGORIES,
+            )
 
             # 启动递归并发处理
             await process_section_concurrently(
@@ -678,7 +685,7 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
                 task_desc=task_desc,
                 demo_date=demo_date,
                 cur_date=cur_date,
-                agent_factory=create_searcher_writer_verifier,
+                agent_factory=partial(_create_searcher_writer_verifier, short_term, long_term),
                 stock_symbol=stock_symbol,
                 output_pth=output_pth,
                 manuscript_root=manuscript,  # 用于在深层递归中保存完整的 json

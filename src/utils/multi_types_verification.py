@@ -204,6 +204,19 @@ def _extract_text_response(response_msg: Any) -> str:
     return str(text)
 
 
+def _strip_chart_references_for_claim_extract(text: str) -> str:
+    if not text:
+        return ""
+
+    cleaned = re.sub(
+        r'!\[[^\]]*]\(chart:[a-zA-Z0-9_\-]+\)',
+        "",
+        text,
+    )
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
 # ---------------------------------------------------------------------------
 # §2  Claim Extractor - 完全由 LLM 驱动的原子声明提取器
 # ---------------------------------------------------------------------------
@@ -782,7 +795,8 @@ class SegmentVerifier:
     async def verify(self, segment: str) -> List[ClaimIssue]:
         """原有接口：只返回 issues（兼容旧代码）"""
         try:
-            claims = await self.extractor.extract(segment)
+            segment_for_extract = _strip_chart_references_for_claim_extract(segment)
+            claims = await self.extractor.extract(segment_for_extract)
         except ClaimExtractionError as e:
             await append_verifier_trace_log(
                 "SegmentVerifier",
@@ -820,7 +834,7 @@ class SegmentVerifier:
         """新接口：返回提取的 claims 和对应的 issues，用于评估报告"""
         try:
             segment_for_extract = _strip_chart_references_for_claim_extract(segment)
-            claims = await self.extractor.extract(segment)
+            claims = await self.extractor.extract(segment_for_extract)
         except ClaimExtractionError as e:
             await append_verifier_trace_log(
                 "SegmentVerifier",

@@ -473,7 +473,7 @@ class MaterialTools:
         self,
         cite_id: str,
         query_key: str | None = None,
-        context_lines: int = 50,
+        context_lines: int = 20,
     ) -> ToolResponse:
         """
         统一读取material。支持读取全文、通过参数、按行/条目截取其中部分，以及关键词搜索。
@@ -491,7 +491,7 @@ class MaterialTools:
                 - 对于文本：可选，用于在内容中搜索特定关键词，返回匹配结果及若干行上下文。类似于grep的精确匹配，不支持空格、AND、OR等语法。
             context_lines (int):
                 - 关键词搜索时的上下文行数（关键词前后各显示该行数）。
-                - 默认为50行。只在使用keyword参数时有效。
+                - 默认为20行。只在使用keyword参数时有效。
         """
         meta = self.short_term.get_material_meta(cite_id) 
 
@@ -1079,7 +1079,7 @@ class MaterialTools:
         #     df = df.sample(n=10)
 
         # 2. 遍历 df 行，构造 PDF URL 并抽文本，为每个公告保存为独立文件
-        disclosure_cite_ids: list[str] = []
+        df["cite_id"] = ""
         entity = get_entity_info(long_term=self.long_term, text=symbol)
         base_timestamp = int(time_module.time())
 
@@ -1122,10 +1122,9 @@ class MaterialTools:
                     entity=entity,
                     time={"point": str(announce_date)},
                 )
-                disclosure_cite_ids.append(disclosure_cite_id)
+                df.at[idx, "cite_id"] = disclosure_cite_id
 
-        # 3. 将 cite_ids 列表添加到 dataframe 中
-        df["cite_id"] = [disclosure_cite_ids[i] if i < len(disclosure_cite_ids) else "" for i in range(len(df))]
+        # 3. 保留每行公告对应的 cite_id，PDF 提取失败的行保持为空
         if "公告链接" in df.columns:
             df = df.drop(columns=["公告链接"])
         df = df[['cite_id', '公告标题']].set_index("cite_id")
@@ -1157,7 +1156,6 @@ class MaterialTools:
             },
             save=False,
         )
-    #
     # ===================== 财务报表 =====================
     async def fetch_balance_sheet_material(
             self,

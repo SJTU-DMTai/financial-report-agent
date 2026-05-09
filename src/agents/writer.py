@@ -33,7 +33,7 @@ def create_writer_agent(
         # memory=SlidingWindowMemory(),
         formatter=formatter,
         toolkit=toolkit,
-        parallel_tool_calls=True,
+        parallel_tool_calls=False,
         max_iters=10,
     )
 
