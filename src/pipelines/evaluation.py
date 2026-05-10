@@ -46,9 +46,9 @@ class StructureMetrics:
     """结构指标"""
     total_segments: int
     avg_segments_per_section: float
+    segment_density: float = 0.0     
     comprehensiveness: float      # 结构完整性评分
     logicality: float             # 逻辑性评分
-
 
 @dataclass
 class EvidenceMetrics:
@@ -85,13 +85,10 @@ def _load_json_file(json_path: Path) -> Optional[Any]:
         return None
 
 
-def _compute_citation_density(report_path: Path) -> float:
+def _compute_citation_density_and_text_units(report_path: Path) -> Tuple[float, int]:
     report_format = report_path.parent.name
     citation_cfg = CONFIG.get_citation_extraction_cfg(report_format)
     citation_patterns = citation_cfg.get("citation_patterns", []) or []
-    if not citation_patterns:
-        print(f"      - 未配置 citation 提取规则，跳过: {report_format}")
-        return 0.0
 
     text = report_path.read_text(encoding="utf-8")
     reference_section_pattern = citation_cfg.get("reference_section_pattern")
@@ -100,22 +97,25 @@ def _compute_citation_density(report_path: Path) -> float:
         if reference_match is not None:
             text = text[:reference_match.start()].rstrip()
 
-    citations: List[str] = []
     cleaned_text = text
-    for pattern_cfg in citation_patterns:
-        match_pattern = pattern_cfg.get("match_pattern")
-        if not match_pattern:
-            continue
+    citations: List[str] = []
+    if not citation_patterns:
+        print(f"      - 未配置 citation 提取规则，跳过: {report_format}")
+    else:
+        for pattern_cfg in citation_patterns:
+            match_pattern = pattern_cfg.get("match_pattern")
+            if not match_pattern:
+                continue
 
-        split_pattern = pattern_cfg.get("split_pattern")
-        for match in re.finditer(match_pattern, text, flags=re.MULTILINE):
-            matched_text = match.group(0)
-            if split_pattern:
-                citations.extend(re.findall(split_pattern, matched_text))
-            else:
-                citations.append(matched_text)
+            split_pattern = pattern_cfg.get("split_pattern")
+            for match in re.finditer(match_pattern, text, flags=re.MULTILINE):
+                matched_text = match.group(0)
+                if split_pattern:
+                    citations.extend(re.findall(split_pattern, matched_text))
+                else:
+                    citations.append(matched_text)
 
-        cleaned_text = re.sub(match_pattern, "", cleaned_text, flags=re.MULTILINE)
+            cleaned_text = re.sub(match_pattern, "", cleaned_text, flags=re.MULTILINE)
 
     cleaned_text = re.sub(r"```[\s\S]*?```", " ", cleaned_text)
     cleaned_text = re.sub(r"`[^`]*`", " ", cleaned_text)
@@ -126,14 +126,14 @@ def _compute_citation_density(report_path: Path) -> float:
     cleaned_text = re.sub(r"\s+", " ", cleaned_text).strip()
     text_units = len(re.findall(r"[\u4e00-\u9fff]", cleaned_text)) + len(re.findall(r"[A-Za-z0-9]+", cleaned_text))
     if text_units == 0:
-        return 0.0
+        return 0.0, 0
 
     citation_density = len(citations) * 1000 / text_units
     print(
         f"      - citation 数量: {len(citations)}, 文本字数: {text_units}, "
         f"citation_density: {citation_density:.2f}/千字"
     )
-    return citation_density
+    return citation_density, text_units
 
 
 _CITE_REFERENCE_PATTERN = re.compile(r"\[\^cite_id[:=][^\]]+?\]")
@@ -374,10 +374,11 @@ def _resolve_report_paths(
     return ref_path, matching_files[0], None, None
 
 
-async def evaluate_structure(new_section: Section, human_section: Section) -> StructureMetrics:
+async def evaluate_structure(new_section: Section, human_section: Section, text_units: int) -> StructureMetrics:
     """评估结构指标（包括完整性和逻辑性）"""
     print(f"    - 正在评估structure指标...")
     total_segments, avg_segments_per_section = num_of_segment(new_section)
+    segment_density = total_segments / text_units if text_units > 0 else 0.0
 
     # 基于human_report相对评估结构
     comprehensiveness, logicality = await structure_score(new_section, human_section)
@@ -385,6 +386,7 @@ async def evaluate_structure(new_section: Section, human_section: Section) -> St
     return StructureMetrics(
         total_segments=total_segments,
         avg_segments_per_section=avg_segments_per_section,
+        segment_density=segment_density,
         comprehensiveness=comprehensiveness,
         logicality=logicality,
     )
@@ -493,12 +495,12 @@ async def benchmark_single_pair(
     sanitized_human_evidences = _sanitize_evidence_list(human_evidences)
 
     print(f"[3/4] 评估指标...")
-    structure_metrics = await evaluate_structure(sanitized_new_section, sanitized_human_section)
+    citation_density, text_units = _compute_citation_density_and_text_units(new_report_path)
+    structure_metrics = await evaluate_structure(sanitized_new_section, sanitized_human_section, text_units)
     coverage_ratio, accuracy_ratio = await evidence_coverage_and_accuracy(
         sanitized_new_evidences,
         sanitized_human_evidences,
     )
-    citation_density = _compute_citation_density(new_report_path)
     content_metrics = await evaluate_content(sanitized_new_section)
 
     print(f"[4/4] 汇总结果...")
@@ -705,6 +707,7 @@ def print_benchmark_summary(results_json_path: Path) -> None:
 
     structure_total_segments = [r["structure"]["total_segments"] for r in results]
     structure_avg_segments = [r["structure"]["avg_segments_per_section"] for r in results]
+    structure_segment_density = [r["structure"].get("segment_density", 0.0) for r in results]
     structure_comprehensiveness = [r["structure"]["comprehensiveness"] for r in results]
     structure_logicality = [r["structure"]["logicality"] for r in results]
     evidence_coverage = [r["evidence"]["coverage_ratio"] for r in results]
@@ -722,6 +725,7 @@ def print_benchmark_summary(results_json_path: Path) -> None:
     print("Structure指标:")
     print(f"  - 平均总segment数: {safe_avg(structure_total_segments):.1f}")
     print(f"  - 平均每section的segment数: {safe_avg(structure_avg_segments):.2f}")
+    print(f"  - 平均segment_density: {safe_avg(structure_segment_density):.4f}")
     print(f"  - 平均完整性: {safe_avg(structure_comprehensiveness):.2f}/10")
     print(f"  - 平均逻辑性: {safe_avg(structure_logicality):.2f}/10")
 
@@ -742,6 +746,7 @@ def print_benchmark_summary(results_json_path: Path) -> None:
         print(f"\n  {r['stock_code']} ({r['date']}):")
         print(f"    Structure: {r['structure']['total_segments']} segments, "
               f"{r['structure']['avg_segments_per_section']:.2f} avg/section, "
+              f"segment_density={r['structure'].get('segment_density', 0.0):.4f}, "
               f"comprehensiveness={r['structure']['comprehensiveness']:.2f}, "
               f"logicality={r['structure']['logicality']:.2f}")
         print(f"    Evidence: {r['evidence']['coverage_ratio']:.2%} coverage, "
