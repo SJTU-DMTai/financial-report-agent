@@ -3,8 +3,7 @@ from __future__ import annotations
 
 from agentscope.agent import ReActAgent
 from agentscope.memory import InMemoryMemory
-from agentscope.formatter import DashScopeChatFormatter
-from agentscope.tool import Toolkit
+from agentscope.tool import Toolkit, ToolResponse
 
 from ..tools.material_tools import MaterialTools
 from ..memory.short_term import ShortTermMemoryStore

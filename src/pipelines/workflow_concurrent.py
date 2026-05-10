@@ -45,9 +45,6 @@ from src.utils.multi_types_verification import (
     SegmentVerifier,
     append_verifier_trace,
     set_verifier_trace_path,
-    evaluate_claims,
-    compute_segment_report,
-    format_report_for_writer,
 )
 from src.utils.local_file import STOCK_REPORT_PATHS
 from src.utils.evidence_merge import merge_outline_evidences
@@ -230,7 +227,7 @@ async def search_evidence(query, known_evidence, task_desc, demo_date, segment_t
         name="user",
         content=(
             f"任务：{task_desc}\n"
-            f"当前需要你撰写要点：{segment_topic}\n"
+            f"当前需要你调研要点：{segment_topic}\n"
             f"{known_evidence}\n"
             f"论据还需要的材料：{query}\n\n"
             f"如果该材料并非可以搜索得到的（例如画图要求）、或者不需要搜索的声明（例如数据来源）、或者已收集材料已覆盖的，可以直接返回“{query}”，不做搜索和修改。否则，可以查看\n\n"
@@ -266,14 +263,16 @@ def _build_known_evidence_context(evidences: List[Evidence], end_index: int) -> 
 
 async def process_single_segment(segment: Segment,
                                  task_desc,
+                                 company_name,
                                  demo_date,
+                                 cur_date,
                                  agent_factory,
                                  short_term,
                                  long_term,
                                  multi_source_verification_enabled,
                                  max_verify_rounds):
     """并发处理单个 Segment：包含搜索和写作"""
-    print(f"[{time.strftime('%H:%M:%S')}]  ✍️ 开始写作: {segment.topic[:15]}...", flush=True)
+    print(f"[{time.strftime('%H:%M:%S')}]  ✍️ 开始写作: {segment.topic}", flush=True)
 
     searcher, writer, verifier = agent_factory()
     for i, evidence in enumerate(segment.evidences or []):
@@ -339,116 +338,91 @@ async def process_single_segment(segment: Segment,
                 print(segment.content, flush=True)
 
         if multi_source_verification_enabled:
-            # prev_priority_sigs = None
-            # prev_issue_sig = None
-
             for round_idx in range(max_verify_rounds):
                 current_text = segment.content
                 print(f"[Verifier Loop] round={round_idx + 1}/{max_verify_rounds} topic={segment.topic}", flush=True)
                 print("[Verifier Checked Text]", flush=True)
                 print(current_text, flush=True)
-
-                claims, all_issues = await verifier.verify_with_claims(current_text)
-                if not claims:
-                    print("[Verifier Loop] No claims extracted, stop")
-                    break
-
-                claim_evals = evaluate_claims(claims, all_issues)
-                critical_count = sum(ce.signature["critical"] for ce in claim_evals)
-
-                # 动态计算 top_k，避免重复调用 compute_segment_report
-                bad_count = sum(1 for ce in claim_evals if ce.claim_score < 3.0)
-                top_k = min(5, max(2, bad_count))
-                report = compute_segment_report(claim_evals, top_k=top_k)
-                print(f"[Verifier Loop] segment_score={report.segment_score}, passed={report.passed}, bad_claims={report.bad_claims_count}", flush=True)
-
-                # 高分通过（必须无 critical issue）
-                if report.segment_score >= 80 and critical_count == 0:
-                    print(f"[Verifier Loop] High quality (score={report.segment_score}) → stop", flush=True)
+                verify_issues = await verifier.verify(
+                    segment.content,
+                    company_name=company_name,
+                    report_date=cur_date,
+                )
+                # 过滤严重问题
+                verify_issues = [
+                    iss for iss in verify_issues
+                    if iss.severity in ("critical", "major")
+                ]
+                print(
+                    f"[Verifier Loop] major_or_critical_issues={len(verify_issues)}",
+                    flush=True,
+                )
+                if not verify_issues:
                     await append_verifier_trace(
                         topic=segment.topic,
                         round_idx=round_idx + 1,
                         checked_text=current_text,
                         issue_count=0,
-                        status="passed_high_score",
-                        score=report.segment_score,
-                        star_rating=report.star_rating,
-                        passed=True,
-                        priority_claims_count=0,
+                        status="passed",
                     )
                     break
-
-                # # 收敛检测：priority claims 文本不变 + issue 数量不变
-                # current_priority_sigs = {ce.original_text.strip()[:80] for ce in report.priority_claims}
-                # current_issue_sig = (
-                #     sum(len(ce.issues) for ce in report.priority_claims),
-                #     sum(ce.signature["critical"] for ce in report.priority_claims),
-                # )
-                # if prev_priority_sigs is not None and prev_issue_sig is not None:
-                #     same_priority = current_priority_sigs == prev_priority_sigs
-                #     same_issues = current_issue_sig == prev_issue_sig
-                #     if same_priority and same_issues:
-                #         print(f"[Verifier Loop] Early stop: priority unchanged, issues stuck at {current_issue_sig}", flush=True)
-                #         break
-
-                # prev_priority_sigs = current_priority_sigs
-                # prev_issue_sig = current_issue_sig
-
-                verify_feedback = format_report_for_writer(report)
-                print(f"[Verifier Loop] feedback_chars={len(verify_feedback)}", flush=True)
+                # 格式化
+                lines = []
+                for i, iss in enumerate(verify_issues[:8], 1):
+                    lines.append(
+                        f"{i}. [{iss.severity.upper()}] {iss.description}\n"
+                        f"   建议: {iss.suggestion}"
+                        f"   证据: {iss.evidence}"
+                    )
+                verify_feedback = "\n\n".join(lines)
+                print(
+                    f"[Verifier Loop] feedback_chars={len(verify_feedback)}",
+                    flush=True,
+                )
                 print("[Verifier Feedback To Writer]", flush=True)
                 print(verify_feedback, flush=True)
 
+                # token 控制
+                verify_feedback = verify_feedback[:1500]
+
+                # 生成 rewrite prompt
                 writer_input = Msg(
                     name="user",
                     content=(
-                        "以下是你当前段落的**评估报告**。请**优先重写报告中列出的 Priority Claims**，一次性修正它们的所有问题。\n\n"
+                        "以下是对你当前段落的事实核验问题，请你直接修改正文：\n\n"
                         f"{verify_feedback}\n\n"
                         "要求：\n"
-                        "1. 对每个 Priority Claim，根据其「问题汇总」和「修改建议」整体重写该句子。\n"
-                        "2. 其他未列出的声明可保持不变或微调。\n"
-                        "3. 保留可被 cite_id 支持的内容，删除无法验证的断言。\n"
-                        "4. 必须使用已有 cite_id，禁止新增未验证数字。\n"
-                        "5. 输出的段落正文使用 <content> 和 </content> 包裹，不要包含额外说明。"
+                        "1. 保留可被 cite_id 支持的内容\n"
+                        "2. 删除或降级无法验证的断言\n"
+                        "3. 禁止新增未验证数字\n"
+                        "4. 输出的段落正文使用<content>和</content>包裹，其中不要包含额外说明"
                     ),
                     role="user",
                 )
 
                 draft_msg = await call_agent_with_retry(writer, writer_input)
-                new_content = extract_writer_content(draft_msg.get_text_content())
 
-                if new_content.strip() == current_text.strip():
-                    print("[Verifier Loop] Early stop: rewrite produced no change", flush=True)
-                    break
-                segment.content = new_content
-
+                segment.content = extract_writer_content(draft_msg.get_text_content())
                 print("[Writer Rewritten After Verifier]", flush=True)
                 print(segment.content, flush=True)
-
-                priority_issue_count = sum(len(ce.issues) for ce in report.priority_claims)
                 await append_verifier_trace(
                     topic=segment.topic,
                     round_idx=round_idx + 1,
                     checked_text=current_text,
                     verify_feedback=verify_feedback,
                     rewritten_text=segment.content,
-                    issue_count=priority_issue_count,
-                    status=f"score={report.segment_score}" if report.segment_score < 80 else "passed",
-                    score=report.segment_score,
-                    star_rating=report.star_rating,
-                    passed=report.passed,
-                    priority_claims_count=len(report.priority_claims),
+                    issue_count=len(verify_issues),
                 )
             
         await writer.memory.clear()
         segment.finished = True
-        print(f"[{time.strftime('%H:%M:%S')}] ✅ 完成写作: {segment.topic[:15]}.", flush=True)
+        print(f"[{time.strftime('%H:%M:%S')}] ✅ 完成写作: {segment.topic}", flush=True)
     except Exception as e:
         traceback.print_exc()
         raise e
 
 async def process_section_concurrently(section: Section, parent_id, task_desc, demo_date, cur_date,
-                                       agent_factory, stock_symbol, output_pth, manuscript_root, short_term, long_term,
+                                       agent_factory, stock_symbol, company_name, output_pth, manuscript_root, short_term, long_term,
                                        multi_source_verification_enabled, max_verify_rounds):
     """递归并发处理章节"""
 
@@ -460,7 +434,7 @@ async def process_section_concurrently(section: Section, parent_id, task_desc, d
             # 递归调用
             sub_tasks.append(process_section_concurrently(
                 subsection, section_id, task_desc, demo_date, cur_date, agent_factory,
-                stock_symbol, output_pth, manuscript_root, short_term, long_term, multi_source_verification_enabled, max_verify_rounds
+                stock_symbol, company_name, output_pth, manuscript_root, short_term, long_term, multi_source_verification_enabled, max_verify_rounds
             ))
 
     # 2. 处理当前章节的 Segments (并发)
@@ -473,7 +447,7 @@ async def process_section_concurrently(section: Section, parent_id, task_desc, d
                 continue
             unfinished_segments.append(segment)
             seg_tasks.append(process_single_segment(
-                segment, task_desc, demo_date, agent_factory, short_term, long_term, multi_source_verification_enabled, max_verify_rounds
+                segment, task_desc, company_name, demo_date, cur_date, agent_factory, short_term, long_term, multi_source_verification_enabled, max_verify_rounds
             ))
 
     # 3. 等待所有 Segments 完成
@@ -561,6 +535,7 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
     if not entity or not entity.get("code"):
         raise ValueError(f"无法从 task_desc 解析股票实体/代码：{task_desc}")
     stock_symbol = entity["code"] if entity else "unknown"
+    company_name = str(entity.get("name") or "").strip()
     print("股票代码：", stock_symbol)
     now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_filename = f"log_{stock_symbol}_{now_str}.txt"
@@ -687,6 +662,7 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
                 cur_date=cur_date,
                 agent_factory=partial(_create_searcher_writer_verifier, short_term, long_term),
                 stock_symbol=stock_symbol,
+                company_name=company_name,
                 output_pth=output_pth,
                 manuscript_root=manuscript,  # 用于在深层递归中保存完整的 json
                 short_term=short_term,

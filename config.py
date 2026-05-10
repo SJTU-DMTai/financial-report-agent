@@ -84,6 +84,10 @@ class Config:
         verify_config = self.data.get("verify_config", {}) or {}
         return int(verify_config.get("max_verify_rounds", 2))
 
+    def get_max_claims_per_segment(self) -> int:
+        verify_config = self.data.get("verify_config", {}) or {}
+        return int(verify_config.get("max_claims_per_segment", 15))
+
     def is_multi_source_verification_enabled(self) -> bool:
         verify_config = self.data.get("verify_config", {}) or {}
         return bool(verify_config.get("enable_multi_source_verification", False))

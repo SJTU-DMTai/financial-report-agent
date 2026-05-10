@@ -1,11 +1,9 @@
 """
-Triple-Check Verifier — 论文级三路交叉验证系统
-=================================================
 Architecture:
-    Claim Extractor → [FactVerifier, NumericVerifier, TemporalVerifier] → Issue Fusion
+    Claim Extractor → [FactChecker, NumericChecker, TemporalChecker] → ConsistencyFusion
 
 External API:
-    verify_issues = await verify(segment, short_term, long_term)
+    verify_issues = await verify_segment_content(segment, short_term, long_term)
 """
 
 from __future__ import annotations
@@ -16,8 +14,13 @@ import re
 import traceback
 from dataclasses import dataclass, field
 from enum import Enum
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import (
+    Any,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+)
 
 from agentscope.message import Msg
 from agentscope.agent import ReActAgent
@@ -25,15 +28,16 @@ from agentscope.memory import InMemoryMemory
 from agentscope.tool import Toolkit
 
 from src.agents.verifier import create_three_verifiers
-from src.memory.short_term import ShortTermMemoryStore, MaterialType
+from src.memory.short_term import ShortTermMemoryStore
 from src.memory.long_term import LongTermMemoryStore
 from src.utils.instance import create_chat_model, create_agent_formatter
-from src.utils.call_with_retry import call_agent_with_retry, call_chatbot_with_retry
+from src.utils.call_with_retry import call_agent_with_retry
 from src.prompt import prompt_dict
-from src.utils.multi_source_verification import material_source_key
+from pathlib import Path
+import config
 
 # ---------------------------------------------------------------------------
-# Verifier Trace (replaced synchronous I/O with async-safe executor)
+# Verifier Trace
 # ---------------------------------------------------------------------------
 VERIFIER_TRACE_LOCK = asyncio.Lock()
 VERIFIER_TRACE_PATH: Optional[Path] = None
@@ -43,14 +47,7 @@ def set_verifier_trace_path(path: Optional[Path]) -> None:
     global VERIFIER_TRACE_PATH
     VERIFIER_TRACE_PATH = path
     if VERIFIER_TRACE_PATH is not None:
-        # 清空文件
         VERIFIER_TRACE_PATH.write_text("", encoding="utf-8")
-
-
-async def _write_text_async(path: Path, text: str) -> None:
-    """使用线程池执行同步 I/O，避免阻塞事件循环"""
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, lambda: path.open("a", encoding="utf-8").write(text))
 
 
 async def append_verifier_trace(
@@ -61,10 +58,6 @@ async def append_verifier_trace(
     rewritten_text=None,
     issue_count=None,
     status="issues_found",
-    score: Optional[int] = None,
-    star_rating: Optional[int] = None,
-    passed: Optional[bool] = None,
-    priority_claims_count: Optional[int] = None,
 ):
     if VERIFIER_TRACE_PATH is None:
         return
@@ -77,15 +70,6 @@ async def append_verifier_trace(
     ]
     if issue_count is not None:
         sections.append(f"issue_count={issue_count}")
-    if score is not None:
-        sections.append(f"segment_score={score}")
-    if star_rating is not None:
-        sections.append(f"star_rating={star_rating}")
-    if passed is not None:
-        sections.append(f"passed={passed}")
-    if priority_claims_count is not None:
-        sections.append(f"priority_claims_count={priority_claims_count}")
-
     sections.extend(
         [
             "",
@@ -112,7 +96,8 @@ async def append_verifier_trace(
     sections.append("\n")
 
     async with VERIFIER_TRACE_LOCK:
-        await _write_text_async(VERIFIER_TRACE_PATH, "\n".join(sections))
+        with open(VERIFIER_TRACE_PATH, "a", encoding="utf-8") as trace_file:
+            trace_file.write("\n".join(sections))
 
 
 async def append_verifier_trace_log(title: str, message: str, payload: Optional[str] = None):
@@ -134,41 +119,55 @@ async def append_verifier_trace_log(title: str, message: str, payload: Optional[
     sections.append("\n")
 
     async with VERIFIER_TRACE_LOCK:
-        await _write_text_async(VERIFIER_TRACE_PATH, "\n".join(sections))
-
+        with open(VERIFIER_TRACE_PATH, "a", encoding="utf-8") as trace_file:
+            trace_file.write("\n".join(sections))
 
 # ---------------------------------------------------------------------------
-# 安全 JSON 解析（非贪婪，更鲁棒）
+# 安全 JSON 解析（统一使用）
 # ---------------------------------------------------------------------------
+def _extract_balanced_json(text: str, open_ch: str, close_ch: str) -> Optional[str]:
+    for i, ch in enumerate(text):
+        if ch != open_ch:
+            continue
+        depth = 1
+        in_string = False
+        escaped = False
+        for j in range(i + 1, len(text)):
+            current = text[j]
+            if escaped:
+                escaped = False
+                continue
+            if current == "\\":
+                escaped = True
+                continue
+            if current == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if current == open_ch:
+                depth += 1
+            elif current == close_ch:
+                depth -= 1
+                if depth == 0:
+                    return text[i:j + 1]
+    return None
+
+
 def _safe_parse_json(text: str) -> Dict[str, Any]:
+    """移除 markdown 代码块并提取 JSON 对象/数组，然后解析。"""
     # 移除可能的 markdown 代码块
     text = re.sub(r'^```(?:json)?\s*\n?', '', text, flags=re.MULTILINE)
     text = re.sub(r'\n?```\s*$', '', text, flags=re.MULTILINE)
     text = text.strip()
 
-    # 优先尝试直接解析整个文本（处理纯净 JSON 的情况）
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
 
-    # 括号计数提取最外层 JSON 对象或数组
-    def _extract_balanced(s: str, open_ch: str, close_ch: str):
-        for i, ch in enumerate(s):
-            if ch == open_ch:
-                depth = 1
-                for j in range(i + 1, len(s)):
-                    if s[j] == open_ch:
-                        depth += 1
-                    elif s[j] == close_ch:
-                        depth -= 1
-                        if depth == 0:
-                            return s[i:j + 1]
-        return None
-
-    # 优先找对象 {...}，再找数组 [...]
     for opener, closer in (('{', '}'), ('[', ']')):
-        extracted = _extract_balanced(text, opener, closer)
+        extracted = _extract_balanced_json(text, opener, closer)
         if extracted:
             try:
                 return json.loads(extracted)
@@ -176,14 +175,6 @@ def _safe_parse_json(text: str) -> Dict[str, Any]:
                 continue
 
     raise ValueError("Failed to parse JSON from response")
-
-
-class ClaimExtractionError(Exception):
-    """Claim 提取失败的异常，携带原始响应文本。"""
-    def __init__(self, message: str, raw: str = ""):
-        super().__init__(message)
-        self.raw = raw
-
 
 def fix_encoding(s: str) -> str:
     try:
@@ -229,37 +220,6 @@ class ClaimType(str, Enum):
     COMPOSITE = "composite"
 
 
-def route_verifiers(claim: Dict[str, Any]) -> List[str]:
-    """
-    Slot-level routing：根据 claim 实际包含的 slot 决定需要哪些验证器。
-    claim 可以是 Claim 对象或字典（含 slots）。
-    """
-    slots = claim.get("slots", {}) if isinstance(claim, dict) else claim.slots
-    v = []
-    if slots.get("factual"):
-        v.append("fact")
-    if slots.get("numeric"):
-        v.append("numeric")
-    if slots.get("temporal"):
-        v.append("temporal")
-    # 若 slot 为空，回退到按 claim_type 路由
-    if not v:
-        ct = claim.get("claim_type", "") if isinstance(claim, dict) else claim.claim_type
-        if ct in ("factual",):
-            v = ["fact"]
-        elif ct in ("numeric",):
-            v = ["numeric"]
-        elif ct in ("temporal",):
-            v = ["temporal"]
-        elif ct in ("factual_numeric",):
-            v = ["fact", "numeric"]
-        elif ct in ("numeric_temporal",):
-            v = ["numeric", "temporal"]
-        elif ct in ("composite",):
-            v = ["fact", "numeric", "temporal"]
-    return v
-
-
 @dataclass
 class Claim:
     claim_id: str
@@ -267,6 +227,7 @@ class Claim:
     original_text: str
     normalized_text: str
     slots: Dict[str, Any] = field(default_factory=dict)
+    source_span: Tuple[int, int] = (0, 0)
     cite_ids: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -281,16 +242,81 @@ class Claim:
         }
 
 
+FINANCIAL_METRIC_KEYWORDS = ("收入", "营收", "营业收入", "利润", "净利润", "归母净利", "扣非", "毛利", "毛利率", "净利率", "费用率", "ROE", "现金流", "资产负债率")
+GROWTH_COMPARISON_KEYWORDS = ("同比", "环比", "增长", "提升", "下降", "下滑", "改善", "恶化", "高于", "低于", "领先", "落后", "超过", "不及")
+BUSINESS_EVENT_KEYWORDS = ("订单", "定点", "客户", "量产", "投产", "产能", "扩产", "并表", "收购", "出售", "剥离", "重组", "战略合作", "新项目", "市占率", "市场份额")
+FORECAST_VALUATION_KEYWORDS = ("预测", "预计", "有望", "目标价", "估值", "PE", "PB", "PEG", "EPS", "Forward", "TTM", "市盈率", "市净率", "上行空间")
+ASSERTIVE_KEYWORDS = ("首次", "唯一", "第一", "最大", "最小", "领先", "龙头", "核心", "显著", "大幅", "突破", "创历史")
+CAUSAL_CONCLUSION_KEYWORDS = ("主要由于", "主要系", "受益于", "驱动", "源于", "带动", "归因于", "得益于", "导致")
+RISK_UNITS = ("亿元", "万元", "%", "pct", "倍", "元", "万台", "万辆")
+
+def keyword_score(text: str, keywords: Tuple[str, ...], weight: int, cap: int) -> int:
+    hits = sum(1 for keyword in keywords if keyword in text)
+    return min(hits * weight, cap)
+
+
+def score_claim_risk(claim: Claim) -> int:
+    text = f"{claim.original_text} {claim.normalized_text}"
+    number_count = len(re.findall(r"\d+(?:\.\d+)?", text))
+    financial_score = keyword_score(text, FINANCIAL_METRIC_KEYWORDS, 10, 35)
+    growth_score = keyword_score(text, GROWTH_COMPARISON_KEYWORDS, 8, 28)
+    business_score = keyword_score(text, BUSINESS_EVENT_KEYWORDS, 9, 32)
+    forecast_score = keyword_score(text, FORECAST_VALUATION_KEYWORDS, 11, 38)
+    unit_score = keyword_score(text, RISK_UNITS, 4, 16)
+    score = 0
+
+    if number_count:
+        score += 28 + min(number_count * 5, 25)
+
+    score += financial_score
+    score += growth_score
+    score += business_score
+    score += forecast_score
+    score += keyword_score(text, ASSERTIVE_KEYWORDS, 7, 21)
+    score += keyword_score(text, CAUSAL_CONCLUSION_KEYWORDS, 6, 18)
+    score += unit_score
+
+    if re.search(r"(20\d{2}|Q[1-4]|[一二三四]季度|H[12]|上半年|下半年|前三季度)", text):
+        score += 10
+    if claim.slots.get("numeric"):
+        score += 8
+    if claim.slots.get("temporal") and (number_count or business_score):
+        score += 5
+    if claim.cite_ids:
+        score += 4
+    if not claim.cite_ids and number_count and (
+        financial_score or growth_score or business_score or forecast_score or unit_score
+    ):
+        score += 8
+
+    if not number_count and len(text.strip()) < 15:
+        score -= 12
+
+    return max(score, 0)
+
+
+def select_high_risk_claims(claims: List[Claim], max_claims: int) -> List[Claim]:
+    if max_claims <= 0 or len(claims) <= max_claims:
+        return list(claims)
+
+    ranked = sorted(
+        enumerate(claims),
+        key=lambda item: (-score_claim_risk(item[1]), item[0]),
+    )
+    selected = sorted(ranked[:max_claims], key=lambda item: item[0])
+    return [claim for _, claim in selected]
+
+
 class ClaimExtractor:
     """
     从文本片段中提取原子声明。
-    使用 ChatAgent（无工具）进行纯文本生成，避免 ReAct 的开销。
     """
     CITE_RE = re.compile(r"\[\^cite_id:([A-Za-z0-9_\-]+)(?:\|[^\]]*)?\]")
 
     def __init__(self, agent):
         self.agent = agent
 
+    # ---------- 主提取方法 ----------
     async def extract(self, text: str) -> List[Claim]:
         if not text.strip():
             return []
@@ -320,6 +346,11 @@ class ClaimExtractor:
         if last_exc is not None and not raw:
             raise last_exc
 
+        # print("\n====== RAW LLM OUTPUT ======")
+        # print(type(raw))
+        # print("====== END ======\n")
+
+        # 安全解析 JSON
         try:
             data = _safe_parse_json(raw)
         except Exception as e:
@@ -329,23 +360,8 @@ class ClaimExtractor:
                 payload=f"Raw text:\n{raw}",
             )
             return []
-        
-        # ---- 加这行调试 ----
-        await append_verifier_trace_log(
-            "ClaimExtractor-Debug",
-            f"Parsed data type: {type(data).__name__}",
-            payload=json.dumps(data, ensure_ascii=False, indent=2) if not isinstance(data, str) else data,
-        )
-        # -------------------
 
-        # 兼容顶层数组和对象两种格式
-        if isinstance(data, list):
-            segments = data
-        elif isinstance(data, dict):
-            segments = data.get("segments", [])
-        else:
-            segments = []
-
+        segments = data.get("segments", [])
         if not segments:
             await append_verifier_trace_log(
                 "ClaimExtractor",
@@ -370,12 +386,14 @@ class ClaimExtractor:
                     original_text=item.get("original_text", ""),
                     normalized_text=item.get("normalized_text", ""),
                     slots=item.get("slots", {}),
+                    source_span=(0, 0),  # 可选：后面再做
                     cite_ids=item.get("cite_ids", seg_cite_ids)
                 )
                 claims.append(claim)
 
         return self._post_process(claims)
 
+    # ---------- 后处理：去重 + ID 重编号 ----------
     def _post_process(self, claims: List[Claim]) -> List[Claim]:
         filtered = []
         seen = set()
@@ -397,144 +415,105 @@ class ClaimExtractor:
 
         return filtered
 
-
 # ---------------------------------------------------------------------------
 # §3  Data Structure
 # ---------------------------------------------------------------------------
+
 @dataclass
 class EvidenceSpan:
     cite_id: str
     text: str
-    source: str = ""           # 证据来源链路：agent / numeric / fact_store / invalid_cite
-    valid: bool = True         # cite_id 在短期记忆中是否可查证
-
+    score: Optional[float] = None   # 相关性/置信度
 
 @dataclass
 class ClaimIssue:
-    claim_id: str
     type: str
     description: str
     severity: str
-    confidence: float = 1.0
-    source: str = ""           # 多来源用“/”分隔，如 "fact/numeric"
     evidence: List[EvidenceSpan] = field(default_factory=list)
-    suggestion: str = ""
-
+    suggestion: Dict[str, Any] = field(default_factory=dict)
 
 @dataclass
-class ClaimEvaluation:
-    """单个声明的评估结果"""
+class ClaimResult:
     claim_id: str
-    original_text: str
     issues: List[ClaimIssue]
 
-    @property
-    def claim_score(self) -> float:
-        """连续化评分：5分制，无问题=5.0"""
-        return compute_claim_score(self.issues)
-
-    @property
-    def signature(self) -> Dict[str, int]:
-        return {
-            "critical": sum(1 for i in self.issues if i.severity == "critical"),
-            "major": sum(1 for i in self.issues if i.severity == "major"),
-            "minor": sum(1 for i in self.issues if i.severity == "minor"),
-        }
-
-    @property
-    def combined_suggestion(self) -> str:
-        """返回优先级最高的修改建议，critical → major → 任意"""
-        critical_issues = [i for i in self.issues if i.severity == "critical"]
-        major_issues = [i for i in self.issues if i.severity == "major"]
-        if not self.issues:
-            return ""
-        if critical_issues:
-            return critical_issues[0].suggestion
-        if major_issues:
-            return major_issues[0].suggestion
-        # 合并所有建议
-        suggestions = [i.suggestion for i in self.issues if i.suggestion]
-        if suggestions:
-            return "；".join(suggestions)
-        return ""
-    
-@dataclass
-class SegmentEvaluationReport:
-    """段落级评估报告"""
-    segment_score: int        # 0-100
-    star_rating: int          # 1-5
-    passed: bool
-    total_claims: int
-    bad_claims_count: int
-    priority_claims: List[ClaimEvaluation]
 
 # ---------------------------------------------------------------------------
 # §4  Verifier Router + Issue Fusion
 # ---------------------------------------------------------------------------
 
-
 class VerifierRouter:
-    def __init__(self, verifiers: Dict[str, Any], short_term: Optional[Any] = None):
+    def __init__(self, verifiers: Dict[str, any]):
         """verifiers: {"fact": agent, "numeric": agent, "temporal": agent}"""
         self.verifiers = verifiers
-        self.short_term = short_term
 
-    async def verify_claims(self, claims: List[Claim]) -> Dict[str, List[ClaimIssue]]:
-        """批量验证所有 claims，每个 verifier 处理其负责的子集。"""
-        # 按类型分组，再根据每个声明的 slots 决定需要哪些 verifier
+    async def verify_claims(self, claims: List[Claim]) -> List[ClaimResult]:
+        """批量验证所有 claims，每个类型只调用一次 agent。"""
+        # 按类型分组
         claims_by_type: Dict[ClaimType, List[Claim]] = {}
         for claim in claims:
             claims_by_type.setdefault(claim.claim_type, []).append(claim)
 
-        # 根据 slots 动态构建每个 verifier 负责的列表
-        verifier_to_claims: Dict[str, List[Claim]] = {}
-        for ct, clist in claims_by_type.items():
-            for claim in clist:
-                needed = route_verifiers(claim.to_dict())
-                for vname in needed:
-                    verifier_to_claims.setdefault(vname, []).append(claim)
+        # 需要验证的类型映射（与 agent 类型对应）
+        type_to_verifier = {
+            ClaimType.FACTUAL: "fact",
+            ClaimType.NUMERIC: "numeric",
+            ClaimType.TEMPORAL: "temporal",
+            ClaimType.FACTUAL_NUMERIC: ["fact", "numeric"],  # 需要两个 agent
+            ClaimType.NUMERIC_TEMPORAL: ["numeric", "temporal"],
+            ClaimType.COMPOSITE: ["fact", "numeric", "temporal"],
+        }
 
-        # 去重（同一个 claim 可能被多个验证器处理）
-        for vname in list(verifier_to_claims.keys()):
-            claims_list = verifier_to_claims[vname]
-            seen = set()
-            unique = []
-            for c in claims_list:
-                if c.claim_id not in seen:
-                    seen.add(c.claim_id)
-                    unique.append(c)
-            verifier_to_claims[vname] = unique
-
+        # 收集所有任务（每个 verifier 类型对应一个批量任务）
         tasks = []
+        verifier_to_claims: Dict[str, List[Claim]] = {}
+
+        for ct, clist in claims_by_type.items():
+            needed = type_to_verifier.get(ct, [])
+            if isinstance(needed, str):
+                needed = [needed]
+            for vname in needed:
+                verifier_to_claims.setdefault(vname, []).extend(clist)
+
+        # 去重（一个 claim 可能被多个 verifier 处理，如 factual_numeric）
+        # 但我们仍要按 verifier 分别批量调用
         for vname, vclaims in verifier_to_claims.items():
             tasks.append(self._run_batch(vname, vclaims))
 
+        # 并行执行所有批量任务
         results = await asyncio.gather(*tasks)
 
-        # 合并结果
+        # 合并结果：将 issue 分配回各个 claim
         claim_issues: Dict[str, List[ClaimIssue]] = {c.claim_id: [] for c in claims}
-        for result in results:
+        for result in results:  # result 是 {claim_id: [issues]}
             for cid, issues in result.items():
                 claim_issues[cid].extend(issues)
 
-        # 融合并赋予系统 confidence
-        merged_result: Dict[str, List[ClaimIssue]] = {}
+        # 构建 ClaimResult 列表
+        claim_results = []
         for c in claims:
+            # 去重合并（同一 claim 可能有来自多个 verifier 的相同类型 issue）
             merged = self._merge_issues(claim_issues[c.claim_id])
-            for issue in merged:
-                self._validate_and_assign_confidence(issue, c.cite_ids)
-            merged_result[c.claim_id] = merged
-        return merged_result
+            claim_results.append(ClaimResult(claim_id=c.claim_id, issues=merged))
 
+        return claim_results
+
+    #-----------------------------------------------------------------------
+    # 批量执行单个 verifier
+    # -----------------------------------------------------------------------
     async def _run_batch(self, verifier_name: str, claims: List[Claim]) -> Dict[str, List[ClaimIssue]]:
         """一次性处理多个 claims，返回 {claim_id: [issues]}"""
         agent = self.verifiers[verifier_name]
 
-        # 每次调用前清空 agent 的记忆，防止上下文污染
+        # 每次调用前清空 agent 的记忆，防止不同批次之间上下文污染。
         if hasattr(agent, "memory") and agent.memory is not None:
             await agent.memory.clear()
 
-        payload = {"claims": [c.to_dict() for c in claims]}
+        # 构建批量 payload
+        payload = {
+            "claims": [c.to_dict() for c in claims]
+        }
 
         try:
             msg = Msg(
@@ -550,6 +529,7 @@ class VerifierRouter:
                 text = _extract_text_response(response_msg)
             except Exception as e:
                 last_exc = e
+
                 await append_verifier_trace_log(
                     f"{verifier_name.upper()} verifier",
                     f"[{verifier_name} verifier] invalid text response after "
@@ -561,8 +541,17 @@ class VerifierRouter:
             if last_exc is not None and not text:
                 raise last_exc
 
+            # print(f"\n====== [{verifier_name.upper()} BATCH RAW OUTPUT] ======")
+            # if text is None:
+            #     print("TEXT: <None>")
+            # else:
+            #     print("TEXT:", text[:500] + "..." if len(text) > 500 else text)
+            # print("====================================\n")
+
+            # 安全解析
             data = _safe_parse_json(text)
 
+            # 期望 data 是一个 dict，包含 issues 列表，每个 issue 有 claim_id
             if isinstance(data, list):
                 issues_list = data
             elif isinstance(data, dict):
@@ -570,61 +559,28 @@ class VerifierRouter:
             else:
                 issues_list = []
 
-            # 建立 claim_id 到 Claim 的映射，用于模糊匹配
-            claim_map: Dict[str, Claim] = {c.claim_id: c for c in claims}
+            # 按 claim_id 分组
             result: Dict[str, List[ClaimIssue]] = {c.claim_id: [] for c in claims}
-            unmatched = []
-
+            skipped_items = []
             for item in issues_list:
                 cid = item.get("claim_id")
-                # 如果 LLM 输出的 claim_id 无法直接匹配，尝试用 original_text 模糊查找
-                if not cid or cid not in claim_map:
-                    original = item.get("original_text", "")
-                    matched_id = None
-                    for c in claims:
-                        if c.original_text.strip() == original.strip():
-                            matched_id = c.claim_id
-                            break
-                    if matched_id:
-                        cid = matched_id
-                    else:
-                        unmatched.append(item)
-                        continue
-
-                evidence_spans = []
-                for ev in item.get("evidence", []):
-                    if isinstance(ev, dict):
-                        evidence_spans.append(EvidenceSpan(
-                            cite_id=ev.get("cite_id", ""),
-                            text=ev.get("text", ""),
-                            source="agent",
-                            valid=True  # 初始设为有效，后续由系统校验
-                        ))
-
-                suggestion_raw = item.get("suggestion", "")
-                if isinstance(suggestion_raw, dict):
-                    suggestion_str = suggestion_raw.get("content", str(suggestion_raw))
-                elif isinstance(suggestion_raw, str):
-                    suggestion_str = suggestion_raw
-                else:
-                    suggestion_str = ""
+                if not cid or cid not in result:
+                    skipped_items.append(item)
+                    continue
 
                 result[cid].append(ClaimIssue(
-                    claim_id=cid,
                     type=item.get("type", "unknown"),
                     description=f"[{verifier_name}] {item.get('description', '')}",
                     severity=self._normalize_severity(item.get("severity")),
-                    confidence=1.0,  # 将在后续统一校准
-                    source=verifier_name,
-                    evidence=evidence_spans,
-                    suggestion=suggestion_str
+                    suggestion=item.get("suggestion", {}),
+                    evidence=item.get("evidence", [])
                 ))
-
-            if unmatched:
+            if skipped_items:
                 await append_verifier_trace_log(
                     f"{verifier_name.upper()} verifier",
-                    f"[{verifier_name}] {len(unmatched)} issue(s) could not be mapped to any claim",
-                    payload=json.dumps(unmatched, ensure_ascii=False, indent=2),
+                    f"[{verifier_name} verifier] dropped {len(skipped_items)} "
+                    f"issue items without valid claim_id",
+                    payload=json.dumps(skipped_items, ensure_ascii=False, indent=2),
                 )
             return result
 
@@ -636,115 +592,28 @@ class VerifierRouter:
             )
             return {c.claim_id: [] for c in claims}
 
+    # -----------------------------------------------------------------------
+    # Issue 合并（同一 claim 内去重）
+    # -----------------------------------------------------------------------
     def _merge_issues(self, issues: List[ClaimIssue]) -> List[ClaimIssue]:
-        """融合多个验证器对同一声明的重复发现，保留所有来源信息"""
-        merged: Dict[Tuple[str, str], ClaimIssue] = {}
+        merged = {}
         for iss in issues:
             key = (iss.type, iss.description)
             if key not in merged:
-                merged[key] = ClaimIssue(
-                    claim_id=iss.claim_id,
-                    type=iss.type,
-                    description=iss.description,
-                    severity=iss.severity,
-                    confidence=iss.confidence,
-                    source=iss.source,
-                    evidence=list(iss.evidence),
-                    suggestion=iss.suggestion,
-                )
+                merged[key] = iss
             else:
-                existing = merged[key]
                 # 升级 severity
-                if self._severity_priority(iss.severity) > self._severity_priority(existing.severity):
-                    existing.severity = iss.severity
-                # 合并来源字符串
-                if iss.source not in existing.source:
-                    existing.source += f"/{iss.source}"
-                # 补充 evidence（去重 cite_id）
-                existing_cite_ids = {e.cite_id for e in existing.evidence}
-                for ev in iss.evidence:
-                    if ev.cite_id not in existing_cite_ids:
-                        existing.evidence.append(ev)
-                        existing_cite_ids.add(ev.cite_id)
-                # 合并建议：优先保留最严重级别的建议，否则拼接
-                if not existing.suggestion:
-                    existing.suggestion = iss.suggestion
-                elif (
-                    self._severity_priority(iss.severity) >= self._severity_priority(existing.severity)
-                    and iss.suggestion
-                ):
-                    existing.suggestion = iss.suggestion  # 用更严重问题的建议覆盖
-                # 置信度取多个来源的平均值（初步，后面会被系统校准覆盖）
-                existing.confidence = 1.0  # 将在后续统一计算
+                if self._severity_priority(iss.severity) > self._severity_priority(merged[key].severity):
+                    merged[key].severity = iss.severity
+                # 补充 suggestion
+                if not merged[key].suggestion and iss.suggestion:
+                    merged[key].suggestion = iss.suggestion
         return list(merged.values())
 
-    def _validate_and_assign_confidence(self, issue: ClaimIssue, fallback_cite_ids: List[str]) -> None:
-        """
-        基于 evidence 中 cite_id 在短期记忆中的真实存在性，重新计算置信度。
-        标记无效证据并降权。
-        """
-        if issue.type in ("parse_error",):
-            issue.confidence = 0.20
-            return
-
-        # 收集所有 cite_id，包括 fallback
-        cite_ids = [ev.cite_id for ev in issue.evidence if ev.cite_id]
-        if not cite_ids and fallback_cite_ids:
-            cite_ids = fallback_cite_ids
-
-        valid_cite_ids = []
-        for ev in issue.evidence:
-            if not ev.cite_id:
-                continue
-            if self._is_cite_valid(ev.cite_id):
-                valid_cite_ids.append(ev.cite_id)
-            else:
-                ev.valid = False
-                ev.source = "invalid_cite"
-
-        # 也可考虑 fallback_cite_ids 中的有效部分
-        unique_valid_cites = set()
-        for cid in valid_cite_ids:
-            unique_valid_cites.add(cid)
-        if fallback_cite_ids:
-            for cid in fallback_cite_ids:
-                if self._is_cite_valid(cid):
-                    unique_valid_cites.add(cid)
-
-        # 统计独立来源
-        source_keys = set()
-        for cid in unique_valid_cites:
-            try:
-                source_keys.add(material_source_key(self.short_term, cid))
-            except Exception:
-                source_keys.add(f"cite:{cid}")
-        n_sources = len(source_keys)
-
-        if n_sources >= 2:
-            issue.confidence = min(1.0, 0.80 + n_sources * 0.05)
-        elif n_sources == 1:
-            issue.confidence = 0.60
-        else:
-            issue.confidence = 0.30
-
-        # 如果原始 evidence 都被标记为无效，追加提示到描述
-        if issue.evidence and all(not ev.valid for ev in issue.evidence):
-            issue.description += " (警告：所有引用证据无法在材料库中查证)"
-            issue.confidence = max(0.10, issue.confidence - 0.3)
-
-    def _is_cite_valid(self, cite_id: str) -> bool:
-        """验证 cite_id 是否在短期记忆中真实存在"""
-        if self.short_term is None:
-            return False
-        try:
-            # 若 material_source_key 成功返回则存在
-            material_source_key(self.short_term, cite_id)
-            return True
-        except Exception:
-            return False
-
-    @staticmethod
-    def _normalize_severity(s: str) -> str:
+    # -----------------------------------------------------------------------
+    # 工具函数
+    # -----------------------------------------------------------------------
+    def _normalize_severity(self, s: str) -> str:
         if not s:
             return "minor"
         s = s.lower()
@@ -758,20 +627,23 @@ class VerifierRouter:
             return "info"
         return "minor"
 
-    @staticmethod
-    def _severity_priority(s: str) -> int:
+    def _severity_priority(self, s: str) -> int:
         mapping = {"critical": 3, "major": 2, "minor": 1, "info": 0}
         return mapping.get(s, 1)
+
 
 
 # ---------------------------------------------------------------------------
 # §5  SegmentVerifier — 总控制器
 # ---------------------------------------------------------------------------
+
 class SegmentVerifier:
     def __init__(self, short_term: ShortTermMemoryStore, long_term: LongTermMemoryStore):
-        self.model = create_chat_model()
+        self.model = create_chat_model(reasoning=False)
         self.formatter = create_agent_formatter()
+        self.max_claims_per_segment = config.Config().get_max_claims_per_segment()
 
+        # ---------- 创建 ClaimExtractor  ----------
         self.extractor_agent = ReActAgent(
             name="ClaimExtractor",
             sys_prompt=prompt_dict["claim_extract_sys_prompt"],
@@ -783,6 +655,7 @@ class SegmentVerifier:
         )
         self.extractor = ClaimExtractor(agent=self.extractor_agent)
 
+        # ---------- 创建三个 Verifier Agents ----------
         self.verifiers = create_three_verifiers(
             model=self.model,
             formatter=self.formatter,
@@ -790,355 +663,56 @@ class SegmentVerifier:
             long_term=long_term
         )
 
-        self.router = VerifierRouter(self.verifiers, short_term=short_term)
+        self.router = VerifierRouter(self.verifiers)
 
-    async def verify(self, segment: str) -> List[ClaimIssue]:
-        """原有接口：只返回 issues（兼容旧代码）"""
-        try:
-            segment_for_extract = _strip_chart_references_for_claim_extract(segment)
-            claims = await self.extractor.extract(segment_for_extract)
-        except ClaimExtractionError as e:
-            await append_verifier_trace_log(
-                "SegmentVerifier",
-                f"Claim extraction failed: {e}",
-                payload=e.raw[:2000],
-            )
-            return [ClaimIssue(
-                claim_id="extract_failed",
-                type="parse_error",
-                description=f"Claim extraction failed: {e}",
-                severity="critical",
-                evidence=[EvidenceSpan(cite_id="", text=e.raw[:2000], source="parser")],
-                suggestion="请检查输入文本格式或重试",
-            )]
-
+    async def verify(
+        self,
+        segment: str,
+        company_name: Optional[str] = None,
+        report_date: Optional[str] = None,
+    ) -> List[ClaimIssue]:
+        """主入口：segment → claims → batch verification → issues"""
+        segment_for_extract = _strip_chart_references_for_claim_extract(segment)
+        if company_name or report_date:
+            context_lines = ["# 任务上下文"]
+            if company_name:
+                context_lines.append(f"公司名称：{company_name}")
+            if report_date:
+                context_lines.append(f"研报日期：{report_date}")
+            context_lines.append("上下文信息可用于解析正文中的公司简称、公司/本公司等指代，以及相对时间。")
+            segment_for_extract = "\n".join(context_lines) + "\n\n# 待抽取正文\n" + segment_for_extract
+        claims = await self.extractor.extract(segment_for_extract)
         if not claims:
             return []
+        selected_claims = select_high_risk_claims(claims, self.max_claims_per_segment)
+        await append_verifier_trace_log(
+            "SegmentVerifier",
+            (
+                "claims selected for verification: "
+                f"extracted={len(claims)}, selected={len(selected_claims)}, "
+                f"max_claims_per_segment={self.max_claims_per_segment}"
+            ),
+        )
         await append_verifier_trace_log(
             "SegmentVerifier",
             "======== claims抽取已完成 ========",
             payload=json.dumps(
-                [claim.to_dict() for claim in claims],
+                [
+                    {
+                        **claim.to_dict(),
+                        "risk_score": score_claim_risk(claim),
+                    }
+                    for claim in selected_claims
+                ],
                 ensure_ascii=False,
                 indent=2,
             ),
         )
 
-        claim_issues = await self.router.verify_claims(claims)
-        issues = []
-        for iss_list in claim_issues.values():
-            issues.extend(iss_list)
-        return issues
+        claim_results = await self.router.verify_claims(selected_claims)
 
-    async def verify_with_claims(self, segment: str) -> Tuple[List[Claim], List[ClaimIssue]]:
-        """新接口：返回提取的 claims 和对应的 issues，用于评估报告"""
-        try:
-            segment_for_extract = _strip_chart_references_for_claim_extract(segment)
-            claims = await self.extractor.extract(segment_for_extract)
-        except ClaimExtractionError as e:
-            await append_verifier_trace_log(
-                "SegmentVerifier",
-                f"Claim extraction failed: {e}",
-                payload=e.raw[:2000],
-            )
-            issue = ClaimIssue(
-                claim_id="extract_failed",
-                type="parse_error",
-                description=f"Claim extraction failed: {e}",
-                severity="critical",
-                evidence=[EvidenceSpan(cite_id="", text=e.raw[:2000], source="parser")],
-                suggestion="请检查输入文本格式或重试",
-            )
-            return [], [issue]
-
-        if not claims:
-            return [], []
-
-        await append_verifier_trace_log(
-            "SegmentVerifier",
-            "======== claims抽取已完成 ========",
-            payload=json.dumps(
-                [claim.to_dict() for claim in claims],
-                ensure_ascii=False,
-                indent=2,
-            ),
-        )
-        claim_issues = await self.router.verify_claims(claims)
-        issues = []
-        for iss_list in claim_issues.values():
-            issues.extend(iss_list)
-        return claims, issues
-
-
-# ---------------------------------------------------------------------------
-# Claim-Centric Evaluation Functions
-# ---------------------------------------------------------------------------
-def compute_claim_score(issues: List[ClaimIssue]) -> float:
-    """连续化评分：5分制，无问题=5.0"""
-    if not issues:
-        return 5.0
-    W_CRITICAL = 0.8
-    W_MAJOR = 0.5
-    W_MINOR = 0.1
-    penalty = 0.0
-    for i in issues:
-        w = W_CRITICAL if i.severity == "critical" else W_MAJOR if i.severity == "major" else W_MINOR if i.severity == "minor" else 0.0
-        multiplier = 0.5 + 0.5 * max(0.0, min(1.0, i.confidence))
-        penalty += w * multiplier
-    return round(max(0.0, 5.0 * (1.0 - penalty)), 2)
-
-
-def evaluate_claims(claims: List[Claim], all_issues: List[ClaimIssue]) -> List[ClaimEvaluation]:
-    issues_by_claim: Dict[str, List[ClaimIssue]] = {c.claim_id: [] for c in claims}
-    for iss in all_issues:
-        if iss.claim_id in issues_by_claim:
-            issues_by_claim[iss.claim_id].append(iss)
-        else:
-            issues_by_claim[iss.claim_id] = [iss]
-
-    return [
-        ClaimEvaluation(
-            claim_id=claim.claim_id,
-            original_text=claim.original_text,
-            issues=issues_by_claim.get(claim.claim_id, []),
-        )
-        for claim in claims
-    ]
-
-
-def compute_segment_report(claim_evaluations: List[ClaimEvaluation], top_k: int = 3) -> SegmentEvaluationReport:
-    """
-    生成段落级评估报告。
-    - 统计基于原始所有声明（不去重）。
-    - 优先修改列表按 original_text 去重展示，避免重复修改同一句子。
-    """
-    # 原始总数统计
-    total_claims = len(claim_evaluations)
-    if total_claims == 0:
-        return SegmentEvaluationReport(
-            segment_score=100,
-            star_rating=5,
-            passed=True,
-            total_claims=0,
-            bad_claims_count=0,
-            priority_claims=[]
-        )
-
-    avg_score = sum(ce.claim_score for ce in claim_evaluations) / total_claims
-    segment_score = int(avg_score * 20)
-
-    # 分析所有原始声明
-    critical_count = sum(1 for ce in claim_evaluations if ce.signature["critical"] > 0)
-    if critical_count > 0:
-        factor = max(0.35, 1.0 - 0.18 * critical_count)
-        segment_score = int(segment_score * factor)
-
-    # 星数映射
-    if segment_score >= 90:
-        star_rating = 5
-    elif segment_score >= 75:
-        star_rating = 4
-    elif segment_score >= 60:
-        star_rating = 3
-    elif segment_score >= 40:
-        star_rating = 2
-    else:
-        star_rating = 1
-
-    passed = (segment_score >= 60) and (critical_count == 0)
-
-    # 有问题的声明（score < 5.0）
-    problematic_claims = [ce for ce in claim_evaluations if ce.claim_score < 5.0]
-    bad_claims = [ce for ce in claim_evaluations if ce.claim_score < 3.0]
-    bad_claims_count = len(bad_claims)
-
-    # 去重：按 original_text 保留问题最严重的代表，用于生成 writer 的优先修改列表
-    text_to_best: Dict[str, ClaimEvaluation] = {}
-    for ce in problematic_claims:
-        existing = text_to_best.get(ce.original_text)
-        if existing is None or ce.claim_score < existing.claim_score:
-            text_to_best[ce.original_text] = ce
-    deduped_problematic = list(text_to_best.values())
-
-    critical_deduped = [ce for ce in deduped_problematic if ce.signature["critical"] > 0]
-    non_critical = sorted(
-        [ce for ce in deduped_problematic if ce.signature["critical"] == 0],
-        key=lambda ce: (-ce.signature["major"], ce.claim_score, -len(ce.issues))
-    )
-    remaining = max(0, top_k - len(critical_deduped))
-    priority_claims = critical_deduped + non_critical[:remaining]
-
-    return SegmentEvaluationReport(
-        segment_score=segment_score,
-        star_rating=star_rating,
-        passed=passed,
-        total_claims=total_claims,
-        bad_claims_count=bad_claims_count,
-        priority_claims=priority_claims,
-    )
-
-
-def format_report_for_writer(report: SegmentEvaluationReport) -> str:
-    """将评估报告格式化为 writer 易读的 Markdown 文本，包含 claim_id"""
-    lines = []
-    lines.append("## 段落评估报告\n")
-    lines.append(f"**段落评分**：{report.segment_score}/100 →({report.star_rating}/5)")
-    status_icon = "通过" if report.passed else "不通过（需修改）"
-    lines.append(f"**判定**：{status_icon}\n")
-    lines.append(f"**概览**：共 {report.total_claims} 个声明，其中 {report.bad_claims_count} 个存在严重问题。\n")
-
-    if not report.priority_claims:
-        lines.append("所有声明质量良好，无需修改。")
-        return "\n".join(lines)
-
-    lines.append(f"**优先修改以下 {len(report.priority_claims)} 个声明**：\n")
-
-    for idx, ce in enumerate(report.priority_claims, 1):
-        score_display = f"{ce.claim_score:.1f}/5.0"
-        lines.append(
-            f"### 声明 {idx} (ID: `{ce.claim_id}`, 得分: {score_display}, "
-            f"严重问题: critical={ce.signature['critical']}, major={ce.signature['major']})"
-        )
-        lines.append(f"> {ce.original_text}\n")
-        lines.append("**问题汇总**：")
-        for iss in ce.issues:
-            lines.append(f"- **[{iss.severity.upper()}]** {iss.description}")
-        lines.append(f"\n**修改建议**：{ce.combined_suggestion}\n")
-        lines.append("---\n")
-
-    lines.append("**要求**：请优先重写上述声明，一次性修正其所有问题。其他声明可保持不变或微调。")
-    return "\n".join(lines)
-
-# ---------------------------------------------------------------------------
-# §6  Test / Demo
-# ---------------------------------------------------------------------------
-if __name__ == "__main__":
-    segment = (
-        """公司已逐步将产业链一体化优势转化为产品力优势。通过实现新能源汽车产业链的全覆盖，有效降低了原材料价格剧烈变化的风险，同时有效降低成本，提高生产效率，并因此拥有了一定的定价主动权 [^cite_id:2024-06-24_reference_report]。
-
-从产品策略来看，公司已将成本端与企业运营端优势转化为产品力优势：2024年2月，王朝/海洋系列在短短两周内密集投放五波荣耀版车型，包括秦PLUS、驱逐舰05、海豚、汉、唐以及宋PLUS、宋Pro，覆盖从7.98万元到24.98万元的小型、紧凑型以及中大型车市场，较冠军版起售价最高降低了6万元，实现了"加量还降价" [^cite_id:2024-06-24_reference_report]。其中，秦PLUS荣耀版以"日系省油、德系驾驶、美系智能"的赞誉上市，首周便取得了23,590辆的新车订单 [^cite_id:2024-06-24_reference_report]。
-
-2024年5月，公司开启了基于全新混动平台DM5.0的全新车型序列的逐步上市，率先上市的比亚迪秦L与海豹06定位紧凑型级别，但车身尺寸和轴距已经是中型轿车水平 [^cite_id:2024-06-24_reference_report]。该车型序列叠加同级领先的油耗、智能化与电气化水平，在"油电同价"的基础上进一步升级为"电比油低"，充分体现了公司对于10万至20万元细分市场的竞争力与志在必得的决心 [^cite_id:2024-06-24_reference_report]。上市不到2周的时间已经累计获得8万台订单，充分体现了消费者对该系列车型的充分认可 [^cite_id:2024-06-24_reference_report]。
-
-![新车型与竞品核心参数对比](chart:chart_1774964357334)
-
-数据显示，2026年5月上市的秦L DM-i与海豹06 DM-i在核心参数上显著优于同级别传统燃油竞品：WLTC综合油耗分别为1.11L/100km和1.36L/100km，远低于轩逸2024款经典（5.94L/100km）和朗逸2024款（5.92L/100km）[^cite_id:2024-06-24_reference_report]。车身尺寸方面，秦L与海豹06的轴距达到2790mm，已超过轩逸（2700mm）和朗逸（2688mm）的中型轿车水平 [^cite_id:2024-06-24_reference_report]。智能化配置上，秦L与海豹06标配倒车影像、定速巡航、车载智能系统及完整的手机App远程控制功能，而轩逸和朗逸在同价位车型中上述配置多数缺失 [^cite_id:2024-06-24_reference_report]。
-"""
-    )
-
-    PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-
-    long_term_dir = PROJECT_ROOT / "data" / "memory" / "long_term"
-    
-    long_term = LongTermMemoryStore(
-        base_dir=long_term_dir,
-    )
-
-    short_term_dir = PROJECT_ROOT / "data" / "memory" / "short_term" / "002594_20260411"
-
-    short_term = ShortTermMemoryStore(
-        base_dir=short_term_dir,
-    )
-
-    # ---- 注册缺失的材料 ----
-    cite_id = "2024-06-24_reference_report"
-    material_path = short_term_dir / "material" / f"{cite_id}.txt"
-
-    # 检查元数据中是否已有
-    meta = short_term.get_material_meta(cite_id)
-    if not meta:
-        if material_path.exists():
-            with open(material_path, "r", encoding="utf-8") as f:
-                content = f.read()
-            short_term.save_material(
-                cite_id=cite_id,
-                content=content,
-                description="比亚迪首次覆盖报告（2024-06-24）",
-                source="测试材料",
-            )
-            print(f"材料 {cite_id} 已注册")
-        else:
-            print(f"警告：材料文件 {material_path} 不存在，请检查路径")
-    else:
-        print(f"材料 {cite_id} 已在元数据中")
-
-    trace_path = PROJECT_ROOT / "verifier_trace.log"
-    set_verifier_trace_path(trace_path)
-    
-    
-    verifier = SegmentVerifier(short_term=short_term, long_term=long_term)
-
-    async def test():
-        print("\n================ STEP 1: Claim Extraction ================\n")
-
-        claims, issues = await verifier.verify_with_claims(segment)
-
-        print(f"Total Claims: {len(claims)}")
-        for c in claims:
-            print(f"[{c.claim_id}] ({c.claim_type}) {c.original_text}")
-
-        print("\n================ STEP 2: Issues ================\n")
-
-        for iss in issues:
-            print(f"[{iss.severity}] {iss.type} → {iss.description}")
-        
-         # --- 追加：issues 日志 ---
-        await append_verifier_trace_log(
-              "TEST-Issues",
-              f"Found {len(issues)} issues",
-              payload=json.dumps(
-                  [
-                      {
-                          "claim_id": i.claim_id,
-                          "type": i.type,
-                          "severity": i.severity,
-                          "description": i.description,
-                          "confidence": i.confidence,
-                          "source": i.source,
-                          "suggestion": i.suggestion,
-                      }
-                      for i in issues
-                  ],
-                  ensure_ascii=False, indent=2, default=str
-              ),
-          )
-
-        print("\n================ STEP 3: Claim Evaluation (Rubrics) ================\n")
-
-        claim_evals = evaluate_claims(claims, issues)
-
-        for ce in claim_evals:
-            print(f"\n--- Claim {ce.claim_id} ---")
-            print(f"Text: {ce.original_text}")
-            print(f"Score: {ce.claim_score}/5")
-            print(f"Signature: {ce.signature}")
-            print(f"Issues: {len(ce.issues)}")
-            print(f"Suggestion: {ce.combined_suggestion}")
-
-        print("\n================ STEP 4: Segment Report ================\n")
-
-        report = compute_segment_report(claim_evals)
-
-        print(f"Segment Score: {report.segment_score}")
-        print(f"Stars: {report.star_rating}")
-        print(f"Passed: {report.passed}")
-        print(f"Bad Claims: {report.bad_claims_count}")
-
-        print("\n================ STEP 5: Writer Feedback ================\n")
-
-        feedback = format_report_for_writer(report)
-        print(feedback)
-
-        await append_verifier_trace(
-              topic="test-segment",
-              round_idx=1,
-              checked_text=segment[:500],
-              verify_feedback=feedback,
-              issue_count=report.bad_claims_count,
-              status="passed" if report.passed else "issues_found",
-              score=report.segment_score,
-              star_rating=report.star_rating,
-              passed=report.passed,
-              priority_claims_count=len(report.priority_claims),
-          )
-    asyncio.run(test())
+        # 展平所有 issues
+        flat = []
+        for cr in claim_results:
+            flat.extend(cr.issues)
+        return flat

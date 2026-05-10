@@ -465,7 +465,7 @@ class MaterialTools:
             for cite_id, meta in reversed(self.short_term._registry.items()):
                 # 判断逻辑：同一支股票，且 cite_id 包含了该工具专属的关键字
                 if cite_id.startswith(clean_symbol) and tool_keyword in cite_id:
-                    return cite_id # 找到了！返回已经存在的 cite_id
+                    return cite_id # 返回已经存在的 cite_id
                     
             return None
     
@@ -477,12 +477,11 @@ class MaterialTools:
     ) -> ToolResponse:
         """
         统一读取material。支持读取全文、通过参数、按行/条目截取其中部分，以及关键词搜索。
-        - 表格：按行号切片，可选按名为query_key的列筛选。
+        - 表格：可通过按名为query_key的列筛选。
         - 文本：可通过关键词 query_key 进行内容搜索。
         - JSON：可通过 query_key 获取特定条目内容。
 
         如果start_index, end_index, query_key 都为空表示读取全文。
-
         Args:
             cite_id (str): Material 的唯一标识 ID。
             query_key (str | None):
@@ -574,7 +573,7 @@ class MaterialTools:
                 f"[read_material] ID: {cite_id}\n"
                 f"关键词: '{keyword}'\n"
                 f"共找到 {match_line_count} 处命中，合并为 {len(results)} 段上下文\n"
-                f"带有{context_lines}的上下文如下: \n\n"
+                f"上下文如下: \n\n"
                 f"{formatted_results}"
             )
 
@@ -1910,8 +1909,9 @@ class MaterialTools:
             description=description,
         )
         header = f"[fetch_stock_news_material] 股票新闻资讯"
+        df_for_response = df.drop(columns=["网页全文"], errors="ignore")
         response = _build_tool_response_from_df(
-            df=df,
+            df=df_for_response,
             cite_id=cite_id,
             header=header,
             extra_meta={"symbol": symbol} if symbol else {"keyword": keyword},

@@ -133,7 +133,7 @@ async def call_agent_with_retry(
                             agent.memory.content = agent.memory.content[:pos_id]
                             break
             except Exception as e:
-                print(agent.memory.content, flush=True)
+                # print(agent.memory.content, flush=True)
                 await agent.memory.clear()
                 last_exc = e
                 if attempt == max_retries:
