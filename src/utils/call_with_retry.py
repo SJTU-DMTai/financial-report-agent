@@ -52,7 +52,13 @@ async def call_chatbot_with_retry(
                 _messages = await formatter.format(messages)
                 response = await model(_messages, structured_model=structured_model)
                 if structured_model is not None:
-                    res = response.metadata
+                    metadata = response.metadata
+                    if isinstance(metadata, structured_model):
+                        res = metadata
+                    elif isinstance(metadata, dict):
+                        res = structured_model(**metadata)
+                    else:
+                        res = metadata
                 else:
                     res = Msg(role='assistant', content=response.content, name='assistant').get_text_content()
             except RateLimitError as e:

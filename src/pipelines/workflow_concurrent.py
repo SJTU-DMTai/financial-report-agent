@@ -565,7 +565,7 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
             demo_pdf_path = STOCK_REPORT_PATHS[stock_symbol][-1]
         demo_date = demo_pdf_path.name.split("_")[1]
 
-        output_pth = PROJECT_ROOT / "data" / "output" / "reports" / cfg.llm_name
+        output_pth = PROJECT_ROOT / "output" / "reports" / cfg.llm_name
         output_pth.mkdir(parents=True, exist_ok=True)
 
         manuscript_path = output_pth / f"{stock_symbol}_{cur_date}.json"

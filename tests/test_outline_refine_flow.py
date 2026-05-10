@@ -81,7 +81,7 @@ def build_default_save_dir(project_root: Path) -> Path:
 
 def build_default_output_dir(project_root: Path) -> Path:
     cfg = config.Config()
-    return project_root / "data" / "output" / "outline_refine_debug" / cfg.outline_refine_name
+    return project_root / "output" / "outline_refine_debug" / cfg.outline_refine_name
 
 
 def print_outline_snapshot(title: str, outline) -> None:

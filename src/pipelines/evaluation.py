@@ -20,7 +20,7 @@ from dataclasses import dataclass, asdict, field
 from datetime import datetime
 
 from src.memory.working import Section, Segment
-from src.evaluation.extract_evidence import extract_unique_evidences
+from src.evaluation.extract_evidence import extract_unique_evidences, get_entity_name_by_code, _parse_report_date_from_path
 from src.evaluation.eval_structure import num_of_segment, structure_score
 from src.evaluation.eval_evidence import evidence_coverage_and_accuracy
 from src.evaluation.eval_content import get_content_score, ContentScore
@@ -174,12 +174,20 @@ def _sanitize_section_for_scoring(section: Section) -> Section:
     return sanitized
 
 
-def _sanitize_evidence_list(evidences: List[str]) -> List[str]:
-    cleaned_evidences: List[str] = []
+def _sanitize_evidence_list(evidences: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
+    cleaned_evidences: List[Tuple[str, str]] = []
 
     for evidence in evidences:
-        cleaned = _strip_references_for_scoring(evidence)
-        if cleaned and cleaned not in cleaned_evidences:
+        if isinstance(evidence, (list, tuple)) and evidence:
+            text = str(evidence[0])
+            value = str(evidence[1]) if len(evidence) > 1 and evidence[1] is not None else ""
+        else:
+            text = str(evidence)
+            value = ""
+        cleaned_text = _strip_references_for_scoring(text)
+        cleaned_value = _strip_references_for_scoring(value) or ""
+        cleaned = (cleaned_text, cleaned_value)
+        if cleaned_text and cleaned not in cleaned_evidences:
             cleaned_evidences.append(cleaned)
 
     return cleaned_evidences
@@ -252,13 +260,23 @@ def _deserialize_benchmark_result(data: Dict) -> BenchmarkResult:
     )
 
 
-async def _load_or_extract_evidences(section: Section, evidence_path: Path) -> List[str]:
+async def _load_or_extract_evidences(
+    section: Section,
+    evidence_path: Path,
+    stock_entity_name: str = "",
+    report_date: Optional[datetime] = None,
+) -> List[Tuple[str, str]]:
     cached_evidences = _load_json_file(evidence_path)
     if cached_evidences is not None:
         if isinstance(cached_evidences, list):
             print(f"      - 复用evidence缓存: {evidence_path.name}")
             return cached_evidences
-    return await extract_unique_evidences(section, evidence_path)
+    return await extract_unique_evidences(
+        section,
+        evidence_path,
+        stock_entity_name=stock_entity_name,
+        report_date=report_date,
+    )
 
 
 def _serialize_benchmark_result(result: BenchmarkResult) -> Dict:
@@ -447,52 +465,59 @@ async def benchmark_single_pair(
     print(f"正在评估: {stock_code} ({date})")
     print(f"{'='*60}")
 
-    async def _do_evaluation():
-        print(f"[1/4] 处理报告...")
-        new_section = await process_pdf_to_outline(new_report_path, new_report_path.parent, llm_reasoning,
-                                                   llm_instruct, formatter, only_evidence=True)
-        human_section = await process_pdf_to_outline(human_report_path, long_term_dir / 'evidences', llm_reasoning,
-                                                     llm_instruct, formatter, only_evidence=True)
-        sanitized_new_section = _sanitize_section_for_scoring(new_section)
-        sanitized_human_section = _sanitize_section_for_scoring(human_section)
+    print(f"[1/4] 处理报告...")
+    new_section = await process_pdf_to_outline(new_report_path, new_report_path.parent, llm_reasoning,
+                                               llm_instruct, formatter, only_evidence=True)
+    human_section = await process_pdf_to_outline(human_report_path, long_term_dir / 'evidences', llm_reasoning,
+                                                 llm_instruct, formatter, only_evidence=True)
+    sanitized_new_section = _sanitize_section_for_scoring(new_section)
+    sanitized_human_section = _sanitize_section_for_scoring(human_section)
 
-        print(f"[2/4] 抽取论据...")
-        new_evidence_path = new_report_path.parent / f"{new_report_path.stem}_evidences.json"
-        human_evidence_path = long_term_dir / 'evidences' / f"{human_report_path.stem}_evidences.json"
-        new_evidences = await _load_or_extract_evidences(new_section, new_evidence_path)
-        human_evidences = await _load_or_extract_evidences(human_section, human_evidence_path)
-        sanitized_new_evidences = _sanitize_evidence_list(new_evidences)
-        sanitized_human_evidences = _sanitize_evidence_list(human_evidences)
+    print(f"[2/4] 抽取论据...")
+    stock_entity_name = get_entity_name_by_code(stock_code)
+    new_evidence_path = new_report_path.parent / "evidences" / f"{new_report_path.stem}_evidences.json"
+    human_evidence_path = long_term_dir / 'evidences' / f"{human_report_path.stem}_evidences.json"
+    new_evidences = await _load_or_extract_evidences(
+        new_section,
+        new_evidence_path,
+        stock_entity_name=stock_entity_name,
+        report_date=_parse_report_date_from_path(new_report_path),
+    )
+    human_evidences = await _load_or_extract_evidences(
+        human_section,
+        human_evidence_path,
+        stock_entity_name=stock_entity_name,
+        report_date=_parse_report_date_from_path(human_report_path),
+    )
+    sanitized_new_evidences = _sanitize_evidence_list(new_evidences)
+    sanitized_human_evidences = _sanitize_evidence_list(human_evidences)
 
-        print(f"[3/4] 评估指标...")
-        structure_metrics = await evaluate_structure(sanitized_new_section, sanitized_human_section)
-        coverage_ratio, accuracy_ratio = await evidence_coverage_and_accuracy(
-            sanitized_new_evidences,
-            sanitized_human_evidences,
-        )
-        citation_density = _compute_citation_density(new_report_path)
-        content_metrics = await evaluate_content(sanitized_new_section)
+    print(f"[3/4] 评估指标...")
+    structure_metrics = await evaluate_structure(sanitized_new_section, sanitized_human_section)
+    coverage_ratio, accuracy_ratio = await evidence_coverage_and_accuracy(
+        sanitized_new_evidences,
+        sanitized_human_evidences,
+    )
+    citation_density = _compute_citation_density(new_report_path)
+    content_metrics = await evaluate_content(sanitized_new_section)
 
-        # 组装结果
-        print(f"[4/4] 汇总结果...")
-        result = BenchmarkResult(
-            stock_code=stock_code,
-            date=date,
-            human_report_name=human_report_path.name,
-            new_report_name=new_report_path.name,
-            structure=structure_metrics,
-            evidence=EvidenceMetrics(
-                coverage_ratio=coverage_ratio,
-                accuracy_ratio=accuracy_ratio,
-                citiation_density=citation_density,
-            ),
-            content=content_metrics,
-        )
+    print(f"[4/4] 汇总结果...")
+    result = BenchmarkResult(
+        stock_code=stock_code,
+        date=date,
+        human_report_name=human_report_path.name,
+        new_report_name=new_report_path.name,
+        structure=structure_metrics,
+        evidence=EvidenceMetrics(
+            coverage_ratio=coverage_ratio,
+            accuracy_ratio=accuracy_ratio,
+            citiation_density=citation_density,
+        ),
+        content=content_metrics,
+    )
 
-        print(f"✓ 评估完成")
-        return result
-
-    return await _do_evaluation()
+    print(f"✓ 评估完成")
+    return result
 
 
 async def run_benchmark(
@@ -740,9 +765,9 @@ async def main(model_name):
 
     # 配置路径
     benchmark_json = PROJECT_ROOT / "benchmark.json"
-    new_reports = PROJECT_ROOT / "data" / "output" / "reports" / model_name
+    new_reports = PROJECT_ROOT / "output" / "reports" / model_name
     long_term = PROJECT_ROOT / "data" / "memory" / "long_term"
-    output = PROJECT_ROOT / "data" / "output" / f"{model_name}_benchmark_results.json"
+    output = PROJECT_ROOT / "output" / f"{model_name}_benchmark_results.json"
 
     # 执行评估
     summary = await run_benchmark(

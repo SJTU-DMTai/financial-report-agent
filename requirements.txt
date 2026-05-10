@@ -20,5 +20,8 @@ PyMuPDF==1.26.6
 requests==2.32.5
 seaborn==0.13.2
 scikit-learn==1.7.2
+rapidfuzz==3.12.2
+semhash==0.4.1
 trafilatura==2.0.0
+python-dotenv
 

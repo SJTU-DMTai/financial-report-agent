@@ -9,7 +9,7 @@ from pathlib import Path
 
 CURRENT_FILE = Path(__file__).resolve()
 PROJECT_ROOT = CURRENT_FILE.parent.parent
-DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "data" / "output" / "reports"
+DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "output" / "reports"
 DEFAULT_SHORT_TERM_ROOT = PROJECT_ROOT / "data" / "memory" / "short_term"
 
 
@@ -56,7 +56,7 @@ def _find_report_json(report_json_arg: str | None) -> Path:
     if not candidates:
         raise FileNotFoundError(
             "未找到报告 JSON。请通过 --report-json 传入，例如 "
-            "`data/output/reports/<llm_name>/603556_20260330.json`。"
+            "`output/reports/<llm_name>/603556_20260330.json`。"
         )
     return candidates[0]
 
@@ -126,7 +126,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--report-json",
-        help="报告 JSON 路径，例如 data/output/reports/<llm_name>/603556_20260330.json",
+        help="报告 JSON 路径，例如 output/reports/<llm_name>/603556_20260330.json",
     )
     parser.add_argument(
         "--pdf-path",

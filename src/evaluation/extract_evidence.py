@@ -3,21 +3,33 @@ import traceback
 from pathlib import Path
 
 import json
+import difflib
+import numpy as np
+import pandas as pd
+from datetime import datetime
 from typing import List, Dict, Tuple, Optional
 from collections import defaultdict
 import asyncio
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from filelock import FileLock
+try:
+    from rapidfuzz import fuzz
+except ImportError:
+    fuzz = None
+try:
+    from semhash import SemHash
+except ImportError:
+    SemHash = None
 
-from src.pipelines.planning import process_pdf_to_outline
-from src.memory.working import Section, evidence_texts
-from src.utils.call_with_retry import call_chatbot_with_retry
+from src.memory.working import Evidence, Section, evidence_pairs
 from src.utils.local_file import DEMO_DIR
-from src.utils.instance import llm_reasoning, llm_instruct, formatter, cfg
+from src.utils.retrieve_in_memory import _bm25_scores, _tokenize_for_bm25
+import config
 
 # 最大并发数限制
 MAX_CONCURRENT = 8
+CONFIG = config.Config()
 
 
 def extract_text_from_content(content) -> str:
@@ -40,164 +52,383 @@ async def get_content_from_response(response_msg) -> str:
     except TypeError: pass
     return full_content.strip()
 
-def get_all_evidences_from_section(section: Section) -> List[str]:
-    """递归地从Section对象中收集所有论据文本。"""
-    evidences = []
+EvidenceTuple = Tuple[str, str]
+EvidenceMatch = Tuple[str, str, str, str]
+
+
+_code_name_df: Optional[pd.DataFrame] = None
+
+
+def _load_code_name_df() -> pd.DataFrame:
+    global _code_name_df
+    if _code_name_df is None:
+        csv_path = Path(__file__).resolve().parent.parent.parent / "data" / "memory" / "long_term" / "a_share_code_name.csv"
+        if csv_path.exists():
+            _code_name_df = pd.read_csv(csv_path, dtype=str)
+        else:
+            _code_name_df = pd.DataFrame(columns=["code", "name"])
+    return _code_name_df
+
+
+def get_entity_name_by_code(stock_code: str) -> str:
+    code = str(stock_code).zfill(6)
+    df = _load_code_name_df()
+    hit = df[df["code"] == code]
+    return "" if hit.empty else str(hit.iloc[0]["name"])
+
+
+def _normalize_evidence_tuple(item) -> EvidenceTuple:
+    if isinstance(item, Evidence):
+        return item.text.strip(), (item.value or "").strip()
+    if isinstance(item, dict):
+        text = str(item.get("text") or item.get("evidence") or item.get("key") or "").strip()
+        value = str(item.get("value") or item.get("fact") or "").strip()
+        if not text and len(item) == 1:
+            key, val = next(iter(item.items()))
+            return str(key).strip(), str(val).strip() if val is not None else ""
+        return text, value
+    if isinstance(item, (list, tuple)) and item:
+        text = str(item[0]).strip()
+        value = str(item[1]).strip() if len(item) > 1 and item[1] is not None else ""
+        return text, value
+    return str(item).strip(), ""
+
+
+def _normalize_evidence_tuples(items) -> List[EvidenceTuple]:
+    normalized = []
+    for item in items or []:
+        text, value = _normalize_evidence_tuple(item)
+        if text:
+            normalized.append((text, value))
+    return normalized
+
+
+def get_all_evidences_from_section(section: Section) -> List[EvidenceTuple]:
+    """递归地从 Section 对象中收集 (论据描述, 具体事实)。"""
+    evidences: List[EvidenceTuple] = []
     if section.segments:
         for segment in section.segments:
-            if segment.evidences:
-                evidences.extend(evidence_texts(segment.evidences))
+            evidences.extend(evidence_pairs(segment.evidences))
     if section.subsections:
         for subsection in section.subsections:
-            evidences.extend(get_all_evidences_from_section(subsection))
+            if "摘要" not in (subsection.title or ""):
+                evidences.extend(get_all_evidences_from_section(subsection))
     return evidences
 
-async def extract_unique_evidences_from_pdf(pdf_path: Path, save_dir: Path, only_evidence: bool = False) -> List[str]:
-    pdf_stem = pdf_path.stem  # 去掉.pdf后缀
+
+async def extract_unique_evidences_from_pdf(
+    pdf_path: Path,
+    save_dir: Path,
+    only_evidence: bool = False,
+    stock_entity_name: str = "",
+) -> List[EvidenceTuple]:
+    pdf_stem = pdf_path.stem
     evidence_filename = f"{pdf_stem}_evidences.json"
-    evidence_path = save_dir / evidence_filename
-    # 尝试直接读取
+    evidence_path = save_dir / CONFIG.llm_name / evidence_filename
     if evidence_path.exists():
         print(f"    - 检测到已有的evidences，加载: {evidence_filename}")
-        evidences = json.loads(evidence_path.read_text(encoding="utf-8"))
-        return evidences
+        return _normalize_evidence_tuples(json.loads(evidence_path.read_text(encoding="utf-8")))
+
+    report_date = _parse_report_date_from_path(pdf_path)
+    if report_date:
+        print(f"  - 研报写作日期: {report_date.strftime('%Y-%m-%d')}", flush=True)
 
     print(f"\n-> 开始提取并清洗文件: {pdf_path.name}", flush=True)
+    from src.pipelines.planning import process_pdf_to_outline
+    from src.utils.instance import formatter, llm_instruct, llm_reasoning
+
     manuscript = await process_pdf_to_outline(pdf_path, save_dir, llm_reasoning, llm_instruct, formatter, only_evidence)
     print(f"  - 从 {pdf_path.name} 的结构中提取论据...")
-    return await extract_unique_evidences(manuscript, evidence_path)
+    return await extract_unique_evidences(
+        manuscript,
+        evidence_path,
+        stock_entity_name=stock_entity_name,
+        report_date=report_date,
+    )
 
-async def extract_unique_evidences(manuscript: Section, evidence_path: Path) -> List[str]:
+
+async def extract_unique_evidences(
+    manuscript: Section,
+    evidence_path: Path,
+    stock_entity_name: str = "",
+    report_date: Optional[datetime] = None,
+) -> List[EvidenceTuple]:
+    if evidence_path.exists():
+        return _normalize_evidence_tuples(json.loads(evidence_path.read_text(encoding="utf-8")))
+
     evidences = get_all_evidences_from_section(manuscript)
-    print(f"  - 对 {len(evidences)} 条原始论据进行语义去重...")
-
-    evidences = await drop_duplicate_evidences(evidences)
-    # 保存到long_term_dir
+    print(f"  - 对 {len(evidences)} 条原始论据进行语义去重...", flush=True)
+    evidences = await drop_duplicate_evidences_by_similarity(
+        evidences,
+        stock_entity_name=stock_entity_name,
+        report_date=report_date,
+    )
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
     evidence_path.write_text(
         json.dumps(evidences, ensure_ascii=False, indent=2),
-        encoding="utf-8"
+        encoding="utf-8",
     )
-    print(f"    -> Evidence已保存到: {evidence_path}")
+    print(f"    -> Evidence已保存到: {evidence_path}", flush=True)
     return evidences
 
+
+def _parse_report_date_from_path(pdf_path: Path) -> Optional[datetime]:
+    parts = pdf_path.stem.split("_")
+    if len(parts) < 2:
+        return None
+    try:
+        return datetime.strptime(parts[1], "%Y-%m-%d")
+    except ValueError:
+        return None
+
+
+def _quarter_label(year: int, quarter: int) -> str:
+    while quarter > 4:
+        year += 1
+        quarter -= 4
+    while quarter < 1:
+        year -= 1
+        quarter += 4
+    return f"{year}年Q{quarter}"
+
+
+def _replace_relative_quarter(text: str, report_date: datetime) -> str:
+    year = report_date.year
+    quarter = (report_date.month - 1) // 3 + 1
+    result = text
+    result = re.sub(r"下一?季度", _quarter_label(year, quarter + 1), result)
+    result = re.sub(r"上一?季度", _quarter_label(year, quarter - 1), result)
+    return re.sub(r"[本当]季度", _quarter_label(year, quarter), result)
+
+
+def _replace_relative_year(text: str, report_date: datetime) -> str:
+    year = report_date.year
+    result = text
+    result = re.sub(r"前年", f"{year - 2}年", result)
+    result = re.sub(r"去年|上年|上一年|上年度", f"{year - 1}年", result)
+    result = re.sub(r"今年|本年|本年度", f"{year}年", result)
+    return re.sub(r"明年|下一年", f"{year + 1}年", result)
+
+
+def _resolve_relative_time(text: str, report_date: Optional[datetime]) -> str:
+    if report_date is None:
+        return text
+    return _replace_relative_year(_replace_relative_quarter(text, report_date), report_date)
+
+
+def _extract_time_tag(text: str) -> str:
+    quarter_match = re.search(r"(20\d{2})\s*年?\s*[Qq]\s*([1-4])", text)
+    if quarter_match:
+        return f"{quarter_match.group(1)}Q{quarter_match.group(2)}"
+    half_match = re.search(r"(20\d{2})\s*年?\s*([上下])半年", text)
+    if half_match:
+        return f"{half_match.group(1)}H{'1' if half_match.group(2) == '上' else '2'}"
+    year_match = re.search(r"(?<!\d)(20\d{2})(?!\d)", text)
+    if year_match:
+        return year_match.group(1)
+    return "NO_TIME"
+
+
+def _clean_evidence_text(text: str, stock_entity_name: str = "") -> str:
+    cleaned = (text or "").strip()
+    for token in ("查询", "确认", "计算", "获取"):
+        cleaned = cleaned.replace(token, "")
+    if stock_entity_name:
+        cleaned = cleaned.replace(stock_entity_name, "")
+    for token in ("本公司", "本股票", "目标公司", "目标股票", "研报公司", "研报股票", "该公司", "该股票", "公司的", "股票的"):
+        cleaned = cleaned.replace(token, "")
+    return cleaned.replace("公司", "").strip()
+
+
+def _similarity_score(left: str, right: str) -> float:
+    if not left or not right:
+        return 0.0
+    if fuzz is not None:
+        return float(fuzz.token_set_ratio(left, right)) / 100.0
+    return difflib.SequenceMatcher(None, left, right).ratio()
+
+
+def _group_evidences_by_time(
+    evidences: List[EvidenceTuple],
+    report_date: Optional[datetime],
+) -> Dict[str, List[EvidenceTuple]]:
+    groups: Dict[str, List[EvidenceTuple]] = defaultdict(list)
+    for evidence in evidences:
+        resolved = _resolve_relative_time(evidence[0], report_date)
+        groups[_extract_time_tag(resolved)].append(evidence)
+    return groups
+
+
+def _semhash_filter_evidences(evidences: List[EvidenceTuple], semhash_threshold: float) -> List[EvidenceTuple]:
+    if SemHash is None or len(evidences) <= 1:
+        return evidences
+    try:
+        records = [{"text": evidence[0], "idx": idx} for idx, evidence in enumerate(evidences)]
+        result = SemHash.from_records(records, columns=["text"]).self_deduplicate(threshold=semhash_threshold)
+        kept_indices = {record["idx"] for record in result.selected}
+        return [evidences[idx] for idx in sorted(kept_indices)]
+    except Exception as exc:
+        print(f"      semhash 去重失败，保留 rapidfuzz 结果: {exc}", flush=True)
+        return evidences
+
+
+def _dedupe_evidence_group(evidences: List[EvidenceTuple], fuzzy_threshold: float) -> List[EvidenceTuple]:
+    kept: List[EvidenceTuple] = []
+    for evidence in evidences:
+        if any(_similarity_score(evidence[0], existing[0]) >= fuzzy_threshold for existing in kept):
+            continue
+        kept.append(evidence)
+    return kept
+
+
+async def drop_duplicate_evidences_by_similarity(
+    evidences: List[EvidenceTuple],
+    fuzzy_threshold: float = 0.85,
+    semhash_threshold: float = 0.90,
+    stock_entity_name: str = "",
+    report_date: Optional[datetime] = None,
+) -> List[EvidenceTuple]:
+    normalized = []
+    seen = set()
+    for text, value in _normalize_evidence_tuples(evidences):
+        cleaned = _clean_evidence_text(text, stock_entity_name)
+        key = (cleaned, value)
+        if cleaned and key not in seen:
+            seen.add(key)
+            normalized.append((cleaned, value))
+
+    if len(normalized) <= 1:
+        return normalized
+
+    groups = _group_evidences_by_time(normalized, report_date)
+    final_evidences: List[EvidenceTuple] = []
+    for tag, group in sorted(groups.items()):
+        deduped = _dedupe_evidence_group(group, fuzzy_threshold)
+        deduped = _semhash_filter_evidences(deduped, semhash_threshold)
+        if len(group) != len(deduped):
+            print(f"      时间组 [{tag}]: {len(group)} -> {len(deduped)}", flush=True)
+        final_evidences.extend(deduped)
+    print(f"    - 两阶段去重总结：{len(normalized)} -> {len(final_evidences)} 条", flush=True)
+    return final_evidences
+
+
 async def drop_duplicate_evidences(evidences: List[str]) -> List[str]:
-    sys_prompt = f"""你是一名专业的金融分析助手，擅长数据清洗和信息摘要。
-你的任务是对以下从一份研报大纲中提取的“论据（evidences）”列表进行去重。列表中的许多条目可能措辞不同，但表达的是相同或相似的含义。每行是带有id的一条论据。
-
-### 流程
-遍历每一个序号对应的论据，然后检查所有论据，找到所有含义相同的论据，该组论据对应的一或多个id用空格隔开，单独放在一行。然后遍历下一个论据，如果该论据已在上文中被划分到某组，则跳过。
-最后输出所有组用<ANSWER>和</ANSWER>包裹住，每组一行，只包含数字id和空格。
-
-""" + """
-### 要求
-1. 完整遍历所有论据，确保没有遗漏。
-2. 忽视论据提及的数据来源，忽视每条论据涉及“查询”等动词，请关注核心实体或指标。如果有时间范围约束，则不同时间的实体属于不同的论据，不应去重。
-3. 如果某条论据本身就是独特的，没有与之重复的项，那么必须将它包含在最终的列表中。
-""" if len(evidences) < 300 else f"""
-### 要求
-1. 遍历每条论据。
-2. 忽视论据提及的数据来源，忽视每条论据涉及“查询”等动词，请关注核心实体或指标。如果有时间范围约束，则不同时间的实体属于不同的论据，不应去重。
-3. 如果某条论据本身就是独特的，没有与之重复的项，那么跳过，不必输出该论据id。（即每一组论据至少有两个不同的id）
-""" + """
-#### 输出示例
-<ANSWER>
-1 3 6
-2 6 19
-</ANSWER>
-"""
-    _evidences = [e.replace("查询", "").replace("确认", "").replace("计算", "")
-                  .replace("获取", "") for e in evidences]
-    evidences = []
-    for e in _evidences:
-        if e not in evidences:
-            evidences.append(e)
-    numbered_evidences = "\n".join(f"{i+1} {e}" for i, e in enumerate(evidences))
-    def _parse(response: str) -> List[str]:
-        response = re.search(r"<ANSWER>(.*?)</ANSWER>", response, re.DOTALL)
-        assert response is not None, "没有找到<ANSWER>标签包裹的内容。"
-        response = response.group(1).strip()
-        groups = []
-        seen_ids = set()
-        for line in response.strip().splitlines():
-            ids = line.strip().split()
-            for _id in ids: assert re.match(r"^\d+$", _id), f"输出格式错误：输出了数字id之外的其他字符: {_id}"
-            unique_ids = [int(id_) for id_ in ids if id_ not in seen_ids]
-            if unique_ids:
-                groups.append(unique_ids)
-                seen_ids.update(unique_ids)
-        unseen_ids = set(range(1, 1 + len(evidences))) - seen_ids
-        unique_evidences = []
-        for group in groups:
-            first_id = int(group[0]) - 1
-            unique_evidences.append(list(evidences)[first_id])
-        for unseen_id in unseen_ids:
-            first_id = int(unseen_id) - 1
-            unique_evidences.append(list(evidences)[first_id])
-        return unique_evidences
-    return await call_chatbot_with_retry(
-        llm_instruct, formatter,
-        sys_prompt, f"需要处理的论据列表如下：\n---\n{numbered_evidences}\n---",
-        hook=_parse, handle_hook_exceptions=(AssertionError, TypeError), max_retries=3,
-    )
+    pairs = [(evidence, "") for evidence in evidences]
+    deduped = await drop_duplicate_evidences_by_similarity(pairs)
+    return [text for text, _ in deduped]
 
 
-async def find_best_matches(source_texts: List[str], texts_to_match: List[str]) -> List[Tuple[str, str]]:
-    # 为每个列表的项加上唯一ID
-    texts_to_match_formatted = "\n".join(f"  R_{i + 1}: {text}" for i, text in enumerate(texts_to_match))
-    source_texts_formatted = "\n".join(f"  S_{i + 1}: {text}" for i, text in enumerate(source_texts))
+def _bm25_similarity_matrix(texts_a: List[str], texts_b: List[str]) -> np.ndarray:
+    tokens_a = [_tokenize_for_bm25(t) for t in texts_a]
+    tokens_b = [_tokenize_for_bm25(t) for t in texts_b]
+    matrix = np.zeros((len(texts_a), len(texts_b)), dtype=np.float32)
+    for idx, query_tokens in enumerate(tokens_a):
+        matrix[idx] = _bm25_scores(query_tokens, tokens_b)
+    minimum = float(matrix.min()) if matrix.size else 0.0
+    maximum = float(matrix.max()) if matrix.size else 0.0
+    if maximum - minimum > 1e-8:
+        matrix = (matrix - minimum) / (maximum - minimum)
+    return matrix
 
-    prompt = f"""你是一个精准的语义匹配引擎。你的任务是从“源列表(S)”中，为“待匹配列表(R)”里的每一项找到与之**完全匹配或语义上非常相似**的匹配项。
 
-## 任务指令
-1.  仔细阅读下面提供的两个列表：待匹配列表(R)和源列表(S)。
-2.  对于 R 中的**每一项**（如 R_500），请在 S 中找到与之含义最相同、同时约束条件（例如时间）相同的匹配项（如 S_600）。
-    -   如果对于某个 R_ID，在 S 列表中找不到任何合适的匹配项，请{'设为 NONE' if len(source_texts) + len(texts_to_match) < 500 else '跳过，不输出该项'}。
-    -   如果存在多个合适的匹配项，选最匹配的一个，不要输出多个S_。
-3.  你的答案必须包裹在<ANSWER>和</ANSWER>内。其中每一行是待匹配ID和找到的源ID，逗号隔开。
-
-### 输出示例
-<ANSWER>
-R_1, S_5
-R_3, S_4
-R_6, S_2
-</ANSWER>
-"""
-    def _parse(response: str) -> Dict[str, str]:
-        match_map_by_id = {}
-        answer_match = re.search(r"<ANSWER>(.+)</?ANSWER>", response, re.DOTALL)
-        assert answer_match is not None, "输出格式错误：未找到<ANSWER>和</ANSWER>标签包裹的内容。"
-        answer_content = answer_match.group(1).strip().replace('-', '_')
-        for line in answer_content.splitlines():
-            if "NONE" in line or "无" in line:
+def _rapidfuzz_match(
+    source_evidences: List[EvidenceTuple],
+    ref_evidences: List[EvidenceTuple],
+    match_threshold: float = 0.60,
+    source_report_date: Optional[datetime] = None,
+    ref_report_date: Optional[datetime] = None,
+) -> List[EvidenceMatch]:
+    candidates = []
+    source_tags = [_extract_time_tag(_resolve_relative_time(text, source_report_date)) for text, _ in source_evidences]
+    ref_tags = [_extract_time_tag(_resolve_relative_time(text, ref_report_date)) for text, _ in ref_evidences]
+    for ref_idx, ref_evidence in enumerate(ref_evidences):
+        for source_idx, source_evidence in enumerate(source_evidences):
+            if ref_tags[ref_idx] != source_tags[source_idx] and "NO_TIME" not in {ref_tags[ref_idx], source_tags[source_idx]}:
                 continue
-            res = re.search(r"(R_\d+).+(S_\d+)", line.strip())
-            assert res is not None, f"输出格式错误。错误行: {line}"
-            r_id, s_id = res.group(1), res.group(2)
-            match_map_by_id[r_id] = s_id
-        return match_map_by_id
-    match_map_by_id = await call_chatbot_with_retry(
-        llm_instruct, formatter,
-        prompt, f"**待匹配列表(R):**\n---\n{texts_to_match_formatted}\n---\n\n"
-                f"**源列表(S):**\n---\n{source_texts_formatted}\n---\n\n",
-        hook=_parse, handle_hook_exceptions=(AssertionError, ), max_retries=3,
+            score = _similarity_score(ref_evidence[0], source_evidence[0])
+            if score >= match_threshold:
+                candidates.append((score, ref_idx, source_idx))
+    candidates.sort(key=lambda item: item[0], reverse=True)
+
+    matched_ref = set()
+    matched_source = set()
+    matches: List[EvidenceMatch] = []
+    for score, ref_idx, source_idx in candidates:
+        if ref_idx in matched_ref or source_idx in matched_source:
+            continue
+        source_text, source_value = source_evidences[source_idx]
+        ref_text, ref_value = ref_evidences[ref_idx]
+        matches.append((source_text, ref_text, source_value, ref_value))
+        matched_ref.add(ref_idx)
+        matched_source.add(source_idx)
+    return matches
+
+
+async def _fallback_bm25_match(
+    source_evidences: List[EvidenceTuple],
+    ref_evidences: List[EvidenceTuple],
+    min_threshold: float = 0.5,
+) -> List[EvidenceMatch]:
+    source_texts = [text for text, _ in source_evidences]
+    ref_texts = [text for text, _ in ref_evidences]
+    bm25_sim = _bm25_similarity_matrix(ref_texts, source_texts)
+    candidates = []
+    for ref_idx in range(len(ref_texts)):
+        for source_idx in range(len(source_texts)):
+            score = float(bm25_sim[ref_idx, source_idx])
+            if score >= min_threshold:
+                candidates.append((score, ref_idx, source_idx))
+    candidates.sort(key=lambda item: item[0], reverse=True)
+
+    matched_ref = set()
+    matched_source = set()
+    matches: List[EvidenceMatch] = []
+    for score, ref_idx, source_idx in candidates:
+        if ref_idx in matched_ref or source_idx in matched_source:
+            continue
+        source_text, source_value = source_evidences[source_idx]
+        ref_text, ref_value = ref_evidences[ref_idx]
+        matches.append((source_text, ref_text, source_value, ref_value))
+        matched_ref.add(ref_idx)
+        matched_source.add(source_idx)
+    return matches
+
+
+async def find_best_matches_by_similarity(
+    source_evidences: List[EvidenceTuple],
+    ref_evidences: List[EvidenceTuple],
+    source_report_date: Optional[datetime] = None,
+    ref_report_date: Optional[datetime] = None,
+) -> List[EvidenceMatch]:
+    source_evidences = _normalize_evidence_tuples(source_evidences)
+    ref_evidences = _normalize_evidence_tuples(ref_evidences)
+    if not source_evidences or not ref_evidences:
+        return []
+
+    matches = _rapidfuzz_match(
+        source_evidences,
+        ref_evidences,
+        source_report_date=source_report_date,
+        ref_report_date=ref_report_date,
     )
-    evidence_pairs = []
-    for i, r_text in enumerate(texts_to_match):
-        r_id = f"R_{i + 1}"
-        s_id = match_map_by_id.get(r_id)
+    if not matches:
+        matches = await _fallback_bm25_match(source_evidences, ref_evidences)
+    print(f"    -> 配对完成，成功构建了 {len(matches)} 对可供判断的论据。")
+    return matches
 
-        if s_id and s_id != "NONE":
-            try:
-                s_idx = int(s_id.split('_')[1]) - 1
-                if 0 <= s_idx < len(source_texts):
-                    s_text = source_texts[s_idx]
-                    evidence_pairs.append((s_text, r_text))
-            except (ValueError, IndexError) as e:
-                print(e)
-                continue  # 如果ID格式错误，则跳过
 
-    print(f"    -> 配对完成，成功构建了 {len(evidence_pairs)} 对可供判断的论据。")
-    return evidence_pairs
+async def find_best_matches(
+    source_evidences: List[EvidenceTuple],
+    ref_evidences: List[EvidenceTuple],
+    source_report_date: Optional[datetime] = None,
+    ref_report_date: Optional[datetime] = None,
+) -> List[EvidenceMatch]:
+    return await find_best_matches_by_similarity(
+        source_evidences,
+        ref_evidences,
+        source_report_date=source_report_date,
+        ref_report_date=ref_report_date,
+    )
 
 
 async def find_locations_in_outline(outline_content_str: str, evidences_to_find: List[str]) -> Dict[str, str]:
@@ -264,6 +495,9 @@ EV_3,s2_s3_p2
             assert ev_id.strip().startswith("EV_"), f"输出格式错误：论据ID没有用EV_开头。错误行: {line}"
             locations_map[ev_id.strip()] = location.strip()
         return locations_map
+
+    from src.utils.call_with_retry import call_chatbot_with_retry
+    from src.utils.instance import formatter, llm_instruct
 
     locations_map_by_id = await call_chatbot_with_retry(
         llm_instruct, formatter,
@@ -404,21 +638,35 @@ async def process_single_stock_pair(stock_code: str, old_path: Path, new_path: P
         try:
             print(f"\n======= 正在处理股票: {stock_code} =======", flush=True)
 
-            evidences_old = await extract_unique_evidences_from_pdf(old_path, long_term_dir / "demonstration")
-            evidences_new = await extract_unique_evidences_from_pdf(new_path, long_term_dir / "demonstration")
+            stock_entity_name = get_entity_name_by_code(stock_code)
+            evidences_old = await extract_unique_evidences_from_pdf(
+                old_path,
+                long_term_dir / "demonstration",
+                stock_entity_name=stock_entity_name,
+            )
+            evidences_new = await extract_unique_evidences_from_pdf(
+                new_path,
+                long_term_dir / "demonstration",
+                stock_entity_name=stock_entity_name,
+            )
             # ===== 并发提取两份报告的论据 =====
             # evidences_old, evidences_new = await asyncio.gather(
             #     extract_unique_evidences_from_pdf(old_path, long_term_dir / "demonstration"),
             #     extract_unique_evidences_from_pdf(new_path, long_term_dir / "demonstration")
             # )
-            common_evidences_texts = await find_best_matches(evidences_old, evidences_new)
+            common_evidences_texts = await find_best_matches(
+                evidences_old,
+                evidences_new,
+                source_report_date=_parse_report_date_from_path(old_path),
+                ref_report_date=_parse_report_date_from_path(new_path),
+            )
 
             common_evidences_with_locs = []
             assert len(common_evidences_texts) > 0, "!!! 未找到任何共通论据"
             if common_evidences_texts:
                 print(f"\n  --- 开始为 {len(common_evidences_texts)} 条共通论据定位 ---", flush=True)
-                outline_old_path = long_term_dir / "demonstration" / cfg.llm_name / f"{old_path.stem}_outline.json"
-                outline_new_path = long_term_dir / "demonstration" / cfg.llm_name / f"{new_path.stem}_outline.json"
+                outline_old_path = long_term_dir / "demonstration" / CONFIG.llm_name / f"{old_path.stem}_outline.json"
+                outline_new_path = long_term_dir / "demonstration" / CONFIG.llm_name / f"{new_path.stem}_outline.json"
                 if not outline_new_path.exists():
                     outline_new_path = long_term_dir / "demonstration" / f"{new_path.stem}_outline.json"
                 if not outline_old_path.exists():
@@ -432,9 +680,10 @@ async def process_single_stock_pair(stock_code: str, old_path: Path, new_path: P
                     find_locations_in_outline(outline_old_content, [e[0] for e in common_evidences_texts]),
                     find_locations_in_outline(outline_new_content, [e[1] for e in common_evidences_texts])
                 )
-                for old_text, new_text in common_evidences_texts:
+                for old_text, new_text, old_value, new_value in common_evidences_texts:
                     common_evidences_with_locs.append({
                         "text": (old_text, new_text),
+                        "value": (old_value, new_value),
                         "location_old": locations_old.get(old_text, "NONE"),
                         "location_new": locations_new.get(new_text, "NONE")
                     })
@@ -485,8 +734,8 @@ async def main():
     if not report_pairs: print("未找到任何可处理的研报对，程序退出。"); return
 
     existing_results = []
-    output_json_path = PROJECT_ROOT / "data" / "output" / "comparison_results.json"
-    output_txt_path = PROJECT_ROOT / "data"  / "output" / "comparison_results.txt"
+    output_json_path = PROJECT_ROOT / "output" / "comparison_results.json"
+    output_txt_path = PROJECT_ROOT / "output" / "comparison_results.txt"
     if output_json_path.exists():
         with open(output_json_path, 'r', encoding='utf-8') as f:
             try: existing_results = json.load(f)

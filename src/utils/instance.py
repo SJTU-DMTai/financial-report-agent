@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import inspect
 from agentscope.model import DashScopeChatModel
 from agentscope.token import HuggingFaceTokenCounter
 from agentscope.formatter import (
@@ -21,6 +22,13 @@ from src.utils.format import PatchedOpenAIChatFormatter
 import config
 
 cfg = config.Config()
+
+
+def _create_openai_chat_model(**kwargs):
+    params = inspect.signature(OpenAIChatModel.__init__).parameters
+    if "client_kwargs" in kwargs and "client_kwargs" not in params:
+        kwargs["client_args"] = kwargs.pop("client_kwargs")
+    return OpenAIChatModel(**kwargs)
 
 
 def create_chat_model(reasoning=True, model_cfg=None):
@@ -47,7 +55,7 @@ def create_chat_model(reasoning=True, model_cfg=None):
         if not reasoning and not reasoning_only:
             resolved_model_name = non_reasoning_model_name or model_name.replace("-thinking", "")
             extra_body["reasoning"] = {"enabled": False}
-        return OpenAIChatModel(
+        return _create_openai_chat_model(
             model_name=resolved_model_name,
             api_key=os.environ.get("API_KEY"),
             stream=stream,
@@ -69,7 +77,7 @@ def create_chat_model(reasoning=True, model_cfg=None):
             generate_kwargs["reasoning_effort"] = m.get("reasoning_effort", "high")
         else:
             generate_kwargs["temperature"] = temperature
-        return OpenAIChatModel(
+        return _create_openai_chat_model(
             model_name=model_name,
             api_key=os.environ.get("API_KEY"),
             stream=stream,
@@ -85,7 +93,7 @@ def create_chat_model(reasoning=True, model_cfg=None):
         )
 
     elif provider in ["xiaomi"]:
-        return OpenAIChatModel(
+        return _create_openai_chat_model(
             model_name=model_name,
             api_key=os.environ.get("API_KEY"),
             stream=stream,
@@ -94,7 +102,7 @@ def create_chat_model(reasoning=True, model_cfg=None):
         )
 
     elif provider in ["ark"]:
-        return OpenAIChatModel(
+        return _create_openai_chat_model(
             model_name=model_name,
             api_key=os.environ.get("API_KEY"),
             stream=stream,
@@ -113,7 +121,7 @@ def create_chat_model(reasoning=True, model_cfg=None):
                    "ADAMS-PREDICT-LIMIT-S": "300",  # 配置前端超时为300秒
                    }
         model_name = client.models.list(extra_headers=headers).data[0].id  # 获取服务对应的模型名
-        return OpenAIChatModel(
+        return _create_openai_chat_model(
             model_name=model_name,
             api_key=os.environ.get("API_KEY"),
             stream=stream,
@@ -125,7 +133,7 @@ def create_chat_model(reasoning=True, model_cfg=None):
         )
 
     else:
-        return OpenAIChatModel(
+        return _create_openai_chat_model(
             model_name=model_name,
             api_key=os.environ.get("API_KEY"),
             stream=stream,
@@ -183,7 +191,7 @@ def create_vlm_model():
     temperature = m.get("vision_temperature", 0.1)
 
     if provider == "openrouter":
-        return OpenAIChatModel(
+        return _create_openai_chat_model(
             model_name=model_name,
             api_key = os.environ.get("VLM_API_KEY") or os.environ.get("API_KEY"),
             stream=stream,
@@ -191,14 +199,14 @@ def create_vlm_model():
             generate_kwargs={"temperature": temperature},
         )
     elif provider in ["ark"]:
-        return OpenAIChatModel(
+        return _create_openai_chat_model(
             model_name=model_name,
             api_key="7e3cde63-e447-4a63-9445-69c8942fdfa9",
             stream=stream,
             client_kwargs={"base_url": base_url},
         )
     elif provider == "xiaomi":
-        return OpenAIChatModel(
+        return _create_openai_chat_model(
             model_name=model_name,
             api_key = os.environ.get("VLM_API_KEY") or os.environ.get("API_KEY"),
             stream=stream,
@@ -215,7 +223,7 @@ def create_vlm_model():
                    "ADAMS-PREDICT-LIMIT-S": "300",  # 配置前端超时为300秒
                    }
         model_name = client.models.list(extra_headers=headers).data[0].id  # 获取服务对应的模型名
-        return OpenAIChatModel(
+        return _create_openai_chat_model(
             model_name=model_name,
             api_key=os.environ.get("API_KEY"),
             stream=stream,

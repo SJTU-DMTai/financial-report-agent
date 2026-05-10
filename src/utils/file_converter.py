@@ -7,7 +7,7 @@ import warnings
 
 
 # Windows 特定编码修复
-if sys.platform == 'win32':
+if sys.platform == 'win32' and "pytest" not in sys.modules:
     try:
         import io
         # 修复标准输出的编码
@@ -27,9 +27,6 @@ from src.utils.generate_palette import generate_palette
 import pdfkit
 from pdfkit.configuration import Configuration
 from pathlib import Path
-from marker.converters.pdf import PdfConverter
-from marker.models import create_model_dict
-from marker.output import text_from_rendered
 import markdown
 import re
 import html
@@ -869,6 +866,10 @@ def pdf_to_markdown(
     """
     if isinstance(pdf_path, str):
         pdf_path = Path(pdf_path)
+
+    from marker.converters.pdf import PdfConverter
+    from marker.models import create_model_dict
+    from marker.output import text_from_rendered
 
     converter = PdfConverter(artifact_dict=create_model_dict())
     rendered = converter(str(pdf_path))
