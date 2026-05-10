@@ -142,6 +142,48 @@ def create_chat_model(reasoning=True, model_cfg=None):
                              "temperature": temperature},
         )
 
+def create_emb_model(model_cfg=None):
+    m = model_cfg or cfg.get_embedding_cfg()
+    provider = m["provider"]
+    model_name = m["model_name"]
+    base_url = m.get("base_url_env", "")
+
+    if provider == "openrouter":
+        from agentscope.embedding import OpenAITextEmbedding
+
+        kwargs = {
+            "base_url": base_url,
+            "model_name": model_name,
+            "api_key": os.environ.get("API_KEY"),
+        }
+        if m.get("dimensions") is not None:
+            kwargs["dimensions"] = m.get("dimensions")
+        return OpenAITextEmbedding(**kwargs)
+
+    if provider == "kalm":
+        from agentscope.embedding import OpenAITextEmbedding
+
+        headers = {
+            "ADAMS-BUSINESS": "1564",
+            "Adams-Platform-User": os.environ.get("USER_NAME"),
+            "Adams-User-Token": os.environ.get("USER_TOKEN"),
+            "ADAMS-PREDICT-LIMIT-S": "600",
+        }
+        kwargs = {
+            "base_url": m.get(
+                "embedding_base_url",
+                "http://mmdcadamsminiserverproxy.polaris:25340/service/15049/v1",
+            ),
+            "model_name": m.get("embedding_model_name", model_name),
+            "api_key": os.environ.get("API_KEY"),
+            "default_headers": headers,
+        }
+        if m.get("dimensions") is not None:
+            kwargs["dimensions"] = m.get("dimensions")
+        return OpenAITextEmbedding(**kwargs)
+
+    raise NotImplementedError(f"当前 provider 暂未配置 embedding model: {provider}")
+
 def create_agent_formatter(model_cfg=None):
     m = model_cfg or cfg.get_model_cfg()
     provider = m["provider"]

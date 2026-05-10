@@ -13,9 +13,7 @@ class Evidence(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     text: str
-    # 仅当该论据是静态事实，且其确定值已经能直接从参考片段中得到时，才标记为 True。
     is_static: bool = False
-    # dev 分支的证据抽取会把“论据描述”和“具体事实”拆开保存。
     value: Optional[str] = None
 
     @classmethod
@@ -145,19 +143,10 @@ class Section(BaseModel):
         return Segment(template=template, requirements=requirements, topic=topic, evidences=evidences)
 
     @staticmethod
-    def parse_evidence(contents: str) -> Segment:
-        keys = ['evidence', 'topic']
-        cnts = [contents.count(f"<{k}>") for k in keys]
-        for c1 in cnts:
-            for c2 in cnts:
-                assert c1 == c2 > 0, "Incomplete answer. You must give <evidence>, </evidence>, <topic> and </topic> for each item. Please Retry."
-        contents = contents.replace("\r\n", "\n")
-        print(contents, flush=True)
-        res = re.findall(r"<evidence>(.+?)(?:</evidence>)?\s*<topic>(.+?)</topic>", contents, re.DOTALL)
-        assert len(res) > 0, "Format error. You did not correctly warp evidence or topic with the corresponding blocks and put them in order. Please Retry."
-        evidences_text, topic = [s.strip() for s in res[0]]
-        evidences = _parse_evidences(evidences_text)
-        return Segment(template=None, requirements=None, topic=topic, evidences=evidences)
+    def parse_evidence(contents: str) -> Segment | str:
+        json_payload = _extract_json_payload(contents)
+        assert json_payload is not None, "Format error. Evidence extraction must output a JSON object."
+        return _parse_json_evidence_response(json_payload)
 
 
 def _format_evidence_for_display(evidence: Evidence) -> str:
@@ -196,14 +185,54 @@ def _parse_evidences(evidences_text: str) -> Optional[List[Evidence]]:
 
 
 def _coerce_evidence_mapping(mapping: dict) -> List[Evidence]:
+    text = str(mapping.get("text") or mapping.get("description") or mapping.get("evidence") or "").strip()
+    if text:
+        value = mapping.get("value")
+        if value is None:
+            value = mapping.get("fact")
+        return [
+            Evidence(
+                text=text,
+                value=str(value).strip() if value is not None else None,
+                is_static=bool(mapping.get("is_static", False)),
+            )
+        ]
+
     evidences = []
     for key, value in mapping.items():
-        if key in {"text", "is_static", "value"}:
-            return [Evidence.model_validate(mapping)]
+        if key in {"text", "description", "evidence", "is_static", "value", "fact"}:
+            return []
         text = str(key).strip()
         if text:
             evidences.append(Evidence(text=text, value=str(value).strip() if value is not None else None))
     return evidences
+
+
+def _extract_json_payload(contents: str) -> str | None:
+    if not isinstance(contents, str):
+        return None
+    text = contents.strip()
+    fenced_match = re.search(r"```(?:json)?\s*(\{.+?\})\s*```", text, re.DOTALL | re.IGNORECASE)
+    if fenced_match:
+        return fenced_match.group(1).strip()
+    if text.startswith("{") and text.endswith("}"):
+        return text
+    start = text.find("{")
+    end = text.rfind("}")
+    if start >= 0 and end > start:
+        return text[start:end + 1]
+    return None
+
+
+def _parse_json_evidence_response(json_payload: str) -> Segment | str:
+    payload = json.loads(json_payload)
+    if payload.get("skip") is True:
+        return "<skip>true</skip>"
+    evidences = _normalize_evidences(payload.get("evidences"))
+    topic = str(payload.get("topic") or "").strip()
+    assert topic, "Format error. JSON evidence response must include topic."
+    assert evidences, "Format error. JSON evidence response must include non-empty evidences."
+    return Segment(template=None, requirements=None, topic=topic, evidences=evidences)
 
 
 def _coerce_evidence_sequence_item(item) -> Optional[Evidence]:

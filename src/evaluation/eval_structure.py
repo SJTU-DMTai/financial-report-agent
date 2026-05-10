@@ -84,6 +84,8 @@ async def structure_score(report: Section, reference_report: Section) -> Tuple[i
         user_prompt,
         structured_model=StructureScore
     )
-    comprehensiveness = scores.get("comprehensiveness")
-    logicality = scores.get("logicality")
+    if isinstance(scores, dict):
+        scores = StructureScore(**scores)
+    comprehensiveness = scores.comprehensiveness
+    logicality = scores.logicality
     return comprehensiveness, logicality

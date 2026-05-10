@@ -759,20 +759,19 @@ def print_benchmark_summary(results_json_path: Path) -> None:
 # ==============================================================================
 
 
-async def main(model_name):
+async def main(method_name: str, new_reports_dir: Path):
     """示例使用"""
     PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
     # 配置路径
     benchmark_json = PROJECT_ROOT / "benchmark.json"
-    new_reports = PROJECT_ROOT / "output" / "reports" / model_name
     long_term = PROJECT_ROOT / "data" / "memory" / "long_term"
-    output = PROJECT_ROOT / "output" / f"{model_name}_benchmark_results.json"
+    output = PROJECT_ROOT / "output" / f"{method_name}_benchmark_results.json"
 
     # 执行评估
     summary = await run_benchmark(
         benchmark_json_path=benchmark_json,
-        new_reports_dir=new_reports,
+        new_reports_dir=new_reports_dir,
         long_term_dir=long_term,
         output_path=output,
     )
@@ -785,12 +784,19 @@ async def main(model_name):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="运行 benchmark 测试，支持并行执行")
     parser.add_argument(
-        "--model_name",
+        "--new_reports_path",
+        type=str,
+        default="",
+    )
+    parser.add_argument(
+        "--method_name",
         type=str,
         default='qwen3-32b',
     )
     args = parser.parse_args()
+    project_root = Path(__file__).resolve().parent.parent.parent
+    new_reports_path = Path(args.new_reports_path) if args.new_reports_path else project_root / "output" / "reports" / args.method_name
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-    asyncio.run(main(args.model_name))
+    asyncio.run(main(args.method_name, new_reports_path))

@@ -394,16 +394,87 @@ async def _fallback_bm25_match(
     return matches
 
 
+def _embeddings_to_array(response) -> np.ndarray:
+    embeddings = getattr(response, "embeddings", None)
+    if embeddings is None and isinstance(response, dict):
+        embeddings = response.get("embeddings")
+    if embeddings is None:
+        raise ValueError("embedding response does not contain embeddings")
+    return np.array(embeddings, dtype=np.float32)
+
+
+async def _embedding_match(
+    source_evidences: List[EvidenceTuple],
+    ref_evidences: List[EvidenceTuple],
+    min_threshold: float,
+) -> List[EvidenceMatch]:
+    from src.utils.instance import create_emb_model
+
+    emb_model = create_emb_model()
+    source_texts = [text for text, _ in source_evidences]
+    ref_texts = [text for text, _ in ref_evidences]
+    print(
+        f"    - 正在通过 embedding model 计算 {len(ref_texts)} x {len(source_texts)} 的相似度矩阵...",
+        flush=True,
+    )
+
+    source_response = await emb_model(source_texts)
+    ref_response = await emb_model(ref_texts)
+    source_embeddings = _embeddings_to_array(source_response)
+    ref_embeddings = _embeddings_to_array(ref_response)
+
+    source_norms = np.linalg.norm(source_embeddings, axis=1, keepdims=True)
+    ref_norms = np.linalg.norm(ref_embeddings, axis=1, keepdims=True)
+    source_embeddings = source_embeddings / np.maximum(source_norms, 1e-8)
+    ref_embeddings = ref_embeddings / np.maximum(ref_norms, 1e-8)
+
+    sim_matrix = ref_embeddings @ source_embeddings.T
+    candidates = []
+    for ref_idx in range(len(ref_texts)):
+        for source_idx in range(len(source_texts)):
+            score = float(sim_matrix[ref_idx, source_idx])
+            if score >= min_threshold:
+                candidates.append((score, ref_idx, source_idx))
+    candidates.sort(key=lambda item: item[0], reverse=True)
+
+    matched_ref = set()
+    matched_source = set()
+    matches: List[EvidenceMatch] = []
+    for score, ref_idx, source_idx in candidates:
+        if ref_idx in matched_ref or source_idx in matched_source:
+            continue
+        source_text, source_value = source_evidences[source_idx]
+        ref_text, ref_value = ref_evidences[ref_idx]
+        matches.append((source_text, ref_text, source_value, ref_value))
+        matched_ref.add(ref_idx)
+        matched_source.add(source_idx)
+        print(
+            f"      embedding匹配 (score={score:.3f}): {source_text[:60]}  <->  {ref_text[:60]}",
+            flush=True,
+        )
+    return matches
+
+
 async def find_best_matches_by_similarity(
     source_evidences: List[EvidenceTuple],
     ref_evidences: List[EvidenceTuple],
     source_report_date: Optional[datetime] = None,
     ref_report_date: Optional[datetime] = None,
+    embedding_threshold: float = 0.7,
 ) -> List[EvidenceMatch]:
     source_evidences = _normalize_evidence_tuples(source_evidences)
     ref_evidences = _normalize_evidence_tuples(ref_evidences)
     if not source_evidences or not ref_evidences:
         return []
+
+    try:
+        matches = await _embedding_match(source_evidences, ref_evidences, embedding_threshold)
+    except Exception as exc:
+        print(f"    - embedding 匹配失败: {exc}，回退到 rapidfuzz/BM25 匹配", flush=True)
+        matches = []
+    if matches:
+        print(f"    -> 配对完成，成功构建了 {len(matches)} 对可供判断的论据（embedding阈值={embedding_threshold}）。")
+        return matches
 
     matches = _rapidfuzz_match(
         source_evidences,

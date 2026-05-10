@@ -13,6 +13,7 @@ class Config:
         llm_name: str = None,
         vlm_name: str = None,
         outline_refine_name: str = None,
+        embedding_name: str = None,
     ):
         """
         加载顺序：
@@ -44,6 +45,11 @@ class Config:
             or os.getenv("OUTLINE_REFINE_NAME")
             or models.get("outline_refine_default")
             or self.llm_name
+        )
+        self.embedding_name = (
+            embedding_name
+            or os.getenv("EMBEDDING_NAME")
+            or models.get("embedding_default")
         )
 
     def get_pdf_style(self) -> dict:
@@ -79,6 +85,13 @@ class Config:
         model_cfg.setdefault("reasoning_only", False)
         model_cfg.setdefault("non_reasoning_model_name", None)
         return model_cfg
+
+    def get_embedding_cfg(self):
+        models = self.data["models"]
+        model_id = self.embedding_name
+        if model_id is None:
+            raise KeyError("未配置 models.embedding_default，且未设置 EMBEDDING_NAME")
+        return deepcopy(models[model_id])
 
     def get_max_verify_rounds(self) -> int:
         verify_config = self.data.get("verify_config", {}) or {}
