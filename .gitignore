@@ -6,6 +6,7 @@ logs/*
 *.out
 *.png
 eval*.txt
+benchmark_prompts.txt
 data/memory/long_term/demonstration/*
 data/memory/long_term/evidences/*
 data/memory/short_term/*

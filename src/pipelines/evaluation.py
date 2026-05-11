@@ -46,9 +46,9 @@ class StructureMetrics:
     """结构指标"""
     total_segments: int
     avg_segments_per_section: float
-    segment_density: float = 0.0     
     comprehensiveness: float      # 结构完整性评分
     logicality: float             # 逻辑性评分
+    segment_density: float = 0.0     
 
 @dataclass
 class EvidenceMetrics:
