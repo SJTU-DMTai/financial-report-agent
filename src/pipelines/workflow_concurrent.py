@@ -468,10 +468,7 @@ async def process_section_concurrently(section: Section, parent_id, task_desc, d
         # 4. 生成标题 (只有在有成功的 Segments 时才执行)
         successful_segments = [s for s in section.segments if s.finished]
         if successful_segments:
-            # 这里需要一个临时的 writer 来做总结
-            print(
-                f"[{time.strftime('%H:%M:%S')}]  🏷️ 生成标题: {section.title[:10]}...", flush=True)
-
+            print(f"[{time.strftime('%H:%M:%S')}]  🏷️ 生成标题: {section.title[:10]}...", flush=True)
             section_text = "\n".join([s.content for s in successful_segments if s.content])
             llm_instruct = create_chat_model(reasoning=False)
             formatter = create_agent_formatter()
@@ -488,7 +485,7 @@ async def process_section_concurrently(section: Section, parent_id, task_desc, d
                 f"该章节是参考了小标题为{section.title}的某个范例撰写的，请你根据初稿重新起一个标题，用<title>和</title>包裹住，限十字以内。"
                 "并在初稿基础上稍作润色，更新后的内容用<content>和</content>包裹住。\n\n"
                 "额外要求：\n"
-                "1. 所有 [^cite_id:xxx] 引用标记都必须原样保留，不允许删除、改写、合并或新增。\n"
+                "1. 所有 [^cite_id:xxx] 材料引用标记都必须原样保留，不允许删除、改写、合并或新增。\n"
                 "2. 所有 ![...](chart:chart_xxx) 图表标记都必须原样保留，不允许删除、改写或新增。\n",
                 _parse_res, handle_hook_exceptions=(AssertionError, )
             )

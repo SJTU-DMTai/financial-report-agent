@@ -747,14 +747,6 @@ def md_to_pdf(
     text = f"[md_to_pdf] 已输出 PDF: {pdf_path}"
     return text
 
-def _compose_section_heading(title: str, number_path: Tuple[int, ...]) -> str:
-    plain_title = _strip_section_number_prefix(title)
-    if not number_path:
-        return plain_title
-    prefix = ".".join(str(part) for part in number_path)
-    return f"{prefix} {plain_title}" if plain_title else prefix
-
-
 def detect_section(line: str, has_section_number: bool = False, has_chinese_h2: bool = False) -> Tuple[int, str, bool, bool]:
     """
     Detect sections using multiple patterns.
@@ -1046,6 +1038,37 @@ def _strip_redundant_leading_heading(content: str, current_title: str) -> str:
     return content.strip()
 
 
+def _strip_content_heading_number_prefixes(content: str) -> str:
+    cleaned_lines = []
+    for line in content.split('\n'):
+        match = re.match(r'^(\s*#{1,6}\s+)(.+)', line)
+        if match:
+            title_text = _strip_section_number_prefix(match.group(2).strip())
+            cleaned_lines.append(f"{match.group(1)}{title_text}")
+            continue
+
+        stripped = line.strip()
+        full_match = re.match(r"^([*_]{2})(.+?)\1$", stripped)
+        if full_match:
+            title_text = _strip_section_number_prefix(full_match.group(2).strip())
+            cleaned_lines.append(line.replace(stripped, f"{full_match.group(1)}{title_text}{full_match.group(1)}", 1))
+            continue
+
+        leading_match = re.match(r"^(\s*)([*_]{2})(.+?)(\2)(.*)$", line)
+        if leading_match:
+            title_text = leading_match.group(3).strip()
+            cleaned_title = _strip_section_number_prefix(title_text)
+            if cleaned_title != title_text:
+                cleaned_lines.append(
+                    f"{leading_match.group(1)}{leading_match.group(2)}{cleaned_title}"
+                    f"{leading_match.group(4)}{leading_match.group(5)}"
+                )
+                continue
+
+        cleaned_lines.append(line)
+    return '\n'.join(cleaned_lines).strip()
+
+
 def _convert_headings_to_strong_paragraphs(content: str) -> str:
     converted_lines = []
     for line in content.split('\n'):
@@ -1060,6 +1083,7 @@ def _convert_headings_to_strong_paragraphs(content: str) -> str:
 
 def _sanitize_section_content(content: str, current_title: str, min_level: int, allow_headings: bool) -> str:
     content = _strip_redundant_leading_heading(content, current_title)
+    content = _strip_content_heading_number_prefixes(content)
     if not content:
         return ""
     if not allow_headings:
@@ -1071,7 +1095,7 @@ def section_to_markdown(section: Section, level: int = 1, number_path: Tuple[int
     if not _has_renderable_content(section):
         return ""
 
-    display_title = _compose_section_heading(section.title, number_path if level > 1 else ())
+    display_title = _strip_section_number_prefix(section.title)
     lines = [f"{'#' * level} {display_title}\n"]
     allow_headings = not bool(section.subsections)
     # 优先使用章节级润色后的内容
@@ -1098,13 +1122,10 @@ def section_to_markdown(section: Section, level: int = 1, number_path: Tuple[int
                     )
                     lines.append(adjusted_content + '\n')
 
-    rendered_child_index = 0
     for subsection in section.subsections:
         if not _has_renderable_content(subsection):
             continue
-        rendered_child_index += 1
-        next_number_path = number_path + (rendered_child_index,) if number_path else (rendered_child_index,)
-        sub_md = section_to_markdown(subsection, level + 1, next_number_path)
+        sub_md = section_to_markdown(subsection, level + 1)
         if sub_md:
             lines.append(sub_md + '\n')
 

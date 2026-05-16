@@ -26,7 +26,7 @@ Edit `.env` and `config.local.yaml` as needed. `config.local.yaml` is preferred 
   - `data/memory/short_term/`: per-run intermediate materials.
 - `output/`: generated reports and evaluation results.
   - `output/reports/<model_name>/`: generated `.json`, `.md`, and `.pdf` reports.
-  - `output/*_benchmark_results.json`: benchmark evaluation outputs.
+  - `output/<method_name>_<evaluator_llm_name>_benchmark_results.json`: benchmark evaluation outputs.
 
 Reference PDF files are loaded from `DEMO_DIR` in `.env`.
 
@@ -50,4 +50,4 @@ Evaluate generated benchmark reports:
 python -m src.pipelines.evaluation --method_name qwen3-32b
 ```
 
-The evaluator reads generated reports from `output/reports/<method_name>/` and writes results to `output/<method_name>_benchmark_results.json`.
+The evaluator reads generated reports from `output/reports/<method_name>/` and writes results to `output/<method_name>_<evaluator_llm_name>_benchmark_results.json`.

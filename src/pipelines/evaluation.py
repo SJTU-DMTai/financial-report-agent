@@ -24,7 +24,7 @@ from src.evaluation.extract_evidence import extract_unique_evidences, get_entity
 from src.evaluation.eval_structure import num_of_segment, structure_score
 from src.evaluation.eval_evidence import evidence_coverage_and_accuracy
 from src.evaluation.eval_content import get_content_score, ContentScore
-from src.utils.instance import llm_reasoning, llm_instruct, formatter
+from src.utils.instance import cfg as MODEL_CONFIG, llm_reasoning, llm_instruct, formatter
 from src.pipelines.planning import process_pdf_to_outline
 from src.utils import local_file
 import config
@@ -143,9 +143,10 @@ def _strip_references_for_scoring(text: Optional[str]) -> Optional[str]:
     if text is None:
         return None
 
-    cleaned = _CHART_IMAGE_PATTERN.sub("", text)
-    cleaned = _CITE_REFERENCE_PATTERN.sub("", cleaned)
-    cleaned = _CHART_REFERENCE_PATTERN.sub("", cleaned)
+    cleaned = text
+    # cleaned = _CHART_IMAGE_PATTERN.sub("", text)
+    # cleaned = _CITE_REFERENCE_PATTERN.sub("", cleaned)
+    # cleaned = _CHART_REFERENCE_PATTERN.sub("", cleaned)
     cleaned = re.sub(r"[ \t]+([，。；：！？,.!?;:])", r"\1", cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     return cleaned.strip()
@@ -299,6 +300,7 @@ def _build_summary(
 ) -> Dict:
     return {
         "total": len(benchmark_items),
+        "evaluator_llm_name": MODEL_CONFIG.llm_name,
         "successful": successful,
         "failed": failed,
         "NONE": none_count,
@@ -408,8 +410,14 @@ async def evaluate_content(new_section: Section) -> ContentScore:
     print(f"      - 共需评估 {len(segment_tasks)} 个segment")
     segment_score_results = await asyncio.gather(
         *[
-            get_content_score(llm_reasoning, formatter, content, topic)
-            for content, topic in segment_tasks
+            get_content_score(
+                llm_reasoning,
+                formatter,
+                content,
+                topic,
+                label=f"[segment {idx}/{len(segment_tasks)}]",
+            )
+            for idx, (content, topic) in enumerate(segment_tasks, 1)
         ],
         return_exceptions=True,
     )
@@ -468,17 +476,33 @@ async def benchmark_single_pair(
     print(f"{'='*60}")
 
     print(f"[1/4] 处理报告...")
-    new_section = await process_pdf_to_outline(new_report_path, new_report_path.parent, llm_reasoning,
-                                               llm_instruct, formatter, only_evidence=True)
-    human_section = await process_pdf_to_outline(human_report_path, long_term_dir / 'evidences', llm_reasoning,
-                                                 llm_instruct, formatter, only_evidence=True)
+    new_outline_cache_dir = new_report_path.parent
+    human_outline_cache_dir = long_term_dir / "evidences"
+    new_section = await process_pdf_to_outline(
+        new_report_path,
+        new_outline_cache_dir,
+        llm_reasoning,
+        llm_instruct,
+        formatter,
+        only_evidence=True,
+        reuse_other_model_cache=True,
+    )
+    human_section = await process_pdf_to_outline(
+        human_report_path,
+        human_outline_cache_dir,
+        llm_reasoning,
+        llm_instruct,
+        formatter,
+        only_evidence=True,
+        reuse_other_model_cache=True,
+    )
     sanitized_new_section = _sanitize_section_for_scoring(new_section)
     sanitized_human_section = _sanitize_section_for_scoring(human_section)
 
     print(f"[2/4] 抽取论据...")
     stock_entity_name = get_entity_name_by_code(stock_code)
     new_evidence_path = new_report_path.parent / "evidences" / f"{new_report_path.stem}_evidences.json"
-    human_evidence_path = long_term_dir / 'evidences' / f"{human_report_path.stem}_evidences.json"
+    human_evidence_path = long_term_dir / "evidences" / f"{human_report_path.stem}_evidences.json"
     new_evidences = await _load_or_extract_evidences(
         new_section,
         new_evidence_path,
@@ -594,7 +618,9 @@ async def run_benchmark(
                 result.human_report_name,
                 result.new_report_name,
             )
-            existing_result_cache[cache_key] = result
+            if cache_key not in existing_result_cache:
+                existing_result_cache[cache_key] = result
+        print(f"✓ 已加载当前评测LLM结果缓存: {output_path}")
     pending_pairs = []
 
     for idx, item in enumerate(benchmark_items, 1):
@@ -771,7 +797,11 @@ async def main(method_name: str, new_reports_dir: Path):
     # 配置路径
     benchmark_json = PROJECT_ROOT / "benchmark.json"
     long_term = PROJECT_ROOT / "data" / "memory" / "long_term"
-    output = PROJECT_ROOT / "output" / f"{method_name}_benchmark_results.json"
+    output_dir = PROJECT_ROOT / "output"
+    evaluator_llm_name = MODEL_CONFIG.llm_name
+    safe_method_name = re.sub(r'[<>:"/\\|?*\s]+', "_", method_name.strip())
+    safe_evaluator_llm_name = re.sub(r'[<>:"/\\|?*\s]+', "_", evaluator_llm_name.strip())
+    output = output_dir / f"{safe_method_name}_{safe_evaluator_llm_name}_benchmark_results.json"
 
     # 执行评估
     summary = await run_benchmark(

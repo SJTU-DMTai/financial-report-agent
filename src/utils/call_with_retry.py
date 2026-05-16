@@ -1,10 +1,13 @@
 # -*- coding: utf-8 -*-
 import asyncio
+import json
 import os
 import random
+import re
 import traceback
 import warnings
 from copy import deepcopy
+from json import JSONDecodeError
 from typing import Iterable, Type, Callable, Optional
 
 from agentscope.agent import ReActAgent
@@ -23,6 +26,30 @@ class EnvMsg(Exception):
     def __init__(self, *args):
         super().__init__(*args)
 
+
+def _build_json_output_prompt(user_prompt: str, structured_model: Type[BaseModel]) -> str:
+    schema = json.dumps(structured_model.model_json_schema(), ensure_ascii=False)
+    return (
+        f"{user_prompt}\n\n"
+        f"输出的JSON 对象必须符合以下 JSON Schema：\n{schema}"
+    )
+
+
+def _parse_structured_json(text: str, structured_model: Type[BaseModel]) -> BaseModel:
+    text = text.strip()
+    fence_match = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
+    if fence_match:
+        text = fence_match.group(1).strip()
+    try:
+        data = json.loads(text)
+    except JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start < 0 or end <= start:
+            raise
+        data = json.loads(text[start:end + 1])
+    return structured_model(**data)
+
 async def call_chatbot_with_retry(
     model: ChatModelBase, formatter: FormatterBase,
     sys_prompt: str, user_prompt: str,
@@ -39,9 +66,16 @@ async def call_chatbot_with_retry(
         semaphore = get_global_semaphore()
 
     assert user_prompt is not None
+    active_cfg = cfg.get_model_cfg()
+    model_name = str(getattr(model, "model_name", ""))
+    text_json_output = (
+        structured_model is not None
+        and (active_cfg.get("provider") == "deepseek" or model_name.startswith("deepseek"))
+    ) # 兼容不支持response_format的provider
+    user_content = _build_json_output_prompt(user_prompt, structured_model) if text_json_output else user_prompt
     messages = [
         Msg("system", sys_prompt, "system"),
-        Msg("user", user_prompt, "user"),
+        Msg("user", user_content, "user"),
     ]
 
     res = ""
@@ -50,15 +84,19 @@ async def call_chatbot_with_retry(
         for _ in range(max_retries):
             try:
                 _messages = await formatter.format(messages)
-                response = await model(_messages, structured_model=structured_model)
+                response = await model(_messages, structured_model=None if text_json_output else structured_model)
                 if structured_model is not None:
-                    metadata = response.metadata
-                    if isinstance(metadata, structured_model):
-                        res = metadata
-                    elif isinstance(metadata, dict):
-                        res = structured_model(**metadata)
+                    if text_json_output:
+                        text = Msg(role='assistant', content=response.content, name='assistant').get_text_content()
+                        res = _parse_structured_json(text, structured_model)
                     else:
-                        res = metadata
+                        metadata = response.metadata
+                        if isinstance(metadata, structured_model):
+                            res = metadata
+                        elif isinstance(metadata, dict):
+                            res = structured_model(**metadata)
+                        else:
+                            res = metadata
                 else:
                     res = Msg(role='assistant', content=response.content, name='assistant').get_text_content()
             except RateLimitError as e:

@@ -304,27 +304,57 @@ def load_section_from_json_text(json_text: str) -> Section:
     return Section.model_validate(upgraded_payload)
 
 
-def _get_outline_cache_paths(pdf_path: Path, save_dir: Path, only_evidence: bool) -> tuple[Path, Path]:
+def _get_outline_cache_path(
+    pdf_path: Path,
+    save_dir: Path,
+    only_evidence: bool,
+) -> Path:
     from src.utils.instance import cfg
 
     stem = pdf_path.stem
     suffix = "_outline_only_evidence.json" if only_evidence else "_outline.json"
-    model_cache_path = save_dir / cfg.llm_name / f"{stem}{suffix}"
-    legacy_cache_path = save_dir / f"{stem}{suffix}"
-    return model_cache_path, legacy_cache_path
+    return save_dir / cfg.llm_name / f"{stem}{suffix}"
 
 
-def _get_outline_cache_candidates(pdf_path: Path, save_dir: Path, only_evidence: bool) -> list[Path]:
-    model_cache_path, legacy_cache_path = _get_outline_cache_paths(pdf_path, save_dir, only_evidence)
-    cache_candidates = [model_cache_path, legacy_cache_path]
+def _get_outline_cache_candidates(
+    pdf_path: Path,
+    save_dir: Path,
+    only_evidence: bool,
+    reuse_other_model_cache: bool = False,
+) -> list[Path]:
+    cache_candidates = [_get_outline_cache_path(pdf_path, save_dir, only_evidence)]
     if only_evidence:
-        full_model_cache_path, full_legacy_cache_path = _get_outline_cache_paths(pdf_path, save_dir, False)
-        cache_candidates.extend([full_model_cache_path, full_legacy_cache_path])
+        full_model_cache_path = _get_outline_cache_path(pdf_path, save_dir, False)
+        if full_model_cache_path not in cache_candidates:
+            cache_candidates.append(full_model_cache_path)
+
+    if reuse_other_model_cache and save_dir.exists():
+        stem = pdf_path.stem
+        suffixes = ["_outline_only_evidence.json"] if only_evidence else ["_outline.json"]
+        if only_evidence:
+            suffixes.append("_outline.json")
+        for child in save_dir.iterdir():
+            if not child.is_dir():
+                continue
+            for suffix in suffixes:
+                candidate = child / f"{stem}{suffix}"
+                if candidate not in cache_candidates:
+                    cache_candidates.append(candidate)
     return cache_candidates
 
 
-def _load_cached_outline(pdf_path: Path, save_dir: Path, only_evidence: bool) -> Section | None:
-    for cache_path in _get_outline_cache_candidates(pdf_path, save_dir, only_evidence):
+def _load_cached_outline(
+    pdf_path: Path,
+    save_dir: Path,
+    only_evidence: bool,
+    reuse_other_model_cache: bool = False,
+) -> Section | None:
+    for cache_path in _get_outline_cache_candidates(
+        pdf_path,
+        save_dir,
+        only_evidence,
+        reuse_other_model_cache,
+    ):
         if cache_path.exists():
             return load_section_from_json_text(cache_path.read_text(encoding="utf-8"))
     return None

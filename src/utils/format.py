@@ -35,9 +35,9 @@ _SECTION_NUMBER_PREFIX_PATTERNS = (
     re.compile(r"^\d+(?:\.\d+)+\s+"),
     re.compile(r"^\d+\.\s+"),
     re.compile(r"^\d+\s+(?!年\b|月\b|日\b)"),
-    re.compile(r"^[一二三四五六七八九十百千]+[、.]\s*"),
-    re.compile(r"^[（(]\d+[）)]\s*"),
-    re.compile(r"^[（(][一二三四五六七八九十百千]+[）)]\s*"),
+    re.compile(r"^[一二三四五六七八九十百千]+[、.．]\s*"),
+    re.compile(r"^[（(][0-9０-９]+[）)][、.．]?\s*"),
+    re.compile(r"^[（(][一二三四五六七八九十百千]+[）)][、.．]?\s*"),
 )
 
 
