@@ -18,7 +18,7 @@ import pandas as pd
 from agentscope.agent import ReActAgent
 from agentscope.message import Msg
 
-from src.evaluation.eval_content import evaluate_segment
+from src.evaluation.eval_content import _extract_score_suggestion
 from src.pipelines.planning import process_pdf_to_outline
 from src.memory.working import Evidence, Section, Segment, load_section_from_json_text
 from src.prompt import prompt_dict
@@ -297,11 +297,11 @@ async def process_single_segment(segment: Segment,
             outline_context_intro = "参考写作模版、写作要求和可能用到的论据如下："
         else:
             outline_context_intro = "写作要求和可能用到的论据如下："
-        writer_input_content = (
-            f"任务：{task_desc}\n"
-            f"当前步骤需要你撰写要点：\n{segment.topic}\n"
-            f"{outline_context_intro}\n\n{str(segment)}\n\n"
-            "请你开始搜索和撰写。"
+        writer_input_content = prompt_dict["segment_writer_user_prompt"].format(
+            task_desc=task_desc,
+            segment_topic=segment.topic,
+            outline_context_intro=outline_context_intro,
+            segment_text=str(segment),
         )
         writer_input = Msg(
             name="user",
@@ -318,8 +318,21 @@ async def process_single_segment(segment: Segment,
 
         for _ in range(3):
             await searcher.memory.clear()
-            suggestions = await evaluate_segment(llm_judge,
-                                                 create_agent_formatter(), segment)
+            # evaluate_segment
+            evaluate_user_prompt = prompt_dict["evaluate_segment_user_prompt"].format(
+                segment_topic=segment.topic or '未指定',
+                segment_reference=segment.reference,
+                segment_requirements=segment.requirements,
+                segment_content=segment.content,
+            )
+            suggestions = await call_chatbot_with_retry(
+                llm_judge,
+                create_agent_formatter(),
+                prompt_dict['compare_content_with_ref'],
+                evaluate_user_prompt,
+                hook=_extract_score_suggestion,
+                handle_hook_exceptions=(AssertionError, KeyError),
+            )
             if suggestions is None:
                 break
             else:
@@ -327,7 +340,7 @@ async def process_single_segment(segment: Segment,
                 writer_input = Msg(
                     name="user",
                     content=(
-                        f"经评估：\n{suggestions}\n"
+                        f"经过评审专家评估，修改意见如下：\n{suggestions}\n"
                         "请你继续修改。修改后的正文请使用<content>和</content>包裹。"
                     ),
                     role="user",
@@ -468,7 +481,7 @@ async def process_section_concurrently(section: Section, parent_id, task_desc, d
         # 4. 生成标题 (只有在有成功的 Segments 时才执行)
         successful_segments = [s for s in section.segments if s.finished]
         if successful_segments:
-            print(f"[{time.strftime('%H:%M:%S')}]  🏷️ 生成标题: {section.title[:10]}...", flush=True)
+            print(f"[{time.strftime('%H:%M:%S')}]  🏷️ 生成标题: {section.title}...", flush=True)
             section_text = "\n".join([s.content for s in successful_segments if s.content])
             llm_instruct = create_chat_model(reasoning=False)
             formatter = create_agent_formatter()
@@ -480,13 +493,11 @@ async def process_section_concurrently(section: Section, parent_id, task_desc, d
                 return title, content
             title, content = await call_chatbot_with_retry(
                 llm_instruct, formatter,
-                "你是撰写金融研报的专家。我将提供某一章节初稿，请你删去无意义的部分，修改不连贯、不流畅的内容，输出润色后的内容，不要篡改关键信息。",
-                f"金融研报某一章节初稿如下：\n\n{section_text}\n\n"
-                f"该章节是参考了小标题为{section.title}的某个范例撰写的，请你根据初稿重新起一个标题，用<title>和</title>包裹住，限十字以内。"
-                "并在初稿基础上稍作润色，更新后的内容用<content>和</content>包裹住。\n\n"
-                "额外要求：\n"
-                "1. 所有 [^cite_id:xxx] 材料引用标记都必须原样保留，不允许删除、改写、合并或新增。\n"
-                "2. 所有 ![...](chart:chart_xxx) 图表标记都必须原样保留，不允许删除、改写或新增。\n",
+                prompt_dict["section_polish_sys_prompt"],
+                prompt_dict["section_polish_user_prompt"].format(
+                    section_text=section_text,
+                    section_title=section.title,
+                ),
                 _parse_res, handle_hook_exceptions=(AssertionError, )
             )
             print_section_reference_warning(section.title, section_text, content)

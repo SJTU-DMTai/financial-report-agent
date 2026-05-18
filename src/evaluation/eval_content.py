@@ -14,15 +14,15 @@ from agentscope.model import ChatModelBase
 
 from src.prompt import prompt_dict
 from src.utils.call_with_retry import call_chatbot_with_retry
-from src.memory.working import Segment, Section
+from src.memory.working import Section
 from pydantic import BaseModel
 
 WRITING_DIMENSIONS = {
     "comprehensiveness": "信息覆盖的广度和深度",
-    "insight": "分析见解的深度和价值",
+    "insightfulness": "分析见解的深度和价值",
     "readability": "结构的清晰度、语言的流畅度、数据呈现的效果以及整体的易理解性",
     "relevance": "各论据、数据和陈述与论点主题的相关性",
-    "sufficiency": "所有论据的充分性和支撑力"
+    "sufficiency": "所有论据的充分性和支撑力",
 }
 
 class ContentScore(BaseModel):
@@ -89,39 +89,9 @@ class SegmentScore(BaseModel):
     relevance: Comparison
     sufficiency: Comparison
 
-async def evaluate_segment(model: ChatModelBase, formatter: FormatterBase, segment: Segment) -> str:
-    """
-    评估给定的 Segment。
-
-    Args:
-        segment: Segment 对象，包含 topic, requirements, reference, content 字段
-
-    Returns:
-        Dict[str, int]: 包含五个维度的评分
-    """
-    # 准备评估提示
-    user_prompt = f"""
-# 评估任务
-
-**核心主题:** {segment.topic or '未指定'}
-
-**人类研报片段（参考）:**
-{segment.reference}
-
-**根据参考片段总结的部分写作要求:**
-{segment.requirements}
-
-**AI Agent生成的研报片段（待评估）:**
-{segment.content}
-"""
-    return await call_chatbot_with_retry(model, formatter,
-                                         prompt_dict['compare_content_with_ref'], user_prompt,
-                                         hook=_extract_score_suggestion,
-                                         handle_hook_exceptions=(AssertionError, KeyError))
-
-def _extract_score_suggestion(text: str) -> str:
+def _extract_score_suggestion(text: str) -> Optional[str]:
     scores_dict = {}
-    suggestions_dict = {}
+    issues = []
 
     dimensions = [
         "comprehensiveness",
@@ -143,21 +113,30 @@ def _extract_score_suggestion(text: str) -> str:
 
         # 提取该维度的建议（仅当分数为 -1 时）
         if scores_dict[dimension] < 0:
+            analysis_match = re.search(
+                rf"<{dimension}>.*?<analysis>(.*?)</analysis>.*?</{dimension}>",
+                text,
+                re.DOTALL | re.IGNORECASE
+            )
             suggestion_match = re.search(
                 rf"<{dimension}>.*?<suggestion>(.*?)</suggestion>.*?</{dimension}>",
                 text,
                 re.DOTALL | re.IGNORECASE
             )
+            assert analysis_match, '未按格式输出'
             assert suggestion_match, '未按格式输出'
+            analysis_text = analysis_match.group(1).strip()
             suggestion_text = suggestion_match.group(1).strip()
-            if suggestion_text:
-                suggestions_dict[dimension] = suggestion_text
+            if analysis_text and suggestion_text:
+                issues.append(
+                    f"- {WRITING_DIMENSIONS.get(dimension, dimension)}不足\n"
+                    f"  评估理由：{analysis_text}\n"
+                    f"  修改建议：{suggestion_text}"
+                )
 
-    suggestions = suggestions_dict if any(suggestions_dict.values()) and len(suggestions_dict) > 0 else None
-    if suggestions:
-        suggestions = "\n".join([f"- {WRITING_DIMENSIONS.get(dim, dim)}不足，建议: {suggestion}"
-                                 for dim, suggestion in suggestions.items() if suggestions])
-    return suggestions
+    if not issues:
+        return None
+    return "\n".join(issues)
 
 # add ContentScore reson; report-level & section level evaluation 
 

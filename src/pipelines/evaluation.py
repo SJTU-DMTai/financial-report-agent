@@ -23,7 +23,7 @@ from src.memory.working import Section, Segment
 from src.evaluation.extract_evidence import extract_unique_evidences, get_entity_name_by_code, _parse_report_date_from_path
 from src.evaluation.eval_structure import num_of_segment, structure_score
 from src.evaluation.eval_evidence import evidence_coverage_and_accuracy
-from src.evaluation.eval_content import get_content_score, ContentScore
+from src.evaluation.eval_content import get_content_score, get_report_level_content_score, ContentScore
 from src.utils.instance import cfg as MODEL_CONFIG, llm_reasoning, llm_instruct, formatter
 from src.pipelines.planning import process_pdf_to_outline
 from src.utils import local_file
@@ -59,6 +59,13 @@ class EvidenceMetrics:
 
 
 @dataclass
+class ContentMetrics:
+    """内容指标"""
+    segment_level: ContentScore
+    report_level: ContentScore
+
+
+@dataclass
 class BenchmarkResult:
     """单个benchmark评估的完整结果"""
     stock_code: str
@@ -67,7 +74,7 @@ class BenchmarkResult:
     new_report_name: str
     structure: StructureMetrics
     evidence: EvidenceMetrics
-    content: ContentScore
+    content: ContentMetrics
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
 
 
@@ -208,7 +215,41 @@ def _content_score_to_dict(scores: Any) -> Optional[Dict[str, float]]:
         value = scores.get(dim)
         if isinstance(value, (int, float)):
             normalized_scores[dim] = float(value)
+        elif isinstance(value, dict) and isinstance(value.get("score"), (int, float)):
+            normalized_scores[dim] = float(value["score"])
     return normalized_scores if normalized_scores else None
+
+
+def _content_score_from_any(scores: Any) -> ContentScore:
+    normalized_scores = _content_score_to_dict(scores)
+    if normalized_scores is None:
+        raise ValueError("content评分格式错误，无法转换为ContentScore")
+    return ContentScore(**normalized_scores)
+
+
+def _content_metrics_to_dict(content: ContentMetrics) -> Dict[str, Dict[str, float]]:
+    return {
+        "segment_level": _content_score_to_dict(content.segment_level) or {},
+        "report_level": _content_score_to_dict(content.report_level) or {},
+    }
+
+
+def _is_content_metrics_payload(content: Any) -> bool:
+    return (
+        isinstance(content, dict)
+        and isinstance(content.get("segment_level"), dict)
+        and isinstance(content.get("report_level"), dict)
+    )
+
+
+def _deserialize_content_metrics(content: Dict) -> ContentMetrics:
+    if _is_content_metrics_payload(content):
+        return ContentMetrics(
+            segment_level=_content_score_from_any(content["segment_level"]),
+            report_level=_content_score_from_any(content["report_level"]),
+        )
+    segment_level = _content_score_from_any(content)
+    return ContentMetrics(segment_level=segment_level, report_level=segment_level)
 
 
 def _average_content_scores(score_dicts: List[Dict[str, float]]) -> Dict[str, float]:
@@ -256,7 +297,7 @@ def _deserialize_benchmark_result(data: Dict) -> BenchmarkResult:
         new_report_name=data["new_report_name"],
         structure=StructureMetrics(**data["structure"]),
         evidence=EvidenceMetrics(**data["evidence"]),
-        content=ContentScore(**data["content"]),
+        content=_deserialize_content_metrics(data["content"]),
         timestamp=data.get("timestamp", datetime.now().isoformat()),
     )
 
@@ -283,10 +324,7 @@ async def _load_or_extract_evidences(
 def _serialize_benchmark_result(result: BenchmarkResult) -> Dict:
     """将嵌套的Pydantic ContentScore转换为可JSON序列化的字典。"""
     data = asdict(result)
-    if hasattr(result.content, "model_dump"):
-        data["content"] = result.content.model_dump()
-    else:
-        data["content"] = result.content.dict()
+    data["content"] = _content_metrics_to_dict(result.content)
     return data
 
 
@@ -316,6 +354,12 @@ def _write_summary(output_path: Path, summary: Dict) -> None:
         json.dump(summary, f, ensure_ascii=False, indent=2)
 
 
+def _get_content_level(content: Dict, level: str) -> Dict:
+    if isinstance(content, dict) and isinstance(content.get(level), dict):
+        return content[level]
+    return content if isinstance(content, dict) else {}
+
+
 def _get_content_average(content: Dict) -> float:
     values = [
         content.get("insightfulness", 0.0),
@@ -325,6 +369,17 @@ def _get_content_average(content: Dict) -> float:
     ]
     values = [float(v) for v in values if isinstance(v, (int, float))]
     return sum(values) / len(values) if values else 0.0
+
+
+def _format_content_score(score: ContentScore) -> str:
+    score_dict = _content_score_to_dict(score) or {}
+    return (
+        f"{_get_content_average(score_dict):.2f}/10 overall, "
+        f"insightfulness={score_dict.get('insightfulness', 0.0):.2f}, "
+        f"readability={score_dict.get('readability', 0.0):.2f}, "
+        f"relevance={score_dict.get('relevance', 0.0):.2f}, "
+        f"sufficiency={score_dict.get('sufficiency', 0.0):.2f}"
+    )
 
 
 def _build_new_report_patterns(stock_code: str, date: str) -> List[str]:
@@ -394,11 +449,11 @@ async def evaluate_structure(new_section: Section, human_section: Section, text_
     )
 
 
-async def evaluate_content(new_section: Section) -> ContentScore:
+async def evaluate_content(new_section: Section, report_text: str, report_title: str = "全文") -> ContentMetrics:
     """
     评估内容指标。
-    - 对所有 segment 逐段评分
-    - 各维度对全文取平均
+    - 对所有 segment 逐段评分并取平均
+    - 对全文做 report-level 评分
     """
     print(f"    - 正在评估content指标...")
     segment_tasks = _collect_segment_tasks_for_content(new_section)
@@ -407,7 +462,7 @@ async def evaluate_content(new_section: Section) -> ContentScore:
             "新报告缺少可用于content评估的segment内容，请检查评估输入或outline解析结果。"
         )
 
-    print(f"      - 共需评估 {len(segment_tasks)} 个segment")
+    print(f"      - segment-level 共需评估 {len(segment_tasks)} 个segment")
     segment_score_results = await asyncio.gather(
         *[
             get_content_score(
@@ -438,16 +493,30 @@ async def evaluate_content(new_section: Section) -> ContentScore:
         raise RuntimeError("segment content评分失败，未获得任何有效的评分结果。")
 
     avg_scores = _average_content_scores(score_dicts)
-    print(f"      - 成功评估 {len(score_dicts)}/{len(segment_tasks)} 个segment")
-    if failed_count > 0:
-        print(f"      - 评估失败 {failed_count} 个segment")
-
-    return ContentScore(
+    segment_level = ContentScore(
         insightfulness=avg_scores["insightfulness"],
         readability=avg_scores["readability"],
         relevance=avg_scores["relevance"],
         sufficiency=avg_scores["sufficiency"],
     )
+
+    print(f"      - segment-level 成功评估 {len(score_dicts)}/{len(segment_tasks)} 个segment")
+    if failed_count > 0:
+        print(f"      - segment-level 评估失败 {failed_count} 个segment")
+    print(f"      - segment-level: {_format_content_score(segment_level)}")
+
+    print(f"      - 正在评估report-level content指标...")
+    report_level_scores = await get_report_level_content_score(
+        llm_reasoning,
+        formatter,
+        report_text,
+        report_title=report_title,
+        label=f"[report-level {report_title}]",
+    )
+    report_level = _content_score_from_any(report_level_scores)
+    print(f"      - report-level: {_format_content_score(report_level)}")
+
+    return ContentMetrics(segment_level=segment_level, report_level=report_level)
 
 
 async def benchmark_single_pair(
@@ -525,7 +594,9 @@ async def benchmark_single_pair(
         sanitized_new_evidences,
         sanitized_human_evidences,
     )
-    content_metrics = await evaluate_content(sanitized_new_section)
+    report_text = new_report_path.read_text(encoding="utf-8")
+    report_title = sanitized_new_section.title or new_report_path.stem
+    content_metrics = await evaluate_content(sanitized_new_section, report_text, report_title)
 
     print(f"[4/4] 汇总结果...")
     result = BenchmarkResult(
@@ -611,6 +682,8 @@ async def run_benchmark(
     cached_summary = _load_json_file(output_path)
     if isinstance(cached_summary, dict) and isinstance(cached_summary.get("results"), list):
         for item in cached_summary["results"]:
+            if not _is_content_metrics_payload(item.get("content")):
+                continue
             result = _deserialize_benchmark_result(item)
             cache_key = _build_pair_cache_key(
                 result.stock_code,
@@ -739,11 +812,18 @@ def print_benchmark_summary(results_json_path: Path) -> None:
     evidence_coverage = [r["evidence"]["coverage_ratio"] for r in results]
     evidence_accuracy = [r["evidence"]["accuracy_ratio"] for r in results]
     evidence_citation_density = [r["evidence"].get("citiation_density", 0.0) for r in results]
-    content_scores = [_get_content_average(r["content"]) for r in results]
-    content_insightfulness = [r["content"]["insightfulness"] for r in results]
-    content_readability = [r["content"]["readability"] for r in results]
-    content_relevance = [r["content"]["relevance"] for r in results]
-    content_sufficiency = [r["content"]["sufficiency"] for r in results]
+    segment_content = [_get_content_level(r["content"], "segment_level") for r in results]
+    report_content = [_get_content_level(r["content"], "report_level") for r in results]
+    segment_content_scores = [_get_content_average(content) for content in segment_content]
+    segment_content_insightfulness = [content.get("insightfulness", 0.0) for content in segment_content]
+    segment_content_readability = [content.get("readability", 0.0) for content in segment_content]
+    segment_content_relevance = [content.get("relevance", 0.0) for content in segment_content]
+    segment_content_sufficiency = [content.get("sufficiency", 0.0) for content in segment_content]
+    report_content_scores = [_get_content_average(content) for content in report_content]
+    report_content_insightfulness = [content.get("insightfulness", 0.0) for content in report_content]
+    report_content_readability = [content.get("readability", 0.0) for content in report_content]
+    report_content_relevance = [content.get("relevance", 0.0) for content in report_content]
+    report_content_sufficiency = [content.get("sufficiency", 0.0) for content in report_content]
 
     def safe_avg(values):
         return sum(values) / len(values) if values else 0
@@ -761,11 +841,18 @@ def print_benchmark_summary(results_json_path: Path) -> None:
     print(f"  - 平均引用密度: {safe_avg(evidence_citation_density):.2f}/千字")
 
     print("\nContent指标:")
-    print(f"  - 平均总分: {safe_avg(content_scores):.2f}/10")
-    print(f"  - 平均洞察力: {safe_avg(content_insightfulness):.2f}/10")
-    print(f"  - 平均可读性: {safe_avg(content_readability):.2f}/10")
-    print(f"  - 平均相关性: {safe_avg(content_relevance):.2f}/10")
-    print(f"  - 平均充分性: {safe_avg(content_sufficiency):.2f}/10")
+    print("  Segment-level:")
+    print(f"    - 平均总分: {safe_avg(segment_content_scores):.2f}/10")
+    print(f"    - 平均洞察力: {safe_avg(segment_content_insightfulness):.2f}/10")
+    print(f"    - 平均可读性: {safe_avg(segment_content_readability):.2f}/10")
+    print(f"    - 平均相关性: {safe_avg(segment_content_relevance):.2f}/10")
+    print(f"    - 平均充分性: {safe_avg(segment_content_sufficiency):.2f}/10")
+    print("  Report-level:")
+    print(f"    - 平均总分: {safe_avg(report_content_scores):.2f}/10")
+    print(f"    - 平均洞察力: {safe_avg(report_content_insightfulness):.2f}/10")
+    print(f"    - 平均可读性: {safe_avg(report_content_readability):.2f}/10")
+    print(f"    - 平均相关性: {safe_avg(report_content_relevance):.2f}/10")
+    print(f"    - 平均充分性: {safe_avg(report_content_sufficiency):.2f}/10")
 
     print("\n详细结果:")
     for r in results:
@@ -778,11 +865,18 @@ def print_benchmark_summary(results_json_path: Path) -> None:
         print(f"    Evidence: {r['evidence']['coverage_ratio']:.2%} coverage, "
               f"{r['evidence']['accuracy_ratio']:.2%} accuracy, "
               f"citiation_density={r['evidence'].get('citiation_density', 0.0):.2f}/千字")
-        print(f"    Content: {_get_content_average(r['content']):.2f}/10 overall, "
-              f"insightfulness={r['content']['insightfulness']:.2f}, "
-              f"readability={r['content']['readability']:.2f}, "
-              f"relevance={r['content']['relevance']:.2f}, "
-              f"sufficiency={r['content']['sufficiency']:.2f}")
+        segment_score = _get_content_level(r["content"], "segment_level")
+        report_score = _get_content_level(r["content"], "report_level")
+        print(f"    Content segment-level: {_get_content_average(segment_score):.2f}/10 overall, "
+              f"insightfulness={segment_score.get('insightfulness', 0.0):.2f}, "
+              f"readability={segment_score.get('readability', 0.0):.2f}, "
+              f"relevance={segment_score.get('relevance', 0.0):.2f}, "
+              f"sufficiency={segment_score.get('sufficiency', 0.0):.2f}")
+        print(f"    Content report-level: {_get_content_average(report_score):.2f}/10 overall, "
+              f"insightfulness={report_score.get('insightfulness', 0.0):.2f}, "
+              f"readability={report_score.get('readability', 0.0):.2f}, "
+              f"relevance={report_score.get('relevance', 0.0):.2f}, "
+              f"sufficiency={report_score.get('sufficiency', 0.0):.2f}")
 
 
 # ==============================================================================

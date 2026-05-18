@@ -84,6 +84,7 @@ class Config:
         model_cfg = deepcopy(models[model_id])
         model_cfg.setdefault("reasoning_only", False)
         model_cfg.setdefault("non_reasoning_model_name", None)
+        model_cfg.setdefault("api_key_env", "OUTLINE_REFINE_API_KEY")
         return model_cfg
 
     def get_embedding_cfg(self):
@@ -91,7 +92,9 @@ class Config:
         model_id = self.embedding_name
         if model_id is None:
             raise KeyError("未配置 models.embedding_default，且未设置 EMBEDDING_NAME")
-        return deepcopy(models[model_id])
+        model_cfg = deepcopy(models[model_id])
+        model_cfg.setdefault("api_key_env", "EMB_API_KEY")
+        return model_cfg
 
     def get_max_verify_rounds(self) -> int:
         verify_config = self.data.get("verify_config", {}) or {}

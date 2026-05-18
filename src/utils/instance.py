@@ -31,7 +31,7 @@ def _create_openai_chat_model(**kwargs):
     return OpenAIChatModel(**kwargs)
 
 
-def create_chat_model(reasoning=True, model_cfg=None):
+def create_chat_model(reasoning=True, model_cfg=None, api_key=None):
     """统一创建一个聊天模型实例。
     """
     m = model_cfg or cfg.get_model_cfg()
@@ -41,6 +41,12 @@ def create_chat_model(reasoning=True, model_cfg=None):
 
     base_url = m.get("base_url_env", "")
     stream = m["stream"]
+    api_key_env = m.get("api_key_env")
+    api_key = (
+        api_key
+        or (os.environ.get(api_key_env) if api_key_env else None)
+        or os.environ.get("API_KEY")
+    )
 
     temperature = m.get("temperature", 0)
     top_k = m.get("top_k", 20)
@@ -57,7 +63,7 @@ def create_chat_model(reasoning=True, model_cfg=None):
             extra_body["reasoning"] = {"enabled": False}
         return _create_openai_chat_model(
             model_name=resolved_model_name,
-            api_key=os.environ.get("API_KEY"),
+            api_key=api_key,
             stream=stream,
             client_kwargs={"base_url": base_url},
             generate_kwargs={"extra_body": extra_body,
@@ -79,7 +85,7 @@ def create_chat_model(reasoning=True, model_cfg=None):
             generate_kwargs["temperature"] = temperature
         return _create_openai_chat_model(
             model_name=model_name,
-            api_key=os.environ.get("API_KEY"),
+            api_key=api_key,
             stream=stream,
             client_kwargs={"base_url": base_url},
             generate_kwargs=generate_kwargs,
@@ -88,14 +94,14 @@ def create_chat_model(reasoning=True, model_cfg=None):
     elif provider == "dashscope":
         return DashScopeChatModel(
             model_name=model_name,
-            api_key=os.environ.get("API_KEY"),
+            api_key=api_key,
             stream=stream,
         )
 
     elif provider in ["xiaomi"]:
         return _create_openai_chat_model(
             model_name=model_name,
-            api_key=os.environ.get("API_KEY"),
+            api_key=api_key,
             stream=stream,
             client_kwargs={"base_url": base_url},
             generate_kwargs={"extra_body":{"enable_thinking": reasoning}}
@@ -104,7 +110,7 @@ def create_chat_model(reasoning=True, model_cfg=None):
     elif provider in ["ark"]:
         return _create_openai_chat_model(
             model_name=model_name,
-            api_key=os.environ.get("API_KEY"),
+            api_key=api_key,
             stream=stream,
             client_kwargs={"base_url": base_url},
             generate_kwargs={'extra_body': {"thinking":{"type": 'enabled' if reasoning else 'disabled'}},
@@ -114,7 +120,7 @@ def create_chat_model(reasoning=True, model_cfg=None):
 
     elif provider in ["kalm"]:
 
-        client = OpenAI(api_key=os.environ.get("API_KEY"), base_url=base_url)
+        client = OpenAI(api_key=api_key, base_url=base_url)
         headers = {"ADAMS-BUSINESS": "3939",
                    "Adams-Platform-User": os.environ.get("USER_NAME"),
                    "Adams-User-Token": os.environ.get("USER_TOKEN"),
@@ -123,7 +129,7 @@ def create_chat_model(reasoning=True, model_cfg=None):
         model_name = client.models.list(extra_headers=headers).data[0].id  # 获取服务对应的模型名
         return _create_openai_chat_model(
             model_name=model_name,
-            api_key=os.environ.get("API_KEY"),
+            api_key=api_key,
             stream=stream,
             client_kwargs={"base_url": base_url},
             generate_kwargs={'extra_body': {"thinking":{"type": 'enabled' if reasoning else 'disabled'}},
@@ -135,7 +141,7 @@ def create_chat_model(reasoning=True, model_cfg=None):
     else:
         return _create_openai_chat_model(
             model_name=model_name,
-            api_key=os.environ.get("API_KEY"),
+            api_key=api_key,
             stream=stream,
             client_kwargs={"base_url": base_url},
             generate_kwargs={"extra_body": {"reasoning": {"enabled": reasoning, "exclude": False}},
@@ -147,6 +153,8 @@ def create_emb_model(model_cfg=None):
     provider = m["provider"]
     model_name = m["model_name"]
     base_url = m.get("base_url_env", "")
+    api_key_env = m.get("api_key_env", "EMB_API_KEY")
+    api_key = os.environ.get(api_key_env) or os.environ.get("API_KEY")
 
     if provider == "openrouter":
         from agentscope.embedding import OpenAITextEmbedding
@@ -154,7 +162,7 @@ def create_emb_model(model_cfg=None):
         kwargs = {
             "base_url": base_url,
             "model_name": model_name,
-            "api_key": os.environ.get("API_KEY"),
+            "api_key": api_key,
         }
         if m.get("dimensions") is not None:
             kwargs["dimensions"] = m.get("dimensions")
@@ -175,7 +183,7 @@ def create_emb_model(model_cfg=None):
                 "http://mmdcadamsminiserverproxy.polaris:25340/service/15049/v1",
             ),
             "model_name": m.get("embedding_model_name", model_name),
-            "api_key": os.environ.get("API_KEY"),
+            "api_key": api_key,
             "default_headers": headers,
         }
         if m.get("dimensions") is not None:
