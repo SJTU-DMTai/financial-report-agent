@@ -125,3 +125,7 @@ class Config:
         if report_format is None:
             return deepcopy(citation_cfg)
         return deepcopy(citation_cfg.get(report_format, {}) or {})
+
+    def get_report_processing_llm_name(self) -> str:
+        evaluation_cfg = self.data.get("evaluation", {}) or {}
+        return str(evaluation_cfg.get("report_processing_llm_name") or self.llm_name)

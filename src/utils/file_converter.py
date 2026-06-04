@@ -885,7 +885,7 @@ def markdown_to_sections(markdown: Union[str, Path, List[str]]) -> Section:
             break
     if title is None: i = -1
     root = Section(section_id=0, title=title, segments=[],
-                   subsections=[], level=1)
+                   subsections=[], level=0)
     _parse_lines_as_section(markdown[i+1:], root)
     if root.subsections is None or len(root.subsections) == 0:
         warnings.warn(f"未检测到subsections")

@@ -24,12 +24,24 @@ from src.evaluation.extract_evidence import extract_unique_evidences, get_entity
 from src.evaluation.eval_structure import num_of_segment, structure_score
 from src.evaluation.eval_evidence import evidence_coverage_and_accuracy
 from src.evaluation.eval_content import get_content_score, get_report_level_content_score, ContentScore
-from src.utils.instance import cfg as MODEL_CONFIG, llm_reasoning, llm_instruct, formatter
+from src.utils.instance import (
+    cfg as MODEL_CONFIG,
+    create_agent_formatter,
+    create_chat_model,
+)
 from src.pipelines.planning import process_pdf_to_outline
 from src.utils import local_file
 import config
 
 CONFIG = config.Config()
+REPORT_PROCESSING_LLM_NAME = CONFIG.get_report_processing_llm_name()
+REPORT_PROCESSING_CONFIG = config.Config(llm_name=REPORT_PROCESSING_LLM_NAME)
+REPORT_PROCESSING_MODEL_CFG = REPORT_PROCESSING_CONFIG.get_model_cfg()
+report_processing_llm_reasoning = create_chat_model(model_cfg=REPORT_PROCESSING_MODEL_CFG)
+report_processing_llm_instruct = create_chat_model(reasoning=False, model_cfg=REPORT_PROCESSING_MODEL_CFG)
+report_processing_formatter = create_agent_formatter(model_cfg=REPORT_PROCESSING_MODEL_CFG)
+evaluation_judge_llm = create_chat_model(reasoning=False)
+evaluation_judge_formatter = create_agent_formatter()
 
 
 @dataclass
@@ -55,6 +67,7 @@ class EvidenceMetrics:
     """论据指标"""
     coverage_ratio: float  # 覆盖率
     accuracy_ratio: float  # 准确率
+    accurate_count: int = 0  # 计算accuracy_ratio时判断为准确的数量
     citiation_density: float = 0.0  # 每千字引用数
 
 
@@ -438,7 +451,12 @@ async def evaluate_structure(new_section: Section, human_section: Section, text_
     segment_density = total_segments / text_units if text_units > 0 else 0.0
 
     # 基于human_report相对评估结构
-    comprehensiveness, logicality = await structure_score(new_section, human_section)
+    comprehensiveness, logicality = await structure_score(
+        new_section,
+        human_section,
+        evaluation_judge_llm,
+        evaluation_judge_formatter,
+    )
 
     return StructureMetrics(
         total_segments=total_segments,
@@ -466,8 +484,8 @@ async def evaluate_content(new_section: Section, report_text: str, report_title:
     segment_score_results = await asyncio.gather(
         *[
             get_content_score(
-                llm_reasoning,
-                formatter,
+                evaluation_judge_llm,
+                evaluation_judge_formatter,
                 content,
                 topic,
                 label=f"[segment {idx}/{len(segment_tasks)}]",
@@ -507,8 +525,8 @@ async def evaluate_content(new_section: Section, report_text: str, report_title:
 
     print(f"      - 正在评估report-level content指标...")
     report_level_scores = await get_report_level_content_score(
-        llm_reasoning,
-        formatter,
+        evaluation_judge_llm,
+        evaluation_judge_formatter,
         report_text,
         report_title=report_title,
         label=f"[report-level {report_title}]",
@@ -550,20 +568,22 @@ async def benchmark_single_pair(
     new_section = await process_pdf_to_outline(
         new_report_path,
         new_outline_cache_dir,
-        llm_reasoning,
-        llm_instruct,
-        formatter,
+        report_processing_llm_reasoning,
+        report_processing_llm_instruct,
+        report_processing_formatter,
         only_evidence=True,
-        reuse_other_model_cache=True,
+        reuse_other_model_cache=False,
+        cache_model_name=REPORT_PROCESSING_LLM_NAME,
     )
     human_section = await process_pdf_to_outline(
         human_report_path,
         human_outline_cache_dir,
-        llm_reasoning,
-        llm_instruct,
-        formatter,
+        report_processing_llm_reasoning,
+        report_processing_llm_instruct,
+        report_processing_formatter,
         only_evidence=True,
         reuse_other_model_cache=True,
+        cache_model_name=REPORT_PROCESSING_LLM_NAME,
     )
     sanitized_new_section = _sanitize_section_for_scoring(new_section)
     sanitized_human_section = _sanitize_section_for_scoring(human_section)
@@ -590,7 +610,7 @@ async def benchmark_single_pair(
     print(f"[3/4] 评估指标...")
     citation_density, text_units = _compute_citation_density_and_text_units(new_report_path)
     structure_metrics = await evaluate_structure(sanitized_new_section, sanitized_human_section, text_units)
-    coverage_ratio, accuracy_ratio = await evidence_coverage_and_accuracy(
+    coverage_ratio, accuracy_ratio, accurate_count = await evidence_coverage_and_accuracy(
         sanitized_new_evidences,
         sanitized_human_evidences,
     )
@@ -608,6 +628,7 @@ async def benchmark_single_pair(
         evidence=EvidenceMetrics(
             coverage_ratio=coverage_ratio,
             accuracy_ratio=accuracy_ratio,
+            accurate_count=accurate_count,
             citiation_density=citation_density,
         ),
         content=content_metrics,
@@ -811,6 +832,7 @@ def print_benchmark_summary(results_json_path: Path) -> None:
     structure_logicality = [r["structure"]["logicality"] for r in results]
     evidence_coverage = [r["evidence"]["coverage_ratio"] for r in results]
     evidence_accuracy = [r["evidence"]["accuracy_ratio"] for r in results]
+    evidence_accurate_count = [r["evidence"].get("accurate_count", 0) for r in results]
     evidence_citation_density = [r["evidence"].get("citiation_density", 0.0) for r in results]
     segment_content = [_get_content_level(r["content"], "segment_level") for r in results]
     report_content = [_get_content_level(r["content"], "report_level") for r in results]
@@ -838,6 +860,7 @@ def print_benchmark_summary(results_json_path: Path) -> None:
     print("\nEvidence指标:")
     print(f"  - 平均覆盖率: {safe_avg(evidence_coverage):.2%}")
     print(f"  - 平均准确率: {safe_avg(evidence_accuracy):.2%}")
+    print(f"  - 平均准确数量: {safe_avg(evidence_accurate_count):.2f}")
     print(f"  - 平均引用密度: {safe_avg(evidence_citation_density):.2f}/千字")
 
     print("\nContent指标:")
@@ -864,6 +887,7 @@ def print_benchmark_summary(results_json_path: Path) -> None:
               f"logicality={r['structure']['logicality']:.2f}")
         print(f"    Evidence: {r['evidence']['coverage_ratio']:.2%} coverage, "
               f"{r['evidence']['accuracy_ratio']:.2%} accuracy, "
+              f"accurate_count={r['evidence'].get('accurate_count', 0)}, "
               f"citiation_density={r['evidence'].get('citiation_density', 0.0):.2f}/千字")
         segment_score = _get_content_level(r["content"], "segment_level")
         report_score = _get_content_level(r["content"], "report_level")

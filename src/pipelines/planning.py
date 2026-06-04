@@ -25,19 +25,20 @@ from src.utils.instance import create_agent_formatter, create_vlm_model
 async def process_pdf_to_outline(pdf_path: Path, save_dir: Path,
                                  llm_reasoning: ChatModelBase, llm_instruct: ChatModelBase = None,
                                  formatter=None, only_evidence: bool = False, another_stock: bool = False,
-                                 reuse_other_model_cache: bool = False) -> Section:
+                                 reuse_other_model_cache: bool = False,
+                                 cache_model_name: str | None = None) -> Section:
     """
     处理单个PDF，生成完整的Section对象。
     会检查并使用_outline.json缓存，以避免重复处理。
     """
-    manuscript = _load_cached_outline(pdf_path, save_dir, only_evidence, reuse_other_model_cache)
+    manuscript = _load_cached_outline(pdf_path, save_dir, only_evidence, reuse_other_model_cache, cache_model_name)
     if manuscript is not None:
         outline = manuscript.read(read_subsections=True, with_reference=True, with_content=True, with_evidence=True,
                                   fold_other=False)
         print(outline)
         return manuscript
 
-    outline_json_path = _get_outline_cache_path(pdf_path, save_dir, only_evidence)
+    outline_json_path = _get_outline_cache_path(pdf_path, save_dir, only_evidence, cache_model_name)
     outline_json_path.parent.mkdir(parents=True, exist_ok=True)
     if formatter is None:
         formatter = create_agent_formatter()

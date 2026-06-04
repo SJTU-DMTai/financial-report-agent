@@ -12,6 +12,7 @@ data/memory/long_term/evidences/*
 data/memory/short_term/*
 data/output/reports/*
 data/output/*
+paper/
 .idea/
 cache.db
 .vscode/ 

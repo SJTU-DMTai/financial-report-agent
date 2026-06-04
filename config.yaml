@@ -17,6 +17,7 @@ models:
     model_name: deepseek-v4-pro
     base_url_env: https://api.deepseek.com
     reasoning_effort: high
+    temperature: 0
     stream: false
 
   deepseek-v4-flash-openrouter:
@@ -233,6 +234,7 @@ planner:
   max_evidences_per_segment: 6
 
 evaluation:
+  report_processing_llm_name: deepseek-v4-flash
   citation_extraction:
     openai-deepresearch:
       reference_section_pattern: '^\s*(?:#{1,6}\s*主要数据来源清单\s*$|\[(?:\*{1,2})?\[\d+\\?\](?:\*{1,2})?\]\()'

@@ -105,7 +105,7 @@ class Section(BaseModel):
 
     def read(self, with_requirements=True, with_reference=False, with_content=False, with_evidence=False,
              fold_other=True, fold_all=False, read_subsections=False) -> str:
-        ctx = f"{'#' * self.level} {self.title}\n"
+        ctx = f"{'#' * max(self.level, 1)} {self.title}\n"
         unfinished = [i for i, s in enumerate(self.segments) if not s.finished]
         if with_content and self.content is not None:
             ctx += self.content + '\n\n'
@@ -308,12 +308,14 @@ def _get_outline_cache_path(
     pdf_path: Path,
     save_dir: Path,
     only_evidence: bool,
+    model_name: str | None = None,
 ) -> Path:
     from src.utils.instance import cfg
 
     stem = pdf_path.stem
     suffix = "_outline_only_evidence.json" if only_evidence else "_outline.json"
-    return save_dir / cfg.llm_name / f"{stem}{suffix}"
+    cache_model_name = model_name or cfg.llm_name
+    return save_dir / cache_model_name / f"{stem}{suffix}"
 
 
 def _get_outline_cache_candidates(
@@ -321,10 +323,11 @@ def _get_outline_cache_candidates(
     save_dir: Path,
     only_evidence: bool,
     reuse_other_model_cache: bool = False,
+    cache_model_name: str | None = None,
 ) -> list[Path]:
-    cache_candidates = [_get_outline_cache_path(pdf_path, save_dir, only_evidence)]
+    cache_candidates = [_get_outline_cache_path(pdf_path, save_dir, only_evidence, cache_model_name)]
     if only_evidence:
-        full_model_cache_path = _get_outline_cache_path(pdf_path, save_dir, False)
+        full_model_cache_path = _get_outline_cache_path(pdf_path, save_dir, False, cache_model_name)
         if full_model_cache_path not in cache_candidates:
             cache_candidates.append(full_model_cache_path)
 
@@ -348,12 +351,14 @@ def _load_cached_outline(
     save_dir: Path,
     only_evidence: bool,
     reuse_other_model_cache: bool = False,
+    cache_model_name: str | None = None,
 ) -> Section | None:
     for cache_path in _get_outline_cache_candidates(
         pdf_path,
         save_dir,
         only_evidence,
         reuse_other_model_cache,
+        cache_model_name,
     ):
         if cache_path.exists():
             return load_section_from_json_text(cache_path.read_text(encoding="utf-8"))

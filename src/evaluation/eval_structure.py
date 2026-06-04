@@ -1,12 +1,12 @@
 from typing import Tuple
 
+from agentscope.formatter import FormatterBase
+from agentscope.model import ChatModelBase
 from pydantic import BaseModel
 
 from src.memory.working import Section
 from src.prompt import prompt_dict
 from src.utils.call_with_retry import call_chatbot_with_retry
-
-from src.utils.instance import llm_reasoning, formatter
 
 
 def num_of_segment(report: Section) -> Tuple[int, float]:
@@ -46,7 +46,12 @@ class StructureScore(BaseModel):
     comprehensiveness: int
     logicality: int
 
-async def structure_score(report: Section, reference_report: Section) -> Tuple[int, int]:
+async def structure_score(
+    report: Section,
+    reference_report: Section,
+    model: ChatModelBase,
+    formatter: FormatterBase,
+) -> Tuple[int, int]:
     """
     调用LLM基于参考研报评估新研报结构的完整性和逻辑性。
 
@@ -78,7 +83,7 @@ async def structure_score(report: Section, reference_report: Section) -> Tuple[i
     )
 
     scores = await call_chatbot_with_retry(
-        llm_reasoning,
+        model,
         formatter,
         prompt_dict["eval_structure"],
         user_prompt,

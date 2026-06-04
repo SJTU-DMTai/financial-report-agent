@@ -43,7 +43,7 @@ def _normalize_evidences(evidences) -> List[EvidenceTuple]:
 async def evidence_coverage_and_accuracy(
     report_evidences: List[EvidenceTuple],
     reference_evidences: List[EvidenceTuple],
-) -> Tuple[float, float]:
+) -> Tuple[float, float, int]:
     report_evidences = _normalize_evidences(report_evidences)
     reference_evidences = _normalize_evidences(reference_evidences)
 
@@ -72,7 +72,7 @@ async def evidence_coverage_and_accuracy(
         print(f"  - 跳过 {missing_fact_count} 对缺少具体事实的论据。")
     if not evidence_quads:
         print("  - 没有具备双方具体事实的有效论据对，accuracy 记为 0。")
-        return coverage_ratio, 0.0
+        return coverage_ratio, 0.0, 0
 
     print(f"  - 开始对 {len(evidence_quads)} 对论据进行一致性判断...")
     comparisons: List[EvidenceComparison] = []
@@ -144,9 +144,9 @@ async def evidence_coverage_and_accuracy(
         print(f"  - LLM 跳过 {skipped_by_judge} 对错配或主观判断论据。")
     if valid_count == 0:
         print("  - LLM 未返回任何有效一致性判断，accuracy 记为 0。")
-        return coverage_ratio, 0.0
+        return coverage_ratio, 0.0, 0
 
     print(f"  - 一致性判断完成，{consistent_count} / {valid_count} 对有效论据事实一致。")
 
     accuracy_ratio = consistent_count / valid_count
-    return coverage_ratio, accuracy_ratio
+    return coverage_ratio, accuracy_ratio, consistent_count
