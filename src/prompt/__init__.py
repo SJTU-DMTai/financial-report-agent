@@ -35,11 +35,6 @@ prompt_dict['writer_sys_prompt'] = """
 
 # 论据使用
 - 请优先使用用户提供的**论据材料**和已有上下文完成写作。
-- 检查论据材料是否足以支撑当前片段的核心判断。如果已有材料基本充足，不要额外搜索。
-- 只有在以下情况时，才调用 search_with_searcher 工具补充材料：
-  1. 关键事实缺失，导致无法完成当前主题；
-  2. 现有论据明显不足以支撑核心判断；
-  3. 当前材料存在时效性、口径或逻辑疑问，需要补充确认。
 - 如果需要获取已有材料的具体内容或原文，可以调用 read_material 工具。
 
 # 引用规则
@@ -69,7 +64,7 @@ prompt_dict["segment_writer_user_prompt"] = """
 
 {segment_text}
 
-请你开始搜索和撰写。"""
+请你开始撰写。"""
 
 prompt_dict["evaluate_segment_user_prompt"] = """
 # 评估任务

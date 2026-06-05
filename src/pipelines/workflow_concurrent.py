@@ -47,7 +47,6 @@ from src.utils.multi_types_verification import (
     set_verifier_trace_path,
 )
 from src.utils.local_file import STOCK_REPORT_PATHS
-from src.utils.evidence_merge import merge_outline_evidences
 from src.utils.outline_refine import refine_outline
 from src.utils.task_date import normalize_compact_date
 import config
@@ -62,7 +61,7 @@ from src.utils.instance import (
 )
 import logging
 from typing import List, Optional, Dict, Any
-from src.tools.material_tools import MaterialTools
+from src.tools.financial_data_tools import FinancialDataTools
 
 DEFAULT_DISCLOSURE_CATEGORIES = ["年报", "半年报", "一季报", "三季报"]
 
@@ -140,7 +139,7 @@ def _has_preloaded_disclosures(
     return False
 
 async def preload_task_materials(
-    tools: MaterialTools, 
+    tools: FinancialDataTools, 
     symbol: str, 
     start_date: str, 
     end_date: Optional[str] = None,
@@ -149,7 +148,7 @@ async def preload_task_materials(
 ) -> Dict[str, Any]:
     """
     针对单次任务的前置知识摄取流水线。
-    复用 MaterialTools 中的工具，将长文本材料提前存入 ShortTermMemoryStore。
+    复用 FinancialDataTools 中的工具，将长文本材料提前存入 ShortTermMemoryStore。
     """
     logging.info(f"[Pre-loader] 🚀 开始为任务预加载知识库: Entity={symbol}, 时间={start_date}至{end_date}")
     print(f"[Pre-loader] 🚀 开始为任务预加载知识库: Entity={symbol}, 时间={start_date}至{end_date}")
@@ -559,7 +558,6 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
         cfg = config.Config()
         multi_source_verification_enabled = cfg.is_multi_source_verification_enabled()
         max_verify_rounds = cfg.get_max_verify_rounds()
-        max_evidences_per_segment = cfg.get_max_evidences_per_segment()
         
         filename = f"{stock_symbol}_{cur_date}"
         short_term_dir = PROJECT_ROOT / "data" / "memory" / "short_term" / filename
@@ -610,12 +608,6 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
                 )
                 after_refine_outline_path.write_text(outline.to_json(ensure_ascii=False), encoding="utf-8")
                 print(f"[Outline Debug] saved after_refine_outline: {after_refine_outline_path}", flush=True)
-            merge_outline_evidences(
-                outline,
-                max_evidences_per_segment,
-                long_term,
-                entity,
-            )
             _normalize_section_titles(outline)
 
         if manuscript is None:
@@ -648,7 +640,7 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
                         if i < len(outline_section.subsections):
                             section_pairs.append((subsection, outline_section.subsections[i]))
 
-            tools = MaterialTools(short_term=short_term, long_term=long_term)
+            tools = FinancialDataTools(short_term=short_term, long_term=long_term)
             end_date = normalize_compact_date(cur_date)
             start_date = (
                 pd.to_datetime(end_date, format="%Y%m%d") - pd.DateOffset(months=6)

@@ -4,7 +4,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()
 
-from src.pipelines.workflow_concurrent import run_workflow
+from src.pipelines.workflow_tracking_board import run_workflow
 from src.utils.task_date import resolve_cur_date
 # from src.pipelines.workflow import run_workflow
 import sys

@@ -46,7 +46,15 @@ class OutlineRefineContext:
 
 
 class OutlineEvidencePayload(BaseModel):
-    text: str
+    text: str = ""
+    fact: Optional[str] = None
+    description: Optional[str] = None
+    entity: Optional[str] = None
+    aspect: Optional[str] = None
+    period: Optional[str] = None
+    scope: Optional[str] = None
+    required: bool = True
+    is_static: bool = False
 
 
 class OutlineNewSegmentPayload(BaseModel):
@@ -137,11 +145,12 @@ def _serialize_evidences_for_refine(evidences: Optional[List[Evidence]]) -> List
     for evidence in evidences:
         if evidence is None or not evidence.text:
             continue
-        serialized.append(
-            {
-                "text": _truncate_text(evidence.text, MAX_EVIDENCE_CHARS),
-            }
-        )
+        item = {"text": _truncate_text(evidence.text, MAX_EVIDENCE_CHARS)}
+        for field_name in ("description", "entity", "aspect", "period", "scope", "required", "is_static", "fact"):
+            value = getattr(evidence, field_name, None)
+            if value not in (None, ""):
+                item[field_name] = value
+        serialized.append(item)
     return serialized
 
 
@@ -232,11 +241,22 @@ def _build_evidences(payload_evidences: Optional[List[OutlineEvidencePayload]]) 
     built: List[Evidence] = []
     seen = set()
     for payload in payload_evidences:
-        text = _normalize_text(payload.text)
+        text = _normalize_text(payload.text) or _normalize_text(payload.description)
         if text is None or text in seen:
             continue
         seen.add(text)
-        built.append(Evidence(text=text, is_static=False))
+        built.append(
+            Evidence(
+                text=text,
+                description=_normalize_text(payload.description) or text,
+                entity=_normalize_text(payload.entity),
+                aspect=_normalize_text(payload.aspect),
+                period=_normalize_text(payload.period),
+                scope=_normalize_text(payload.scope),
+                required=payload.required,
+                is_static=False,
+            )
+        )
     if not built:
         return None
     return built

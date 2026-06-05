@@ -14,7 +14,13 @@ class Evidence(BaseModel):
 
     text: str
     is_static: bool = False
-    value: Optional[str] = None
+    fact: Optional[str] = None
+    description: Optional[str] = None
+    entity: Optional[str] = None
+    aspect: Optional[str] = None
+    period: Optional[str] = None
+    scope: Optional[str] = None
+    required: bool = True
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Evidence":
@@ -150,8 +156,8 @@ class Section(BaseModel):
 
 
 def _format_evidence_for_display(evidence: Evidence) -> str:
-    if evidence.value:
-        return f"{evidence.text}：{evidence.value}"
+    if evidence.fact:
+        return f"{evidence.text}：{evidence.fact}"
     return evidence.text
 
 
@@ -170,6 +176,16 @@ def _parse_evidence_item(raw_text: str) -> Optional[Evidence]:
 
 
 def _parse_evidences(evidences_text: str) -> Optional[List[Evidence]]:
+    json_payload = _extract_json_like_payload(evidences_text)
+    if json_payload is not None:
+        try:
+            payload = json.loads(json_payload)
+            if isinstance(payload, dict) and "evidences" in payload:
+                return _normalize_evidences(payload.get("evidences"))
+            return _normalize_evidences(payload)
+        except Exception:
+            pass
+
     parsed_evidences = []
     raw_items = evidences_text.replace("\n", "").replace(";", "；").split("；")
     for raw_item in raw_items:
@@ -184,27 +200,51 @@ def _parse_evidences(evidences_text: str) -> Optional[List[Evidence]]:
     return parsed_evidences
 
 
+def _build_structured_evidence_text(mapping: dict) -> str:
+    parts = [
+        mapping.get("entity"),
+        mapping.get("period"),
+        mapping.get("scope"),
+        mapping.get("aspect"),
+    ]
+    return " ".join(str(part).strip() for part in parts if str(part or "").strip())
+
+
 def _coerce_evidence_mapping(mapping: dict) -> List[Evidence]:
-    text = str(mapping.get("text") or mapping.get("description") or mapping.get("evidence") or "").strip()
+    structured_keys = {"description", "entity", "aspect", "period", "scope", "required"}
+    text = str(
+        mapping.get("text")
+        or mapping.get("description")
+        or mapping.get("evidence")
+        or _build_structured_evidence_text(mapping)
+        or ""
+    ).strip()
     if text:
-        value = mapping.get("value")
-        if value is None:
-            value = mapping.get("fact")
+        fact = mapping.get("fact")
         return [
             Evidence(
                 text=text,
-                value=str(value).strip() if value is not None else None,
+                description=str(mapping.get("description") or text).strip(),
+                entity=str(mapping.get("entity")).strip() if mapping.get("entity") is not None else None,
+                aspect=str(mapping.get("aspect")).strip() if mapping.get("aspect") is not None else None,
+                period=str(mapping.get("period")).strip() if mapping.get("period") is not None else None,
+                scope=str(mapping.get("scope")).strip() if mapping.get("scope") is not None else None,
+                required=bool(mapping.get("required", True)),
+                fact=str(fact).strip() if fact is not None else None,
                 is_static=bool(mapping.get("is_static", False)),
             )
         ]
 
+    if any(key in mapping for key in structured_keys):
+        return []
+
     evidences = []
-    for key, value in mapping.items():
-        if key in {"text", "description", "evidence", "is_static", "value", "fact"}:
+    for key, fact in mapping.items():
+        if key in {"text", "description", "evidence", "is_static", "fact"}:
             return []
         text = str(key).strip()
         if text:
-            evidences.append(Evidence(text=text, value=str(value).strip() if value is not None else None))
+            evidences.append(Evidence(text=text, fact=str(fact).strip() if fact is not None else None))
     return evidences
 
 
@@ -224,15 +264,51 @@ def _extract_json_payload(contents: str) -> str | None:
     return None
 
 
+def _extract_json_like_payload(contents: str) -> str | None:
+    if not isinstance(contents, str):
+        return None
+    text = contents.strip()
+    fenced_match = re.search(r"```(?:json)?\s*([\[{].+?[\]}])\s*```", text, re.DOTALL | re.IGNORECASE)
+    if fenced_match:
+        return fenced_match.group(1).strip()
+    if (text.startswith("{") and text.endswith("}")) or (text.startswith("[") and text.endswith("]")):
+        return text
+    object_start = text.find("{")
+    object_end = text.rfind("}")
+    array_start = text.find("[")
+    array_end = text.rfind("]")
+    candidates = []
+    if object_start >= 0 and object_end > object_start:
+        candidates.append((object_start, object_end + 1))
+    if array_start >= 0 and array_end > array_start:
+        candidates.append((array_start, array_end + 1))
+    if not candidates:
+        return None
+    start, end = min(candidates, key=lambda item: item[0])
+    return text[start:end]
+
+
 def _parse_json_evidence_response(json_payload: str) -> Segment | str:
     payload = json.loads(json_payload)
     if payload.get("skip") is True:
         return "<skip>true</skip>"
-    evidences = _normalize_evidences(payload.get("evidences"))
+    evidences = _parse_fact_evidences(payload.get("evidences"))
     topic = str(payload.get("topic") or "").strip()
     assert topic, "Format error. JSON evidence response must include topic."
     assert evidences, "Format error. JSON evidence response must include non-empty evidences."
     return Segment(template=None, requirements=None, topic=topic, evidences=evidences)
+
+
+def _parse_fact_evidences(items) -> Optional[List[Evidence]]:
+    evidences = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        description = str(item.get("description") or "").strip()
+        fact = str(item.get("fact") or "").strip()
+        if description and fact:
+            evidences.append(Evidence(text=description, description=description, fact=fact))
+    return evidences or None
 
 
 def _coerce_evidence_sequence_item(item) -> Optional[Evidence]:
@@ -245,8 +321,8 @@ def _coerce_evidence_sequence_item(item) -> Optional[Evidence]:
         return coerced[0] if len(coerced) == 1 else None
     if isinstance(item, (list, tuple)) and item:
         text = str(item[0]).strip()
-        value = str(item[1]).strip() if len(item) > 1 and item[1] is not None else None
-        return Evidence(text=text, value=value) if text else None
+        fact = str(item[1]).strip() if len(item) > 1 and item[1] is not None else None
+        return Evidence(text=text, fact=fact) if text else None
     return None
 
 
@@ -266,7 +342,7 @@ def _normalize_evidences(evidences) -> Optional[List[Evidence]]:
     for evidence in normalized:
         if not evidence.text:
             continue
-        if any(existing.text == evidence.text and existing.value == evidence.value for existing in deduped):
+        if any(existing.text == evidence.text and existing.fact == evidence.fact for existing in deduped):
             continue
         deduped.append(evidence)
     if not deduped:
@@ -283,7 +359,7 @@ def evidence_texts(evidences: Optional[List[Evidence]]) -> List[str]:
 def evidence_pairs(evidences: Optional[List[Evidence]]) -> List[tuple[str, str]]:
     if not evidences:
         return []
-    return [(e.text, e.value or "") for e in evidences if e and e.text]
+    return [(e.text, e.fact or "") for e in evidences if e and e.text]
 
 
 def _upgrade_section_payload(payload):

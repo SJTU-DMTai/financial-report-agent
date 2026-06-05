@@ -1,11 +1,9 @@
 # -*- coding: utf-8 -*-
 # from __future__ import annotations
 import time
-from pathlib import Path
 import re
-from agentscope.agent import ReActAgent
-from agentscope.message import Msg, TextBlock, ImageBlock, Base64Source
-from agentscope.tool import Toolkit, ToolResponse
+from agentscope.message import TextBlock
+from agentscope.tool import ToolResponse
 import seaborn as sns
 import base64
 from io import BytesIO
@@ -16,7 +14,6 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
 import numpy as np
 import matplotlib.font_manager as fm
-from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.patches import Rectangle
 import matplotlib.colors as mcolors
 from agentscope.tool._coding._python import execute_python_code

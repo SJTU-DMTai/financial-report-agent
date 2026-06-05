@@ -8,9 +8,9 @@ from agentscope.model import DashScopeChatModel
 from agentscope.model import OpenAIChatModel
 from ..prompt import prompt_dict
 
-from ..tools.material_tools import *
-
-from ..tools.search_tools import *
+from ..tools.financial_data_tools import FinancialDataTools
+from ..tools.material_tools import MaterialTools, get_retrieve_fn
+from ..tools.search_tools import SearchTools
 from ..memory.short_term import ShortTermMemoryStore
 from ..memory.long_term import LongTermMemoryStore
 from ..memory.working_memory import SlidingWindowMemory
@@ -41,9 +41,10 @@ def build_searcher_toolkit(
     toolkit = Toolkit()
 
     material_tools = MaterialTools(short_term=short_term, long_term=long_term)
+    financial_data_tools = FinancialDataTools(short_term=short_term, long_term=long_term)
 
     toolkit.register_tool_function(get_retrieve_fn(short_term, long_term))
-    toolkit.register_tool_function(material_tools.fetch_url_page_text)
+    toolkit.register_tool_function(financial_data_tools.fetch_url_page_text)
 
     search_tools = SearchTools(short_term=short_term, long_term=long_term)
     toolkit.register_tool_function(search_tools.search_engine)
@@ -54,11 +55,11 @@ def build_searcher_toolkit(
     # ========================================
 
     # toolkit.register_tool_function(
-    #     material_tools.fetch_realtime_price_material
+    #     financial_data_tools.fetch_realtime_price_material
     # )
 
     toolkit.register_tool_function(
-        material_tools.fetch_history_price_material
+        financial_data_tools.fetch_history_price_material
     )
 
     # ========================================
@@ -66,11 +67,11 @@ def build_searcher_toolkit(
     # ========================================
 
     toolkit.register_tool_function(
-        material_tools.fetch_stock_news_material
+        financial_data_tools.fetch_stock_news_material
     )
 
     toolkit.register_tool_function(
-        material_tools.fetch_disclosure_material
+        financial_data_tools.fetch_disclosure_material
     )
 
     # ========================================
@@ -78,37 +79,25 @@ def build_searcher_toolkit(
     # ========================================
 
     toolkit.register_tool_function(
-        material_tools.fetch_balance_sheet_material
+        financial_data_tools.fetch_balance_sheet_material
     )
 
     toolkit.register_tool_function(
-        material_tools.fetch_profit_table_material
+        financial_data_tools.fetch_profit_table_material
     )
     toolkit.register_tool_function(
-        material_tools.fetch_cashflow_table_material
+        financial_data_tools.fetch_cashflow_table_material
     )
     # ========================================
     # 股东信息 Shareholders
     # ========================================
 
     toolkit.register_tool_function(
-        material_tools.fetch_top10_float_shareholders_material
+        financial_data_tools.fetch_top_shareholders_material
     )
 
     toolkit.register_tool_function(
-        material_tools.fetch_top10_shareholders_material
-    )
-
-    toolkit.register_tool_function(
-        material_tools.fetch_main_shareholders_material
-    )
-
-    toolkit.register_tool_function(
-        material_tools.fetch_shareholder_count_detail_material
-    )
-
-    toolkit.register_tool_function(
-        material_tools.fetch_shareholder_change_material
+        financial_data_tools.fetch_shareholder_material
     )
 
     # ========================================
@@ -116,11 +105,7 @@ def build_searcher_toolkit(
     # ========================================
 
     toolkit.register_tool_function(
-        material_tools.fetch_business_description_material
-    )
-
-    toolkit.register_tool_function(
-        material_tools.fetch_business_composition_material
+        financial_data_tools.fetch_business_material
     )
 
     toolkit.register_tool_function(

@@ -1,32 +1,19 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import traceback
 from bisect import bisect_right
-from typing import Optional, Callable, Any, Dict, Union, List, Tuple
-import asyncio
-import os
-import io
-import time as time_module
-from datetime import datetime
-import akshare as ak
-import pandas as pd
+from typing import Any, Callable
+import copy
+import json
 import re
-from urllib.parse import urlparse, parse_qs
-import requests
-import fitz
-from htmldate import find_date
+
+import pandas as pd
 from agentscope.message import TextBlock
-from agentscope.tool import ToolResponse, Toolkit
+from agentscope.tool import ToolResponse
+
 from ..memory.short_term import ShortTermMemoryStore, MaterialType
 from ..memory.long_term import LongTermMemoryStore
-from ..utils.get_entity_info import get_entity_info
-from ..utils.format import fmt_yyyymmdd
-from ..utils.task_date import normalize_compact_date
-from ..utils.web_scraping import fetch_page_html, extract_text_and_images
-import json
-import copy
-import requests
+from ..utils.retrieve_in_memory import retrieve_in_memory
 
 def _normalize_search_keywords(
     keywords: list[str],
@@ -78,6 +65,37 @@ def _find_keyword_matches(
 
     matches.sort(key=lambda item: (item["start"], item["end"], item["keyword"]))
     return matches
+
+
+def _extract_json_path(obj, path: str):
+    cur = obj
+    for k in path.split("."):
+        if isinstance(cur, dict) and k in cur:
+            cur = cur[k]
+        else:
+            return None
+    return cur
+
+
+def _truncate_preview_cell(value, max_cell_chars: int, suffix: str):
+    if isinstance(value, str) and len(value) > max_cell_chars:
+        return value[:max_cell_chars] + suffix
+    return value
+
+
+class _BoundQueryTool:
+    def __init__(self, func, name: str, doc: str, *args) -> None:
+        self._func = func
+        self._args = args
+        self.__name__ = name
+        self.__doc__ = doc
+
+    async def __call__(self, query: str) -> ToolResponse:
+        return await self._func(*self._args, query)
+
+
+def bind_query_tool(func, name: str, doc: str, *args):
+    return _BoundQueryTool(func, name, doc, *args)
 
 
 def grep_file_with_context(
@@ -242,134 +260,6 @@ def print_grep_results(
     return "".join(output)
 
 
-def _preview_df(df: pd.DataFrame, max_rows: int | None = None) -> tuple[str, int, int, list[str]]:
-    """生成 DataFrame 文本预览及相关统计。"""
-    total_rows = len(df)
-
-    if max_rows is None:
-        preview_df = df  # 全部数据
-        preview_rows = total_rows
-    else:
-        preview_df = df.head(max_rows)
-        preview_rows = min(max_rows, total_rows)
-
-    preview_str = preview_df.to_string(index=False)
-    columns_names = list(df.columns)
-    return preview_str, total_rows, preview_rows, columns_names
-
-
-def _build_tool_response_from_df(
-    df: pd.DataFrame,
-    cite_id: str,
-    header: str,
-    preview_rows: int = 10,
-    extra_meta: Optional[Dict[str, Any]] = None,
-    save: bool = True,
-) -> ToolResponse:
-    """统一构造 ToolResponse，包含预览文本和基础 metadata。"""
-    preview_str, total_rows, used_rows, columns_names = _preview_df(df, preview_rows)  # 预览的时候返回前10行
-    text = (
-        f"{header} 共 {total_rows} 条记录，"
-        f"以下为全部列名：\n"
-        f"{columns_names}\n"
-        f"以下为前 {used_rows} 行预览：\n"
-        f"{preview_str}\n"
-    )
-    if save:
-        text += f"Material 已写入 cite_id='{cite_id}'，可以通过 read_material 读取全部内容。\n\n"
-    meta: Dict[str, Any] = {"cite_id": cite_id, "row_count": total_rows}
-    if extra_meta:
-        meta.update(extra_meta)
-    return ToolResponse(
-        content=[TextBlock(type="text", text=text)],
-        metadata=meta,
-    )
-
-def _build_tool_response_from_dict(
-        data: dict,
-        cite_id: str,
-        header: str,
-        extra_meta: Optional[Dict[str, Any]] = None,
-) -> ToolResponse:
-    """统一构造 ToolResponse，包含预览文本和基础 metadata。"""
-    preview_str = "\n".join([f"{k}: {v}" for k, v in data.items()])
-    text = (
-        f"{header} 共 {len(data)} 条属性，"
-        f"Material 已写入 cite_id='{cite_id}'（CSV 格式）。\n\n"
-        f"{preview_str}"
-    )
-    meta: Dict[str, Any] = {"cite_id": cite_id}
-    if extra_meta:
-        meta.update(extra_meta)
-    return ToolResponse(
-        content=[TextBlock(type="text", text=text)],
-        metadata=meta,
-    )
-
-
-def add_exchange_prefix(symbol: str, type: str, with_dot: bool = False) -> str:
-    """
-    根据股票代码判断交易所，并按大小写返回带前缀的 symbol。
-    由于akshare的stock_gdfx_free_top_10_em和stock_gdfx_top_10_em
-    和stock_zygc_em需要传带交易所的股票代码
-    """
-    code = symbol.strip()
-    t = type.lower()
-    # 前缀映射
-    prefix_upper = {"SH": "SH", "SZ": "SZ", "BJ": "BJ", "HK": "HK"}
-    prefix_lower = {"SH": "sh", "SZ": "sz", "BJ": "bj", "HK": "hk"}
-
-    if code.isdigit() and len(code) == 5:
-        exchange = "HK"
-    else:
-        exchange = None
-
-    # 其他交易所规则
-    if exchange is None:
-        # 上交所
-        if code.startswith(("600", "601", "603", "605", "688", "900", "730", "700")):
-            exchange = "SH"
-
-        # 深交所
-        elif code.startswith(("001", "002", "003", "200", "080")) or code.startswith("30"):
-            exchange = "SZ"
-
-        # 北交所
-        elif code.startswith(("43", "83", "87", "920")):
-            exchange = "BJ"
-
-        else:
-            return code
-
-    # 返回大小写
-    if t == "upper":
-        if with_dot:
-            return prefix_upper[exchange] +"."+ code
-        else:
-            return prefix_upper[exchange] + code
-    elif t == "lower":
-        if with_dot:
-            return prefix_lower[exchange] +"."+ code
-        else:    
-            return prefix_lower[exchange] + code
-    else:
-        raise ValueError("type 需为 'upper' 或 'lower'。")
-
-
-def _normalize_tool_date(value: str | None, *, fallback: str | None = None) -> str:
-    normalized = normalize_compact_date(value)
-    if normalized:
-        return normalized
-    normalized_fallback = normalize_compact_date(fallback)
-    if normalized_fallback:
-        return normalized_fallback
-    return datetime.now().strftime("%Y%m%d")
-
-def _clip_end_date(end_date: str | None, cur_date: str) -> str:
-    normalized_end = normalize_compact_date(end_date)
-    return min(normalized_end, cur_date) if normalized_end else cur_date
-
-
 def extract_keyword_context_snippets(
     text: str,
     keywords: list[str],
@@ -444,30 +334,116 @@ def extract_keyword_context_snippets(
 
     return snippets
 
+
+async def retrieve_local_material(
+    short_term: ShortTermMemoryStore,
+    long_term: LongTermMemoryStore,
+    query: str,
+) -> ToolResponse:
+    """
+    在已保存的本地材料中按关键词搜索和query最相关的前若干条材料，返回cite_id、来源、简短描述和部分预览内容。
+    Args:
+        query (str):
+            搜索内容。
+    """
+    candidates = retrieve_in_memory(
+        short_term=short_term,
+        long_term=long_term,
+        query=query,
+    )
+    if candidates:
+        lines = [
+            f"你需要检索的信息：{query}",
+            "",
+            "用户本地保存的候选材料（materials）及其部分预览如下:",
+            "",
+        ]
+
+        for meta in candidates:
+            cite_id = meta.get("cite_id", "")
+            desc = meta.get("description", "")
+            src = meta.get("source", "")
+            m_type = meta.get("m_type", "")
+            lines.append(f"<material>\ncite_id={cite_id}")
+            if desc:
+                lines.append(f"简短描述: {desc}")
+            if src:
+                lines.append(f"来源: {src}")
+
+            try:
+                content = short_term.load_material(cite_id) if short_term is not None else None
+            except Exception:
+                content = None
+
+            if isinstance(cite_id, str) and cite_id.startswith("search_engine_"):
+                preview = short_term.load_material_preview(cite_id=cite_id)
+                if preview:
+                    lines.append("    部分内容预览：")
+                    lines.append(f"   {preview}")
+
+            elif isinstance(cite_id, str) and "calculate_" in cite_id:
+                params = None
+                result = None
+                if isinstance(content, list) and content:
+                    first = content[0] if isinstance(content[0], dict) else None
+                    if isinstance(first, dict):
+                        params = first.get("parameters", None)
+                        result = first.get("result", None)
+                if params:
+                    lines.append(f"计算参数: {params}")
+                lines.append(f"计算结果: {result}")
+
+            elif m_type == "table":
+                preview = ""
+                columns_preview = ""
+                if isinstance(content, pd.DataFrame) and not content.empty:
+                    df_preview = content.head(3).copy()
+                    max_cell_chars = 32
+                    suffix = "...[内容过长，已截断]"
+                    for col in df_preview.columns:
+                        df_preview[col] = df_preview[col].apply(
+                            lambda value: _truncate_preview_cell(value, max_cell_chars, suffix)
+                        )
+                    columns_preview = ", ".join(content.columns)
+                    preview = df_preview.to_csv(index=False)
+
+                lines.append("    列名:")
+                lines.append(f"    {columns_preview}")
+                if preview:
+                    lines.append("    前3行预览:")
+                    for ln in preview.splitlines():
+                        lines.append(f"    {ln}")
+
+            lines.append("</material>\n")
+
+        lines.append("如果以上无合适材料，请重新调用工具获取数据。")
+        res = "\n".join(lines)
+    else:
+        res = f"对于{query}，本地尚未保存相关材料。请调用合适的工具获取数据。"
+    return ToolResponse(
+        content=[
+            TextBlock(
+                type="text",
+                text=res,
+            ),
+        ],
+    )
+
+
+def get_retrieve_fn(short_term: ShortTermMemoryStore, long_term: LongTermMemoryStore) -> Callable[str]:
+    return bind_query_tool(
+        retrieve_local_material,
+        "retrieve_local_material",
+        retrieve_local_material.__doc__ or "",
+        short_term,
+        long_term,
+    )
+
+
 class MaterialTools:
-    def __init__(self, short_term: ShortTermMemoryStore, long_term: LongTermMemoryStore) -> None:
+    def __init__(self, short_term: ShortTermMemoryStore, long_term: LongTermMemoryStore | None = None) -> None:
         self.short_term = short_term
         self.long_term = long_term
-
-    def _check_duplicate_in_registry(self, symbol: str, tool_keyword: str) -> str | None:
-            """
-            核心查重逻辑：遍历本地 registry 的内存映射，
-            寻找当前 entity 是否已经执行过相同的工具（通过 cite_id 特征词匹配）。
-            返回匹配到的历史 cite_id，如果没有则返回 None。
-            """
-            if not hasattr(self, 'short_term') or not self.short_term:
-                return None
-                
-            # 剥离 .SZ / .SH 等后缀，保证匹配的绝对干净
-            clean_symbol = symbol.split('.')[0]
-            
-            # 倒序遍历，确保拿到的是最新一次成功抓取的 cite_id
-            for cite_id, meta in reversed(self.short_term._registry.items()):
-                # 判断逻辑：同一支股票，且 cite_id 包含了该工具专属的关键字
-                if cite_id.startswith(clean_symbol) and tool_keyword in cite_id:
-                    return cite_id # 返回已经存在的 cite_id
-                    
-            return None
     
     def read_material(
         self,
@@ -517,7 +493,6 @@ class MaterialTools:
                     metadata={"cite_id": cite_id}
                 )
         except Exception as e:
-            # print(traceback.print_exc())
             return ToolResponse(
             content=[TextBlock(type="text", text=f"[read_material]读取失败: {str(e)}")],
             metadata={"cite_id": cite_id}
@@ -687,16 +662,7 @@ class MaterialTools:
 
         # 如果有 key_path，则提取每条对应字段，否则展示整个条目
         if key_path:
-            def _extract(obj, path):
-                cur = obj
-                for k in path.split("."):
-                    if isinstance(cur, dict) and k in cur:
-                        cur = cur[k]
-                    else:
-                        return None
-                return cur
-
-            sliced = [_extract(item, key_path) for item in sliced]
+            sliced = [_extract_json_path(item, key_path) for item in sliced]
 
         # 序列化成 JSON 字符串
         json_str = json.dumps(sliced, ensure_ascii=False, indent=2)
@@ -711,1620 +677,3 @@ class MaterialTools:
             metadata={"cite_id": cite_id, "type": "json_list"}
         )
 
-    def _save_df_to_material(
-            self,
-            df: pd.DataFrame,
-            cite_id: str,
-            description: str,
-            source: str,
-            entity: Dict[str, str] | None = None,
-            time: Dict[str, str] | None = None,
-    ) -> int:
-        """DataFrame/Dict 存入 short-term material（CSV/JSON），返回行数。"""
-        if self.short_term is not None:
-            self.short_term.save_material(cite_id=cite_id,
-                                          content=df,
-                                          description=description,
-                                          source=source,
-                                          entity=entity,
-                                          time=time)
-        return len(df)
-
-    # ===================== 股价数据 =====================
-
-    async def fetch_realtime_price_material(
-        self,
-        symbol: str | None = None
-    ) -> ToolResponse:
-        """获取沪深京 A 股实时行情数据，并保存表格结果到Material当中，返回Material标识cite_id。
-        适用场景：需要查询某只 A 股当前价格、涨跌幅、成交量等实时指标；需要一次性拉取全市场实时行情，作为选股或打分模型的输入。
-
-        Args:
-            symbol (Optional[str]):
-                沪深京 A 股股票代码（不带市场标识），例如 "000001"。
-                - 为 None 时：保留全部 A 股的实时行情数据；
-                - 不为 None 时：仅保留 DataFrame 中 "代码" 列等于该值的记录。
-        """
-        time_point = datetime.now().strftime("%Y-%m-%d %H:%M")
-
-        df = ak.stock_zh_a_spot_em()
-        entity = None
-        if symbol is not None:
-            # 文档中 "代码" 列为股票代码
-            df = df[df["代码"] == symbol]
-            entity = get_entity_info(long_term=self.long_term, text=str(symbol))
-        cite_id = f"{symbol or 'all'}_realtime_price_{int(time_module.time())}"
-        if symbol:
-            description = f"{entity['name']}（{entity['code']}）股票实时行情数据（获取时间：{time_point}）"
-        else:
-            description = f"A股全市场股票实时行情数据（获取时间：{time_point}）"
-
-        self._save_df_to_material(df=df,
-                                cite_id=cite_id,
-                                description=description,
-                                source="AKshare API:eastmoney",
-                                entity=entity,
-                                time={"point":time_point},
-                                )
-        header = f"[fetch_realtime_price_material] 股价实时行情（symbol={symbol or 'ALL'}）"
-        return _build_tool_response_from_df(
-            df,
-            cite_id=cite_id,
-            header=header,
-            extra_meta={"symbol": symbol},
-        )
-
-    async def fetch_history_price_material(
-        self,
-        symbol: str,
-        start_date: str,
-        end_date: str | None = None,
-        period: str = "daily",
-        adjust: str = "",
-    ) -> ToolResponse:
-        """获取指定 A 股股票的历史行情（日/周/月），并保存表格结果到Material当中，返回Material标识cite_id。
-        拉取指定股票在给定时间区间和周期上的历史行情数据（开盘价、收盘价、成交量、涨跌幅等），
-        支持不复权、前复权和后复权数据。
-        适用场景：生成个股 K 线、收益率曲线、回测信号等历史行情分析；作为生成研报中"股价表现""历史走势"等章节的基础数据。
-        Args:
-            symbol (str):
-                沪深京 A 股股票代码（不带市场标识），例如 "000001"。
-            start_date (str):
-                历史行情起始日期，格式为 "YYYYMMDD"，例如 "20000101"。必需参数。
-            end_date (str | None):
-                历史行情结束日期，格式为 "YYYYMMDD"，例如 "20251231"。
-                如果为 None，则使用环境变量 CUR_DATE 或当前日期。
-            period (str):
-                支持的取值（默认 "daily"）：
-                - "daily": 日频数据；
-                - "weekly": 周频数据；
-                - "monthly": 月频数据。
-            adjust (str):
-                复权方式，支持的取值（默认 ""）：
-                - "": 不复权；
-                - "qfq": 前复权；
-                - "hfq": 后复权。
-
-        """
-        cur_date = _normalize_tool_date(self.short_term.current_date, fallback=os.getenv("CUR_DATE"))
-        start_date = _normalize_tool_date(start_date)
-        end_date = _clip_end_date(end_date, cur_date)
-        assert pd.to_datetime(start_date, format="%Y%m%d") <= pd.to_datetime(end_date, format="%Y%m%d")
-        source_info = "AKshare API:eastmoney"
-        df = pd.DataFrame()
-
-        try:
-            df = ak.stock_zh_a_hist(
-                symbol=symbol,
-                period=period,
-                start_date=start_date,
-                end_date=end_date,
-                adjust=adjust,
-            )
-
-            if df is None or df.empty:
-                raise ValueError("akshare 返回数据为空")
-
-        except Exception as e:
-            # 2. akshare 失败，切换至 baostock 备用方案
-            import baostock as bs
-            source_info = "Baostock API"
-            
-            # --- 参数格式转换 ---
-            # 转换股票代码 (baostock 需要 sh./sz./bj. 前缀)
-            bs_symbol = add_exchange_prefix(symbol=symbol, type="lower",with_dot=True)
-            # 转换日期格式 (YYYYMMDD -> YYYY-MM-DD)
-            bs_start = f"{start_date[:4]}-{start_date[4:6]}-{start_date[6:]}"
-            bs_end = f"{end_date[:4]}-{end_date[4:6]}-{end_date[6:]}"
-
-            # 转换周期参数
-            period_map = {"daily": "d", "weekly": "w", "monthly": "m"}
-            bs_period = period_map.get(period, "d")
-
-            # 转换复权参数 (3:不复权, 2:前复权, 1:后复权)
-            adjust_map = {"": "3", "qfq": "2", "hfq": "1"}
-            bs_adjust = adjust_map.get(adjust, "3")
-
-            # --- 请求 baostock ---
-            bs.login()
-            rs = bs.query_history_k_data_plus(
-                bs_symbol,
-                "date,open,high,low,close,volume,amount,pctChg,turn", # 提取核心字段
-                start_date=bs_start,
-                end_date=bs_end,
-                frequency=bs_period,
-                adjustflag=bs_adjust
-            )
-            
-            data_list = []
-            while (rs.error_code == '0') & rs.next():
-                data_list.append(rs.get_row_data())
-            bs.logout()
-            
-            df = pd.DataFrame(data_list, columns=rs.fields)
-
-            # --- 数据清洗与列名对齐 ---
-            if not df.empty:
-                # 强转数值类型 (baostock 默认返回全字符串)
-                numeric_cols = ["open", "high", "low", "close", "volume", "amount", "pctChg", "turn"]
-                for col in numeric_cols:
-                    if col in df.columns:
-                        df[col] = pd.to_numeric(df[col], errors='coerce')
-                
-                # 重命名列名，与 akshare 的标准中文列名保持完全一致
-                rename_map = {
-                    "date": "日期", "open": "开盘", "high": "最高", "low": "最低",
-                    "close": "收盘", "volume": "成交量", "amount": "成交额",
-                    "pctChg": "涨跌幅", "turn": "换手率"
-                }
-                df.rename(columns=rename_map, inplace=True)            
-
-                # ================= 新增：利用Baostock数据反推历史流通市值 =================
-                mask = df["换手率"] > 0
-                # 注意单位差异：Baostock成交量单位为“股”，换手率为百分比
-                floating_shares = df.loc[mask, "成交量"] / (df.loc[mask, "换手率"] / 100)
-                df.loc[mask, "流通市值(元)"] = floating_shares * df.loc[mask, "收盘"]
-                df.loc[mask, "流通市值(亿元)"] = (df.loc[mask, "流通市值(元)"] / 1e8).round(2)
-                # =========================================================================
-                
-
-        # ================= 新增：自动计算统计摘要（最高/最低极值） =================
-        summary_info = ""
-        if not df.empty and "最低" in df.columns and "最高" in df.columns and "日期" in df.columns:
-            period_min = df["最低"].min()
-            period_max = df["最高"].max()
-            
-            # 找到极值对应的日期 (iloc[0] 防止有多个相同极值天数)
-            min_date = df.loc[df["最低"] == period_min, "日期"].iloc[0]
-            max_date = df.loc[df["最高"] == period_max, "日期"].iloc[0]
-            
-            summary_info = (
-                f"\n【系统自动计算的行情摘要】\n"
-                f"在此数据区间（{start_date} ~ {end_date}）内：\n"
-                f"期间最高价: {period_max} 元 (发生在 {max_date})\n"
-                f"期间最低价: {period_min} 元 (发生在 {min_date})\n"
-                f"提示：如果你需要寻找过去这段时间的最高/最低价，请直接使用上述精确数据，无需再去阅读长表格。\n"
-            )
-        # =========================================================================
-
-        cite_id = f"{symbol}_history_price_{start_date}_{end_date}_period={period}{('_adjust=' + adjust) if adjust else ''}"
-        entity = get_entity_info(long_term=self.long_term, text=symbol)
-        time_range = {"start": fmt_yyyymmdd(start_date),"end":fmt_yyyymmdd(end_date)}
-        if entity:
-            description = f"{entity['name']}（{entity['code']}）股票历史行情数据（{fmt_yyyymmdd(start_date)}~{fmt_yyyymmdd(end_date)}）"
-        else:
-            description = f"{symbol} 股票历史行情数据（{fmt_yyyymmdd(start_date)}~{fmt_yyyymmdd(end_date)}）"
-        description += summary_info
-        self._save_df_to_material(df=df,
-                                    cite_id=cite_id,
-                                    description=description,
-                                    source=source_info,
-                                    entity=entity,
-                                    time=time_range)
-
-        header = (
-            f"{summary_info}"
-            f"[fetch_history_price_material] {symbol} {period} 股价历史行情 "
-            f"{start_date}~{end_date} adjust='{adjust or '无'}'"
-        )
-        return _build_tool_response_from_df(
-            df,
-            cite_id=cite_id,
-            header=header,
-            extra_meta={
-                "symbol": symbol,
-                "period": period,
-                "start_date": start_date,
-                "end_date": end_date,
-                "adjust": adjust,
-            },
-        )
-
-    async def fetch_disclosure_material(
-        self,
-        symbol: str,
-        start_date: str,
-            end_date: str | None = None,
-            market: str = "沪深京",
-            keyword: str = "",
-            category: str = "",
-    ) -> ToolResponse:
-        """获取指定股票的信息披露公告，并保存表格结果到Material当中，返回Material标识cite_id。
-        抓取指定 symbol 在给定时间区间内的各类信息披露公告，
-        可按市场、公告类别和关键词进行过滤，并将结果保存为表格。
-        适用场景：生成研报中的“公司公告梳理”“信息披露情况”章节；快速定位某段时间内的年报、季报、重大事项、股权变动等公告列表。
-
-        Args:
-            symbol (str):
-                股票代码，例如 "000001"。
-            start_date (str):
-                公告起始日期，格式为 "YYYYMMDD"，例如 "20230618"。必需参数。
-            end_date (str | None):
-                公告结束日期，格式为 "YYYYMMDD"，例如 "20231219"。
-                如果为 None，则使用环境变量 CUR_DATE 或当前日期。
-            market (str):
-                市场类型，支持的取值包括：
-                - "沪深京"（默认）、"港股"、"三板"、"基金"、"债券"、"监管"、"预披露"。
-            keyword (str):
-                公告搜索关键词，例如 "股权激励"、"增发"；为空字符串时不做关键词过滤。
-            category (str):
-                公告类别，取值仅限于如下选择之一：
-                - "年报"、"半年报"、"一季报"、"三季报"、"业绩预告"、"权益分派"、
-                "董事会"、"监事会"、"股东大会"、"日常经营"、"公司治理"、"中介报告"、
-                "首发"、"增发"、"股权激励"、"配股"、"解禁"、"公司债"、"可转债"、
-                "其他融资"、"股权变动"、"补充更正"、"澄清致歉"、"风险提示"、
-                "特别处理和退市"、"退市整理期"。
-                - 为空字符串时：不按类别过滤，返回全部信息披露公告。
-
-        """
-        cur_date = _normalize_tool_date(self.short_term.current_date, fallback=os.getenv("CUR_DATE"))
-        start_date = _normalize_tool_date(start_date)
-        end_date = _clip_end_date(end_date, cur_date)
-
-        # 内部工具函数：从公告链接 + 公告时间 拼出 PDF URL
-        def _build_pdf_url(link: str, announce_date: str) -> str | None:
-            if not isinstance(link, str) or not link:
-                return None
-
-            announcement_id = None
-            try:
-                parsed = urlparse(link)
-                qs = parse_qs(parsed.query)
-                if "announcementId" in qs and qs["announcementId"]:
-                    announcement_id = qs["announcementId"][0]
-                else:
-                    # 兜底：用正则从 URL 中提取
-                    m = re.search(r"announcementId=(\d+)", link)
-                    if m:
-                        announcement_id = m.group(1)
-            except Exception:
-                pass
-
-            if not announcement_id:
-                return None
-
-            # 公告时间列一般形如 "2023-12-09" 或 "2023-12-09 00:00:00"
-            if not isinstance(announce_date, str):
-                announce_date = str(announce_date)
-            date_str = announce_date.split()[0]  # 去掉可能的时间部分
-            # 替换可能存在的分隔符为 "-"
-            date_str = (
-                date_str.replace(".", "-")
-                .replace("/", "-")
-            )
-
-            return f"https://static.cninfo.com.cn/finalpage/{date_str}/{announcement_id}.PDF"
-
-        # 内部工具函数：下载 PDF 并用 PyMuPDF 抽取文本
-        def _fetch_pdf_text(pdf_url: str, referer: str | None = None) -> str:
-            if not pdf_url:
-                return ""
-            try:
-                headers = {
-                    "User-Agent": "Mozilla/5.0",
-                }
-                if referer:
-                    headers["Referer"] = referer
-
-                resp = requests.get(pdf_url, headers=headers, timeout=20)
-                resp.raise_for_status()
-
-                with fitz.open(stream=resp.content, filetype="pdf") as doc:
-                    texts: list[str] = []
-                    for page in doc:
-                        t = page.get_text().strip()
-                        if t:
-                            texts.append(t)
-                return "\n".join(texts)
-            except Exception:
-                # 出错就返回空字符串，避免整个流程中断；具体错误可按需改成日志记录
-                return ""
-
-        try:
-            assert pd.to_datetime(start_date) <= pd.to_datetime(end_date), "start_date 晚于当前时间，请重新设置"
-            assert category in {'年报', '半年报', '一季报', '三季报', '业绩预告', '权益分派',
-                                '董事会', '监事会', '股东大会', '日常经营', '公司治理', '中介报告',
-                                '首发', '增发', '股权激励', '配股', '解禁', '公司债', '可转债', '其他融资',
-                                '股权变动', '补充更正', '澄清致歉', '风险提示', '特别处理和退市', '退市整理期', '',
-                                None}, f'category 设置错误，不支持"{category}"'
-            df = ak.stock_zh_a_disclosure_report_cninfo(
-                symbol=symbol,
-                market=market,
-                keyword=keyword,
-                category=category,
-                start_date=start_date,
-                end_date=end_date,
-            )
-        except Exception as e:
-        # 捕获 akshare 在内部筛选、字段缺失等造成的异常
-        #     traceback.print_exc()
-            df = None
-            text = (
-                f"[fetch_disclosure_material] {'检索结果为空' if isinstance(e, KeyError) else e}。\n"
-                f"建议修改或放宽搜索条件（symbol={symbol}, market={market}, keyword={keyword}, "
-                f"category={category}, start_date={start_date}, end_date={end_date}）"
-            )
-            return ToolResponse(
-                content=[
-                    TextBlock(
-                        type="text",
-                        text=text,
-                    ),
-                ],
-            )
-
-        # 避免获取的公告数量过多取其中10条，后续可以改成按照某些条件排序取前10条
-        # if df is not None and len(df) > 10:
-        #     df = df.sample(n=10)
-
-        # 2. 遍历 df 行，构造 PDF URL 并抽文本，为每个公告保存为独立文件
-        df["cite_id"] = ""
-        entity = get_entity_info(long_term=self.long_term, text=symbol)
-        base_timestamp = int(time_module.time())
-
-        for idx, row in df.iterrows():
-            link = row.get("公告链接")
-            announce_date = row.get("公告时间")
-            announce_title = row.get("公告标题", "未命名公告")
-            pdf_url = _build_pdf_url(link, announce_date)
-            text = _fetch_pdf_text(pdf_url, referer=link)
-
-            if text:  # 只保存有内容的公告
-                # 为每个公告创建唯一的 cite_id
-                announce_date = fmt_yyyymmdd(str(announce_date))
-                date_only = announce_date.replace(".", "-").replace("/", "-")
-                disclosure_cite_id = f"{symbol}_disclosure_{date_only}_{idx}"  # 避免不合法文件名
-
-                # 创建详细的描述，包含工具名、源URL等信息
-                description_parts = [
-                    "fetch_disclosure_material",  # 工具名
-                    f"source={entity['name']} ({entity['code']}) 信息披露公告",
-                    f"title={announce_title}",
-                    f"date={announce_date}",
-                    f"market={market}",
-                ]
-                if keyword:
-                    description_parts.append(f"keyword={keyword}")
-                if category:
-                    description_parts.append(f"category={category}")
-                if pdf_url:
-                    description_parts.append(f"url={pdf_url}")
-
-                description = " | ".join(description_parts)
-
-                # 保存公告文本为单独的文件
-                self.short_term.save_material(
-                    cite_id=disclosure_cite_id,
-                    content=text,
-                    description=description,
-                    source="AKshare API:CNINFO",
-                    entity=entity,
-                    time={"point": str(announce_date)},
-                )
-                df.at[idx, "cite_id"] = disclosure_cite_id
-
-        # 3. 保留每行公告对应的 cite_id，PDF 提取失败的行保持为空
-        if "公告链接" in df.columns:
-            df = df.drop(columns=["公告链接"])
-        df = df[['cite_id', '公告标题']].set_index("cite_id")
-
-        #cite_id = f"{symbol}_disclosure_{category or 'all'}_{base_timestamp}"
-        description = f"{entity['name']}（{entity['code']}）股票"
-        parts = [x for x in (keyword, category) if x]
-        if parts:
-            description += " " + " ".join(parts)
-        description = description + "信息披露公告"
-        # self._save_df_to_material(df=df, cite_id=cite_id, source="AKshare API:CNINFO", entity=entity, description=description)
-        header = (
-            f"[fetch_disclosure_material] 信息披露公告（symbol={symbol}, market={market}, "
-            f"category={category or '全部'}, {start_date}~{end_date}）。"
-            f"各disclosure按cite_id单独保存到了本地，请根据需要使用retrieve_local_material或read_material工具根据对应cite_id读取。"
-        )
-        return _build_tool_response_from_df(
-            df,
-            cite_id="",
-            header=header,
-            preview_rows=len(df),
-            extra_meta={
-                "symbol": symbol,
-                "market": market,
-                "keyword": keyword,
-                "category": category,
-                "start_date": start_date,
-                "end_date": end_date,
-            },
-            save=False,
-        )
-    # ===================== 财务报表 =====================
-    async def fetch_balance_sheet_material(
-            self,
-            symbol: str,
-            indicator: str = "按报告期",
-    ) -> ToolResponse:
-        """    # 获取指定股票的资产负债表数据，并保存表格结果到Material当中，返回Material标识cite_id。
-        抓取企业历年或各报告期的资产负债表数据，并将结果保存。
-        适用场景：研报中的“资产结构分析”“杠杆水平”“偿债能力”相关章节；对比不同报告期的资产、负债、所有者权益变化情况。
-
-        Args:
-            symbol (str):
-                股票代码，例如 "000063"。
-            indicator (str):
-                数据展示方式，持的取值：
-                - "按报告期"（默认）：按季度 / 半年 / 年度等报告期展示；
-                - "按年度"：按年度汇总展示；
-                - "按单季度"：按单个季度拆分展示。
-        """
-
-        df = ak.stock_financial_debt_ths(symbol=symbol, indicator=indicator)
-
-        safe_indicator = indicator.replace(" ", "")
-        cite_id = f"{symbol}_balance_{safe_indicator}_{int(time_module.time())}"
-        entity = get_entity_info(long_term=self.long_term, text=symbol)
-        description = f"{entity['name']}（{entity['code']}）{indicator}资产负债表"
-        self._save_df_to_material(
-            df=df, cite_id=cite_id,
-            description=description,
-            entity=entity,
-            source="AKshare API:Hithink",
-        )
-        header = f"[fetch_balance_sheet_material] 资产负债表（symbol={symbol}, indicator={indicator}）"
-
-        return _build_tool_response_from_df(
-            df,
-            cite_id=cite_id,
-            header=header,
-            extra_meta={"symbol": symbol, "indicator": indicator},
-        )
-
-    async def fetch_profit_table_material(
-            self,
-            symbol: str,
-            indicator: str = "按报告期",
-    ) -> ToolResponse:
-        """获取指定股票的利润表数据，并保存表格结果到Material当中，返回Material标识cite_id。
-        抓取企业历年或各报告期的利润表数据，并保存。
-        适用场景：盈利能力分析、收入与成本结构分析；生成研报中的“利润表分析”“盈利预测校验”等部分。
-
-        Args:
-            symbol (str):
-                股票代码，例如 "000063"。
-            indicator (str):
-                数据展示方式，支持的取值：
-                - "按报告期"（默认）；
-                - "按年度"；
-                - "按单季度"。
-        """
-
-        df = ak.stock_financial_benefit_ths(symbol=symbol, indicator=indicator)
-
-        safe_indicator = indicator.replace(" ", "")
-        cite_id = f"{symbol}_profit_{safe_indicator}"
-        entity = get_entity_info(long_term=self.long_term, text=symbol)
-        description = f"{entity['name']}（{entity['code']}）{indicator}利润表"
-        self._save_df_to_material(
-            df=df, cite_id=cite_id,
-            description=description,
-            source="AKshare API:Hithink",
-            entity=entity,
-        )
-        header = f"[fetch_profit_table_material] 利润表（symbol={symbol}, indicator={indicator}）"
-        return _build_tool_response_from_df(
-            df,
-            cite_id=cite_id,
-            header=header,
-            extra_meta={"symbol": symbol, "indicator": indicator},
-        )
-
-    async def fetch_cashflow_table_material(
-            self,
-            symbol: str,
-            indicator: str = "按报告期",
-    ) -> ToolResponse:
-        """获取指定股票的现金流量表数据，并保存表格结果到Material当中，返回Material标识cite_id。
-        抓取企业历年或各报告期的现金流量表数据（约 75 个字段），并将结果保存。
-        适用场景：研报中对经营活动、投资活动、筹资活动现金流的分析；评估企业现金创造能力、分红支付能力和资本开支压力。
-
-        Args:
-            symbol (str):
-                股票代码，例如 "000063"。
-            indicator (str):
-                数据展示方式，支持的取值：
-                - "按报告期"（默认）；
-                - "按年度"；
-                - "按单季度"。
-        """
-        df = ak.stock_financial_cash_ths(symbol=symbol, indicator=indicator)
-
-        safe_indicator = indicator.replace(" ", "")
-        cite_id = f"{symbol}_cashflow_{safe_indicator}"
-        entity = get_entity_info(long_term=self.long_term, text=symbol)
-        description = f"{entity['name']}（{entity['code']}）{indicator}现金流量表"
-        self._save_df_to_material(
-            df=df, cite_id=cite_id,
-            description=description,
-            source="AKshare API:Hithink",
-            entity=entity,
-        )
-        header = f"[fetch_cashflow_table_material] 现金流量表（symbol={symbol}, indicator={indicator}）"
-        return _build_tool_response_from_df(
-            df,
-            cite_id=cite_id,
-            header=header,
-            extra_meta={"symbol": symbol, "indicator": indicator},
-        )
-
-    # async def fetch_balance_sheet_material(
-    #         self,
-    #         symbol: str,
-    #         indicator: str = "按报告期",
-    #         date: str | None = None,
-    # ) -> ToolResponse:
-    #     """获取指定股票的资产负债表数据，并保存表格结果到Material当中，返回Material标识cite_id。
-    #     抓取企业历年或各报告期的资产负债表数据，并将结果保存。
-    #     适用场景：
-    #     1. 研报中的“资产结构分析”“杠杆水平”“偿债能力”相关章节；
-    #     2. 提取公司的“总股本”、“实收资本(或股本)”、“所有者权益”等股本结构数据；
-    #     3. 对比不同报告期的资产、负债、所有者权益变化情况。
-
-    #     Args:
-    #         symbol (str):
-    #             股票代码，例如 "000063"。
-    #         indicator (str):
-    #             数据展示方式，持的取值：
-    #             - "按报告期"（默认）：按季度 / 半年 / 年度等报告期展示；
-    #             - "按年度"：按年度汇总展示；
-    #             - "按单季度"：按单个季度拆分展示。
-    #         date (str | None):
-    #             报告撰写日期，格式为 "YYYYMMDD"。
-    #     """
-        
-    #     df = ak.stock_financial_debt_ths(symbol=symbol, indicator=indicator)
-
-    #     safe_indicator = indicator.replace(" ", "")
-
-    #     cached_cite_id = self._check_duplicate_in_registry(symbol, tool_keyword=f"_balance_{safe_indicator}")
-    #     if cached_cite_id:
-    #         msg = (f"【系统强制拦截】：检测到本地已存在 {symbol} 的资产负债表({indicator})！保存的材料的 cite_id 为 '{cached_cite_id}'\n"
-    #                f"绝对禁止重复调用 API 抓取相同数据！\n"
-    #                f"👉 请立即停止本工具，转去调用 query_fact_store 提取需要的具体数值，或 retrieve_local_material 检索本地保存的原始材料"
-    #                f"或调用 read_material(cite_id='{cached_cite_id}') 读取全表。")
-    #         return ToolResponse(content=[TextBlock(type="text", text=msg)])
-    #     cite_id = f"{symbol}_balance_{safe_indicator}_{int(time_module.time())}"
-    #     entity = get_entity_info(long_term=self.long_term, text=symbol)
-        
-    #     if df is not None and not df.empty:
-    #         # ================= 1. 物理时间拦截 (防穿越) =================
-    #         cur_date = date or self.short_term.current_date
-    #         if cur_date:
-    #             limit_dt = pd.to_datetime(cur_date, format="%Y%m%d")
-    #             df['报告期_dt'] = pd.to_datetime(df['报告期'], errors='coerce')
-    #             # 仅保留报告期早于等于撰写日期的行
-    #             df = df[df['报告期_dt'] <= limit_dt].copy()
-    #             df.drop(columns=['报告期_dt'], inplace=True)
-            
-    #         # 确保按时间倒序（最新的合法数据在最上面）
-    #         df = df.sort_values(by="报告期", ascending=False)
-            
-    #         # ================= 2. 动态知识抽取入库 =================
-    #         # 取最近的 8 期财报存入知识库（避免无意义的老旧数据撑爆内存）
-    #         for idx, row in df.head(8).iterrows():
-    #             report_date = str(row.get("报告期", ""))
-    #             if not report_date or report_date == "nan": 
-    #                 continue
-                
-    #             # 调用短期记忆的全量展平入库方法
-    #             self.short_term.add_tabular_facts(
-    #                 symbol=symbol,
-    #                 time_point=report_date,
-    #                 row_dict=row.to_dict(),
-    #                 source=f"资产负债表({indicator})",
-    #                 cite_id=cite_id,
-    #                 from_tool="fetch_balance_sheet_material"
-    #                 # 全局财务指标，无须指定 dimension_col
-    #             )
-
-    #     description = f"{entity['name'] if entity else symbol}（{entity['code'] if entity else symbol}）{indicator}资产负债表"
-    #     self._save_df_to_material(
-    #         df=df, cite_id=cite_id,
-    #         description=description,
-    #         entity=entity,
-    #         source="AKshare API:Hithink",
-    #     )
-        
-    #     header = f"[fetch_balance_sheet_material] 资产负债表（symbol={symbol}, indicator={indicator}）。各项指标已展平存入本地知识库(Fact Store)。"
-    #     return _build_tool_response_from_df(
-    #         df,
-    #         cite_id=cite_id,
-    #         header=header,
-    #         extra_meta={"symbol": symbol, "indicator": indicator},
-    #     )
-
-    # async def fetch_profit_table_material(
-    #         self,
-    #         symbol: str,
-    #         indicator: str = "按报告期",
-    #         date: str | None = None,
-    # ) -> ToolResponse:
-    #     """获取指定股票的利润表数据，并保存表格结果到Material当中，返回Material标识cite_id。
-    #     抓取企业历年或各报告期的利润表数据，并保存。
-    #     适用场景：盈利能力分析、收入与成本结构分析；生成研报中的“利润表分析”“盈利预测校验”等部分。
-
-    #     Args:
-    #         symbol (str):
-    #             股票代码，例如 "000063"。
-    #         indicator (str):
-    #             数据展示方式，支持的取值：
-    #             - "按报告期"（默认）；
-    #             - "按年度"；
-    #             - "按单季度"。
-    #         date (str | None):
-    #             报告撰写日期，格式为 "YYYYMMDD"。
-    #     """
-    #     import pandas as pd
-        
-    #     df = ak.stock_financial_benefit_ths(symbol=symbol, indicator=indicator)
-
-    #     safe_indicator = indicator.replace(" ", "")
-    #     cite_id = f"{symbol}_profit_{safe_indicator}_{int(time_module.time())}"
-    #     entity = get_entity_info(long_term=self.long_term, text=symbol)
-        
-    #     if df is not None and not df.empty:
-    #         # ================= 1. 物理时间拦截 (防穿越) =================
-    #         cur_date = date or self.short_term.current_date
-    #         if cur_date:
-    #             limit_dt = pd.to_datetime(cur_date, format="%Y%m%d")
-    #             df['报告期_dt'] = pd.to_datetime(df['报告期'], errors='coerce')
-    #             df = df[df['报告期_dt'] <= limit_dt].copy()
-    #             df.drop(columns=['报告期_dt'], inplace=True)
-            
-    #         df = df.sort_values(by="报告期", ascending=False)
-            
-    #         # ================= 2. 动态知识抽取入库 =================
-    #         for idx, row in df.head(8).iterrows():
-    #             report_date = str(row.get("报告期", ""))
-    #             if not report_date or report_date == "nan": 
-    #                 continue
-                    
-    #             self.short_term.add_tabular_facts(
-    #                 symbol=symbol,
-    #                 time_point=report_date,
-    #                 row_dict=row.to_dict(),
-    #                 source=f"利润表({indicator})",
-    #                 cite_id=cite_id,
-    #                 from_tool="fetch_profit_table_material"
-    #             )
-
-    #     description = f"{entity['name'] if entity else symbol}（{entity['code'] if entity else symbol}）{indicator}利润表"
-    #     self._save_df_to_material(
-    #         df=df, cite_id=cite_id,
-    #         description=description,
-    #         source="AKshare API:Hithink",
-    #         entity=entity,
-    #     )
-        
-    #     header = f"[fetch_profit_table_material] 利润表（symbol={symbol}, indicator={indicator}）。各项指标已展平存入本地知识库(Fact Store)。"
-    #     return _build_tool_response_from_df(
-    #         df,
-    #         cite_id=cite_id,
-    #         header=header,
-    #         extra_meta={"symbol": symbol, "indicator": indicator},
-    #     )
-
-    # async def fetch_cashflow_table_material(
-    #         self,
-    #         symbol: str,
-    #         indicator: str = "按报告期",
-    #         date: str | None = None,
-    # ) -> ToolResponse:
-    #     """获取指定股票的现金流量表数据，并保存表格结果到Material当中，返回Material标识cite_id。
-    #     抓取企业历年或各报告期的现金流量表数据（约 75 个字段），并将结果保存。
-    #     适用场景：研报中对经营活动、投资活动、筹资活动现金流的分析；评估企业现金创造能力、分红支付能力和资本开支压力。
-
-    #     Args:
-    #         symbol (str):
-    #             股票代码，例如 "000063"。
-    #         indicator (str):
-    #             数据展示方式，支持的取值：
-    #             - "按报告期"（默认）；
-    #             - "按年度"；
-    #             - "按单季度"。
-    #         date (str | None):
-    #             报告撰写日期，格式为 "YYYYMMDD"。
-    #     """
-    #     import pandas as pd
-        
-    #     df = ak.stock_financial_cash_ths(symbol=symbol, indicator=indicator)
-
-    #     safe_indicator = indicator.replace(" ", "")
-    #     cite_id = f"{symbol}_cashflow_{safe_indicator}_{int(time_module.time())}"
-    #     entity = get_entity_info(long_term=self.long_term, text=symbol)
-
-    #     if df is not None and not df.empty:
-    #         # ================= 1. 物理时间拦截 (防穿越) =================
-    #         cur_date = date or self.short_term.current_date
-    #         if cur_date:
-    #             limit_dt = pd.to_datetime(cur_date, format="%Y%m%d")
-    #             df['报告期_dt'] = pd.to_datetime(df['报告期'], errors='coerce')
-    #             df = df[df['报告期_dt'] <= limit_dt].copy()
-    #             df.drop(columns=['报告期_dt'], inplace=True)
-            
-    #         df = df.sort_values(by="报告期", ascending=False)
-            
-    #         # ================= 2. 动态知识抽取入库 =================
-    #         for idx, row in df.head(8).iterrows():
-    #             report_date = str(row.get("报告期", ""))
-    #             if not report_date or report_date == "nan": 
-    #                 continue
-                    
-    #             self.short_term.add_tabular_facts(
-    #                 symbol=symbol,
-    #                 time_point=report_date,
-    #                 row_dict=row.to_dict(),
-    #                 source=f"现金流量表({indicator})",
-    #                 cite_id=cite_id,
-    #                 from_tool="fetch_cashflow_table_material"
-    #             )
-
-    #     description = f"{entity['name'] if entity else symbol}（{entity['code'] if entity else symbol}）{indicator}现金流量表"
-    #     self._save_df_to_material(
-    #         df=df, cite_id=cite_id,
-    #         description=description,
-    #         source="AKshare API:Hithink",
-    #         entity=entity,
-    #     )
-        
-    #     header = f"[fetch_cashflow_table_material] 现金流量表（symbol={symbol}, indicator={indicator}）。各项指标已展平存入本地知识库(Fact Store)。"
-    #     return _build_tool_response_from_df(
-    #         df,
-    #         cite_id=cite_id,
-    #         header=header,
-    #         extra_meta={"symbol": symbol, "indicator": indicator},
-    #     )
-
-    # ===================== 股东信息 =====================
-
-    async def fetch_top10_float_shareholders_material(
-            self,
-            symbol: str,
-            date: str,
-    ) -> ToolResponse:
-        """获取指定股票在某一报告期的十大流通股东，并保存表格结果到Material当中，返回Material标识cite_id。
-
-        抓取指定 symbol 和 date 对应的所有流通股东信息，
-        包括股东名称、股东性质、持股数量、持股比例、增减变动等。
-        适用场景：分析个股流通股东结构、筹码集中度；跟踪机构、重要股东持股变动情况。
-
-        Args:
-            symbol (str):
-                股票代码，例如 "000063"。
-            date (str):
-                财报发布季度最后一日，格式为 "YYYYMMDD"。
-                2024 年的季度最后日分别为：20240331、20240630、20240930、20241231。
-                2025 年的季度最后日分别为：20250331、20250630、20250930、20251231。
-        """
-
-        df = ak.stock_gdfx_free_top_10_em(symbol=add_exchange_prefix(symbol, "lower"), date=date)
-
-        cite_id = f"{symbol}_top10_free_{date}_{int(time_module.time())}"
-        time_point = fmt_yyyymmdd(date)
-        time = {"point": time_point}
-        entity = get_entity_info(long_term=self.long_term, text=symbol)
-        description = f"{entity['name']}（{entity['code']}）报告期{time_point}的十大流通股东"
-        self._save_df_to_material(
-            df=df, cite_id=cite_id,
-            description=description,
-            source="AKshare API:eastmoney",
-            entity=entity,
-            time=time,
-        )
-
-        header = f"[fetch_top10_float_shareholders_material] 十大流通股东（symbol={symbol}, date={date}）"
-        return _build_tool_response_from_df(
-            df,
-            cite_id=cite_id,
-            header=header,
-            extra_meta={"symbol": symbol, "date": date},
-        )
-
-    async def fetch_top10_shareholders_material(
-            self,
-            symbol: str,
-            date: str,
-    ) -> ToolResponse:
-        """获取指定股票在某一报告期的十大股东（总股本口径），并保存表格结果到Material当中，返回Material标识cite_id。
-        抓取指定 symbol 和 date 对应的股东名称、股份类型、
-        持股数、持股比例及增减变动等信息，并保存。
-        适用场景：分析公司控制权和股权结构；对比不同报告期十大股东持股变动情况。
-
-        Args:
-            symbol (str):
-                股票代码，例如 "000063"。
-            date (str):
-                财报发布季度最后一日，格式为 "YYYYMMDD"。
-                2024 年的季度最后日分别为：20240331、20240630、20240930、20241231。
-                2025 年的季度最后日分别为：20250331、20250630、20250930、20251231。
-        """
-        df = ak.stock_gdfx_top_10_em(symbol=add_exchange_prefix(symbol, "lower"), date=date)
-        cite_id = f"{symbol}_top10_{date}_{int(time_module.time())}"
-        time_point = fmt_yyyymmdd(date)
-        time = {"point": time_point}
-        entity = get_entity_info(long_term=self.long_term, text=symbol)
-        description = f"{entity['name']}（{entity['code']}）报告期{time_point}的十大股东"
-        self._save_df_to_material(
-            df=df, cite_id=cite_id,
-            description=description,
-            source="AKshare API:eastmoney",
-            entity=entity,
-            time=time,
-        )
-        header = f"[fetch_top10_shareholders_material] 十大股东（symbol={symbol}, date={date}）"
-        return _build_tool_response_from_df(
-            df,
-            cite_id=cite_id,
-            header=header,
-            extra_meta={"symbol": symbol, "date": date},
-        )
-
-    async def fetch_main_shareholders_material(
-            self,
-            symbol: str,
-    ) -> ToolResponse:
-        """获取指定股票的主要股东信息，并保存表格结果到Material当中，返回Material标识cite_id。
-        抓取所有历史披露的主要股东信息，
-        包括股东名称、持股数量、持股比例、股本性质、截至日期、公告日期等。
-        适用场景：分析公司历史上的主要股东变化；辅助研报中“股权结构与股东情况”章节的撰写。
-
-        Args:
-            symbol (str):
-                股票代码，例如 "600004"。
-        """
-        df = ak.stock_main_stock_holder(stock=symbol)
-        cite_id = f"{symbol}_main_holders_{int(time_module.time())}"
-
-        entity = get_entity_info(long_term=self.long_term, text=symbol)
-        description = f"{entity['name']}（{entity['code']}）的主要股东"
-        self._save_df_to_material(
-            df=df, cite_id=cite_id,
-            description=description,
-            source="AKshare API:Sina Finance",
-            entity=entity,
-        )
-        header = f"[fetch_main_shareholders_material] 主要股东（symbol={symbol}）"
-        return _build_tool_response_from_df(
-            df,
-            cite_id=cite_id,
-            header=header,
-            extra_meta={"symbol": symbol},
-        )
-
-    async def fetch_shareholder_count_detail_material(
-            self,
-            symbol: str,
-    ) -> ToolResponse:
-        """获取指定股票的股东户数详情，并保存表格结果到Material当中，返回Material标识cite_id。
-        获取指定 symbol 的全部历史数据，包括股东户数统计截止日、区间涨跌幅、股东户数本次/上次/增减及其比例、户均持股市值与数量、
-        总市值、总股本及股本变动原因等。
-        适用场景：分析股东户数与股价表现的关系；评估筹码集中度变化和市场参与者结构。
-
-        Args:
-            symbol (str):
-                股票代码，例如 "000001"。
-        """
-        df = ak.stock_zh_a_gdhs_detail_em(symbol=symbol)
-
-        cite_id = f"{symbol}_shareholder_count_detail_{int(time_module.time())}"
-
-        entity = get_entity_info(long_term=self.long_term, text=symbol)
-        description = f"{entity['name']}（{entity['code']}）股东户数详情"
-        self._save_df_to_material(
-            df=df, cite_id=cite_id,
-            description=description,
-            source="AKshare API:eastmoney",
-            entity=entity,
-        )
-        header = f"[fetch_shareholder_count_detail_material] 股东户数详情（symbol={symbol}）"
-        return _build_tool_response_from_df(
-            df,
-            cite_id=cite_id,
-            header=header,
-            extra_meta={"symbol": symbol},
-        )
-
-    async def fetch_shareholder_change_material(
-            self,
-            symbol: str,
-    ) -> ToolResponse:
-        """获取指定股票的股东持股变动统计信息，并保存表格结果到Material当中，返回Material标识cite_id。
-        抓取所有披露的股东持股变动记录，包括公告日期、变动股东、变动数量、交易均价、剩余股份总数、变动期间和变动途径等。
-        适用场景： 跟踪重要股东和机构的减持 / 增持行为；分析股价波动背后的股东行为因素。
-
-        Args:
-            symbol (str):
-                股票代码，例如 "688981"。
-        """
-
-        df = ak.stock_shareholder_change_ths(symbol=symbol)
-
-        cite_id = f"{symbol}_shareholder_change_{int(time_module.time())}"
-
-        entity = get_entity_info(long_term=self.long_term, text=symbol)
-        description = f"{entity['name']}（{entity['code']}）股东持股变动"
-        self._save_df_to_material(
-            df=df, cite_id=cite_id,
-            description=description,
-            source="AKshare API:Hithink",
-            entity=entity,
-        )
-        header = f"[fetch_shareholder_change_material] 股东持股变动（symbol={symbol}）"
-        return _build_tool_response_from_df(
-            df,
-            cite_id=cite_id,
-            header=header,
-            extra_meta={"symbol": symbol},
-        )
-
-    # ===================== 业务范围 =====================
-    async def fetch_business_description_material(
-            self,
-            symbol: str,
-    ) -> ToolResponse:
-        """获取指定股票的主营业务介绍，并保存表格结果到Material当中，返回Material标识cite_id。
-        抓取公司主营业务、产品类型、产品名称及经营范围等字段，
-        适用场景：生成研报中“公司简介”“主营业务与商业模式”章节的基础描述；快速了解公司业务结构和核心产品。
-
-        Args:
-            symbol (str):
-                股票代码，例如 "000066"。
-        """
-        df = ak.stock_zyjs_ths(symbol=symbol)
-        data = df.iloc[0].to_dict()
-
-        cite_id = f"{symbol}_business_description"
-        entity = get_entity_info(long_term=self.long_term, text=symbol)
-        description = f"{entity['name']}（{entity['code']}）主营业务、产品介绍"
-        self._save_df_to_material(
-            df=data, cite_id=cite_id,
-            description=description,
-            source="AKshare API:Hithink",
-            entity=entity,
-        )
-
-        header = f"[fetch_business_description_material] 主营介绍（symbol={symbol}）"
-        return _build_tool_response_from_dict(
-            data,
-            cite_id=cite_id,
-            header=header,
-            extra_meta={"symbol": symbol},
-        )
-
-    async def fetch_business_composition_material(
-            self,
-            symbol: str,
-    ) -> ToolResponse:
-        """获取指定股票的主营构成数据，并保存表格结果到Material当中，返回Material标识cite_id。
-        抓取按产品、地区等维度划分的主营收入、成本、利润、及对应比例和毛利率等历史数据。
-        适用场景：分析公司按产品/地区划分的收入与利润结构；研报中“业务结构分析”“毛利率拆解”等章节的数据来源。
-
-        Args:
-            symbol (str):
-                股票代码，例如 "000063"。
-        """
-
-        df = ak.stock_zygc_em(symbol=add_exchange_prefix(symbol, "upper"))
-
-        cite_id = f"{symbol}_business_composition"
-
-        entity = get_entity_info(long_term=self.long_term, text=symbol)
-        description = f"{entity['name']}（{entity['code']}）主营构成、业务的收入与利润结构"
-        self._save_df_to_material(
-            df=df, cite_id=cite_id,
-            description=description,
-            source="AKshare API:eastmoney",
-            entity=entity,
-        )
-        header = f"[fetch_business_composition_material] 主营构成（symbol={symbol}）"
-        return _build_tool_response_from_df(
-            df,
-            cite_id=cite_id,
-            header=header,
-            extra_meta={"symbol": symbol},
-        )
-    # 适用场景：为个股研报生成“新闻动态”“舆情分析”等部分提供原始素材；需要快速获取近期与某股票相关的新闻列表。
-    # ===================== 金融新闻 =====================
-    async def fetch_stock_news_material(
-                self,
-                symbol: str,
-                start_date: str,
-                end_date: str | None = None,
-                keyword1: str = "",
-                keyword2: str = "",
-                latest_num: int = 100,
-        ) -> ToolResponse:
-        """获取指定个股的新闻资讯数据，并保存表格结果到Material当中，返回Material标识cite_id，以及关键词附近的上下文。
-        相关的最新新闻资讯（默认为限定时间范围内最近约 100 条），包括新闻标题、内容摘要、发布时间、来源和链接等，
-        适用场景：为个股研报生成“新闻动态”“舆情分析”等部分提供原始素材；需要快速获取近期与某股票相关的新闻列表。
-
-        Args:
-            symbol (str):
-                沪深京 A 股股票代码（不带市场标识），例如 "000001"；为空字符串时不做股票过滤。
-            keyword1 (str): 
-                核心搜索维度/指标。仅保留核心名词（如："营业收入"、"AI存储"、"产能"），也可以为空。
-            keyword2 (str): 
-                补充限定词/次要维度。此处至多可以输入一个词，也可以留空。
-            start_date (str):
-                过滤限定日期之后的新闻，格式为 "YYYYMMDD"，例如 "20230101"。必需参数。
-            end_date (str | None):
-                过滤限定日期之前的新闻，格式为 "YYYYMMDD"，例如 "20231231"。如果为 None，则使用当前日期。
-            latest_num (int):
-                限定时间范围内最近的新闻条数，默认100
-        """
-        cur_date = _normalize_tool_date(self.short_term.current_date, fallback=os.getenv("CUR_DATE"))
-        start_date = _normalize_tool_date(start_date)
-        end_date = _clip_end_date(end_date, cur_date)
-        assert pd.to_datetime(start_date, format="%Y%m%d") <= pd.to_datetime(end_date, format="%Y%m%d")
-        cite_id = f"{symbol}_{keyword1}_{keyword2}_news_daterange_{start_date}-{end_date}_num{latest_num}"
-        start_date, end_date = pd.to_datetime(start_date, format="%Y%m%d"), pd.to_datetime(end_date, format="%Y%m%d")
-
-        query_terms = [term.strip() for term in (keyword1, keyword2) if term and term.strip()]
-        keyword = " ".join(query_terms)
-        if symbol is None or symbol == "":
-            entity = None
-            description = f"股票新闻资讯 {keyword1}_{keyword2}"
-        else:
-            entity = get_entity_info(long_term=self.long_term, text=symbol)
-            base_keyword = entity["name"] if entity else symbol
-            keyword = " ".join([base_keyword] + query_terms).strip()
-            description = (f"{entity['name']}（{entity['code']}）" if entity else f"{symbol}") + f"股票新闻资讯 {keyword}"
-        dfs = []
-        for page_idx in range(1, 25):
-            df = stock_news_em(keyword=keyword, page_idx=page_idx)
-            dfs.append(
-                df[(pd.to_datetime(df['发布时间']) >= start_date) & (pd.to_datetime(df['发布时间']) <= end_date)])
-            if sum([len(_df) for _df in dfs]) > latest_num:
-                break
-        df = pd.concat(dfs)
-        df.sort_values("发布时间", inplace=True, ascending=False)
-
-        # =====================================================================
-        # === 新增：1. 获取网页内容； 2. 检索关键词获取上下文 ===
-        # =====================================================================
-        fetched_results: list[dict[str, str]] = []
-        if not df.empty:
-            # 确定检索词：优先使用传入的原始 keyword，若无则使用股票名称
-            search_target = keyword
-            search_kws = search_target.split() if search_target else []
-            
-            url_col = '新闻链接' if '新闻链接' in df.columns else ('文章链接' if '文章链接' in df.columns else 'url')
-
-            async def fetch_and_get_context(row):
-                context = ""
-                page_text = ""
-                url = row.get(url_col) if url_col in row else None
-                # print(f"url: {url}")
-                if isinstance(url, str) and url.startswith("http"):
-                    try:
-                        # 1. 获取网页具体内容
-                        bytes = fetch_page_html(url)
-                        page_text, img_urls = extract_text_and_images(bytes, url)
-                        # print(f"fetch_and_get_context: 已获取网页文本，长度={len(page_text)}，准备进行关键词检索。")
-                        # 2. 在具体内容中做一次上下文检索（检索所有关键词）
-                        if page_text and search_kws:
-                            snippet_items = extract_keyword_context_snippets(
-                                text=page_text,
-                                keywords=search_kws,
-                                context_chars=150,
-                                merge_gap_chars=20,
-                                ignore_case=True,
-                            )
-                            if snippet_items:
-                                found_contexts = []
-                                for item in snippet_items:
-                                    kws_str = ", ".join(item["keywords"])
-                                    found_contexts.append(f"[{kws_str}] {item['snippet']}")
-                                context = " ｜ ".join(found_contexts)
-
-                            # print(f"getting entity info")
-                            # entity = get_entity_info(long_term=self.long_term, text=symbol or page_text)
-
-                            # print(f"parsing domain from url: {url}  ")
-                            # domain = urlparse(url).netloc
-                        
-                            # print(f"preparing description")
-
-                            # desc = ""
-                            # time = None
-
-                            # published_date = None
-                            # try:
-                            #     published_date = find_date(
-                            #         bytes,
-                            #         url=url,
-                            #         original_date=True,
-                            #         extensive_search=True,
-                            #         deferred_url_extractor=True,
-                            #     )
-                            # except Exception:
-                            #     published_date = None
-
-                            # if published_date:
-                            #     print(f"formatting published_date: {published_date}  ")
-                            #     published_date = fmt_yyyymmdd(published_date)
-                            #     desc = desc + f"网页发布时间：{published_date} "
-                            #     time = {"point": published_date}
-
-                            # if entity:
-                            #     print(f"appending entity info to description: {entity}  ")
-                            #     desc = desc + f"发布关于{entity['name']}（{entity['code']}）的内容:"
-
-                            # desc = desc
-                            # print(f"fetch_and_get_context: 关键词检索完成，准备将上下文保存到Material中。context={context}, desc={desc}")
-                            # self.short_term.save_material(
-                            #     cite_id=resp_cite_id,
-                            #     content=context,
-                            #     description=desc,
-                            #     source=f"web search（来源：{domain}）",
-                            #     entity=entity,
-                            #     time=time
-                            # )
-                    except Exception:
-                        pass
-                return {
-                    "网页全文": page_text,
-                    "关键词上下文": context,
-                }
-
-            # 并发执行以加速网页抓取和检索流程
-            tasks = [fetch_and_get_context(row) for _, row in df.iterrows()]
-            fetched_results = await asyncio.gather(*tasks)
-            print(f"fetch_stock_news_material: 已完成网页内容抓取和关键词上下文检索，准备将结果添加到表格中。")
-            df['网页全文'] = [item.get("网页全文", "") for item in fetched_results]
-            
-        # =====================================================================
-
-        self._save_df_to_material(
-            df=df,
-            cite_id=cite_id,
-            source="AKshare API:eastmoney",
-            entity=entity,
-            description=description,
-        )
-        header = f"[fetch_stock_news_material] 股票新闻资讯"
-        df_for_response = df.drop(columns=["网页全文"], errors="ignore")
-        response = _build_tool_response_from_df(
-            df=df_for_response,
-            cite_id=cite_id,
-            header=header,
-            extra_meta={"symbol": symbol} if symbol else {"keyword": keyword},
-            save=True
-        )
-        if fetched_results:
-            context_lines = ["", "以下为关键词上下文摘录："]
-            for idx, item in enumerate(fetched_results, 1):
-                context = item.get("关键词上下文", "").strip()
-                if not context:
-                    continue
-                context_lines.append(f"{idx}. {context}")
-            if len(context_lines) > 2:
-                response.content[0]["text"] += "\n" + "\n".join(context_lines)
-        return response
-
-    # async def fetch_url_page_text_embed(self, url: str, symbol: str | None = None) -> ToolResponse:
-    #     """返回url对应网页的文本结果，不保存到本地。
-    #     Args:
-    #         url (str):
-    #             网页地址。
-    #         symbol (str | None):
-    #             新闻对应股票代码或名称。如果无法判断，可以不提供。
-    #     """
-    #     bytes = fetch_page_html(url)
-    #     page_text, img_urls = extract_text_and_images(bytes, url)
-    #     page_text = page_text or ""
-    #     if page_text:
-    #         # 保存网页提取的文本为单独的文件
-    #         entity = get_entity_info(long_term=self.long_term, text=symbol or page_text)
-    #         domain = urlparse(url).netloc
-    #         if domain.startswith("www."):
-    #             domain = domain[4:]
-    #         cite_id = ((str(entity['code']) + "_" if entity else "") +
-    #                    "url_page_text_" + url.replace(".html", "")
-    #                    .replace("http://", "")
-    #                    .replace("https://", "")
-    #                    .replace("/", "-"))
-
-    #         published_date = None
-    #         try:
-    #             published_date = find_date(
-    #                 bytes,
-    #                 url=url,
-    #                 original_date=True,
-    #                 extensive_search=True,
-    #                 deferred_url_extractor=True,
-    #             )
-    #         except Exception:
-    #             published_date = None
-
-    #         desc = ""
-    #         time = None
-    #         if published_date:
-    #             published_date = fmt_yyyymmdd(published_date)
-    #             desc = desc + f"网页发布时间：{published_date} "
-    #             time = {"point": published_date}
-    #         if entity:
-    #             desc = desc + f"发布关于{entity['name']}（{entity['code']}）的内容:"
-
-    #         desc = desc + page_text[:50]
-
-    #         self.short_term.save_material(
-    #             cite_id=cite_id,
-    #             content=page_text,
-    #             description=desc,
-    #             source=f"web search（来源：{domain}）",
-    #             entity=entity,
-    #             time=time
-    #         )
-
-    #         text_block: TextBlock = {
-    #             "type": "text",
-    #             "text": (
-    #                 f"[fetch_url_page_text] url:{url}对应的网页文本结果获取如下：\n"
-    #                 f"Material 已写入 cite_id='{cite_id}' TXT 格式）\n"
-    #             ),
-    #         }
-    #         return ToolResponse(content=[text_block], metadata={"cite_id": cite_id, "page_text": page_text})
-    #     else:
-    #         text = f"[fetch_url_page_text] url:{url}对应的网页文本为空。"
-    #         return ToolResponse(
-    #             content=[
-    #                 TextBlock(
-    #                 type="text",
-    #                 text=text,
-    #             ),
-    #         ],
-    #     )
-
-    async def fetch_url_page_text(self, url: str, symbol: str | None = None) -> ToolResponse:
-        """返回url对应网页的文本结果，如果不为空则保存到本地。
-        Args:
-            url (str):
-                网页地址。
-            symbol (str | None):
-                新闻对应股票代码或名称。如果无法判断，可以不提供。
-        """
-        bytes = fetch_page_html(url)
-        page_text, img_urls = extract_text_and_images(bytes, url)
-        page_text = page_text or ""
-        if page_text:
-            # 保存网页提取的文本为单独的文件
-            entity = get_entity_info(long_term=self.long_term, text=symbol or page_text)
-            domain = urlparse(url).netloc
-            if domain.startswith("www."):
-                domain = domain[4:]
-            cite_id = ((str(entity['code']) + "_" if entity else "") +
-                       "url_page_text_" + url.replace(".html", "")
-                       .replace("http://", "")
-                       .replace("https://", "")
-                       .replace("/", "-"))
-
-            published_date = None
-            try:
-                published_date = find_date(
-                    bytes,
-                    url=url,
-                    original_date=True,
-                    extensive_search=True,
-                    deferred_url_extractor=True,
-                )
-            except Exception:
-                published_date = None
-
-            desc = ""
-            time = None
-            if published_date:
-                published_date = fmt_yyyymmdd(published_date)
-                desc = desc + f"网页发布时间：{published_date} "
-                time = {"point": published_date}
-            if entity:
-                desc = desc + f"发布关于{entity['name']}（{entity['code']}）的内容:"
-
-            desc = desc + page_text[:50]
-
-            self.short_term.save_material(
-                cite_id=cite_id,
-                content=page_text,
-                description=desc,
-                source=f"web search（来源：{domain}）",
-                entity=entity,
-                time=time
-            )
-
-            text_block: TextBlock = {
-                "type": "text",
-                "text": (
-                    f"[fetch_url_page_text] url:{url}对应的网页文本结果获取如下：\n"
-                    f"Material 已写入 cite_id='{cite_id}' TXT 格式）\n"
-                ),
-            }
-            return ToolResponse(content=[text_block], metadata={"cite_id": cite_id})
-        else:
-            text = f"[fetch_url_page_text] url:{url}对应的网页文本为空。"
-            return ToolResponse(
-                content=[
-                    TextBlock(
-                    type="text",
-                    text=text,
-                ),
-            ],
-        )
-
-
-
-def stock_news_em(keyword: str = "603777", page_idx=1) -> pd.DataFrame:
-    """
-    东方财富-个股新闻-最近 100 条新闻
-    https://so.eastmoney.com/news/s?keyword=603777
-    :param symbol: 股票代码
-    :type symbol: str
-    :return: 个股新闻
-    :rtype: pandas.DataFrame
-    """
-    url = "http://search-api-web.eastmoney.com/search/jsonp"
-    params = {
-        "cb": "cb",
-        "param": '{"uid":"",'
-        + f'"keyword":"{keyword}"'
-        + ',"type":["cmsArticleWebOld"],"client":"web","clientType":"web","clientVersion":"curr",'
-        + '"param":{"cmsArticleWebOld":{"searchScope":"default","sort":"default","pageIndex":' + str(page_idx) + ','
-        + '"pageSize":100,"preTag":"<em>","postTag":"</em>"}}}',
-    }
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Referer": "https://so.eastmoney.com/"
-    }
-
-    try:
-        r: requests.Response = requests.get(url, params=params, headers=headers)
-        data_text = r.text
-        data_json = json.loads(
-            re.search(r'^\w+\((.*)\)$', data_text).group(1)
-        )
-        temp_df = pd.DataFrame(data_json["result"]["cmsArticleWebOld"])
-        assert len(temp_df) > 0, "当前时间范围内不存在相关新闻，请调整时间区间或关键词后重试。"
-        temp_df["url"] = "http://finance.eastmoney.com/a/" + temp_df["code"] + ".html"
-        temp_df.rename(
-            columns={
-                "date": "发布时间",
-                "mediaName": "文章来源",
-                "code": "-",
-                "title": "新闻标题",
-                "content": "新闻内容",
-                "url": "新闻链接",
-                "image": "-",
-            },
-            inplace=True,
-        )
-        temp_df["关键词"] = keyword
-        temp_df = temp_df[
-            [
-                "关键词",
-                "新闻标题",
-                "新闻内容",
-                "发布时间",
-                "文章来源",
-                "新闻链接",
-            ]
-        ]
-        temp_df["新闻标题"] = (
-            temp_df["新闻标题"]
-            .str.replace(r"\(<em>", "", regex=True)
-            .str.replace(r"</em>\)", "", regex=True)
-        )
-        temp_df["新闻标题"] = (
-            temp_df["新闻标题"]
-            .str.replace(r"<em>", "", regex=True)
-            .str.replace(r"</em>", "", regex=True)
-        )
-        temp_df["新闻内容"] = (
-            temp_df["新闻内容"]
-            .str.replace(r"\(<em>", "", regex=True)
-            .str.replace(r"</em>\)", "", regex=True)
-        )
-        temp_df["新闻内容"] = (
-            temp_df["新闻内容"]
-            .str.replace(r"<em>", "", regex=True)
-            .str.replace(r"</em>", "", regex=True)
-        )
-        temp_df["新闻内容"] = temp_df["新闻内容"].str.replace(r"\u3000", "", regex=True)
-        temp_df["新闻内容"] = temp_df["新闻内容"].str.replace(r"\r\n", " ", regex=True)
-        print(f"Successfully fetched {len(temp_df)} pieces of news for keyword '{keyword}' .")
-        return temp_df
-    except Exception as e:
-        print(f"获取个股新闻失败: {e}")
-        return pd.DataFrame()
-
-
-    # async def query_fact_store(self, symbol: str, keys: list[str]) -> ToolResponse:
-    #     """
-    #     【极其重要：精准数值点读机】
-    #     从本地知识库中精准提取个股的财务数据或行情指标。它返回的是纯净的数值，消耗极低。
-    #     在调用任何外部 fetch_* 工具前，必须优先使用本工具尝试获取数据。
-
-    #     【执行纪律与高级用法】（必须严格遵守）：
-    #     1. **严禁原样重试**：如果你查询了某个 key（或某组 keys）但未能获取到预期数据，**绝对禁止**再次使用完全相同的 key 调用本工具！必须立即改变策略或触发退出机制。
-    #     2. **组合计算优先**：如果你需要的某个复合指标（例如“总市值”、“市盈率”、“净利润率”等）无法直接查到，请思考它的计算公式（如 总市值 = 收盘价 × 总股本）。此时，你必须将公式中的**基础组成指标**（例如传入 `keys=["收盘价", "实收资本（或股本）"]`）传入本工具进行查询，获取基础数值后由你自己完成计算。
-
-    #     【退出机制】：
-    #     当你尝试了直接查询目标指标，且尝试了查询其底层基础计算指标，但本工具依然明确返回“请先调用 fetch_* 工具抓取外部数据”或无有效返回值时，说明本地确实缺乏该维度数据。此时必须立刻停止调用本工具，转而调用相应的 `fetch_*` 外部工具抓取原始报表。
-
-    #     Args:
-    #         symbol (str): 
-    #             股票代码，例如 "001309"
-    #         keys (list[str]): 
-    #             需要查询的具体指标名称列表。支持同时提取多个指标，例如 ["实收资本（或股本）", "收盘价"]。
-    #     """
-    #     results = self.short_term.query_facts_by_keys(symbol=symbol, keys=keys)
-        
-    #     if not results:
-    #         return ToolResponse(
-    #             content=[TextBlock(type="text", text=f"知识库中未找到 {symbol} 的 {keys} 数据。请先调用 fetch_* 工具抓取外部数据。")]
-    #         )
-            
-    #     lines = [f"【知识库精准提取】 {symbol}:"]
-    #     for key, data in results.items():
-    #         t = data["time_point"]
-    #         records = data["records"]
-            
-    #         # 格式化输出，把 cite_id 露出来给模型看！
-    #         for r in records:
-    #             lines.append(
-    #                 f"- 截至 [{t}] | 指标: {key} = {r['value']} "
-    #                 f"(来源: {r['source']} | 若需查看上下文原文件，请 read_material: {r['cite_id']})"
-    #             )
-                
-    #     # 如果大模型一次性查询了多个 Key，极大概率是它在试图组合计算
-    #     lines.append("\n【系统强指令（防死循环）】：")
-    #     lines.append("1. 你已经成功获取了上述基础指标！绝对禁止再次使用相同的 keys 重复调用本工具！")
-    #     lines.append("2. 如果你正在计算复合指标（如 市值 = 股本 × 股价），请检查你是否已经集齐了所有变量。")
-    #     lines.append("3. 如果还缺变量（例如缺最新收盘价），请立刻调用 其他工具获取！")
-    #     lines.append("4. 如果变量已齐，请立即停止检索，执行计算并输出最终答案！")
-    #     return ToolResponse(content=[TextBlock(type="text", text="\n".join(lines))])
-
-
-# def stock_news_em(keyword: str = "603777", page_idx = 1) -> pd.DataFrame:
-#     """
-#     东方财富-个股新闻-获取该关键词下的所有新闻（自动翻页）
-#     https://so.eastmoney.com/news/s?keyword=603777
-#     :param keyword: 搜索关键词或股票代码
-#     :type keyword: str
-#     :return: 个股新闻
-#     :rtype: pandas.DataFrame
-#     """
-#     url = "http://search-api-web.eastmoney.com/search/jsonp"
-#     headers = {
-#         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-#         "Referer": "https://so.eastmoney.com/"
-#     }
-    
-#     all_records = []
-#     page_idx = 1
-    
-#     print(f"🚀 开始全量采集关键词 '{keyword}' 的新闻...")
-    
-#     while True:
-#         params = {
-#             "cb": "cb",
-#             "param": '{"uid":"",'
-#             + f'"keyword":"{keyword}"'
-#             + ',"type":["cmsArticleWebOld"],"client":"web","clientType":"web","clientVersion":"curr",'
-#             + '"param":{"cmsArticleWebOld":{"searchScope":"default","sort":"default","pageIndex":' + str(page_idx) + ','
-#             + '"pageSize":100,"preTag":"<em>","postTag":"</em>"}}}',
-#         }
-
-#         try:
-#             r: requests.Response = requests.get(url, params=params, headers=headers, timeout=15)
-#             data_text = r.text
-#             match = re.search(r'^\w+\((.*)\)$', data_text)
-            
-#             # 如果正则匹配失败，可能被拦截或接口异常，安全退出循环
-#             if not match:
-#                 print(f"⚠️ 第 {page_idx} 页数据解析失败，提前结束采集。")
-#                 break
-                
-#             data_json = json.loads(match.group(1))
-#             records = data_json.get("result", {}).get("cmsArticleWebOld", [])
-            
-#             # 如果当前页没有数据，说明到底了，退出循环
-#             if not records:
-#                 print(f"No more news found on page {page_idx}. Ending collection.")
-#                 break
-                
-#             all_records.extend(records)
-#             print(f"📄 已成功获取第 {page_idx} 页，新增 {len(records)} 条数据，累计 {len(all_records)} 条...")
-            
-#             # 如果当前页返回的数据少于 100 条（pageSize），说明这是最后一页
-#             if len(records) < 100:
-#                 print(f"Less than 100 records on page {page_idx}, likely last page. Ending collection.")
-#                 break
-                
-#             page_idx += 1
-            
-#         except Exception as e:
-#             print(f"❌ 获取第 {page_idx} 页新闻时发生网络或解析错误: {e}")
-#             break
-
-#     # 循环结束后，判断是否拿到数据
-#     if not all_records:
-#         print(f"⚠️ 当前时间范围内不存在相关新闻，请调整时间区间或关键词 '{keyword}' 后重试。")
-#         return pd.DataFrame()
-
-#     # 统一将收集到的所有记录转换为 DataFrame
-#     temp_df = pd.DataFrame(all_records)
-    
-#     # 构造链接
-#     temp_df["url"] = "http://finance.eastmoney.com/a/" + temp_df["code"] + ".html"
-    
-#     # 重命名列
-#     temp_df.rename(
-#         columns={
-#             "date": "发布时间",
-#             "mediaName": "文章来源",
-#             "code": "-",
-#             "title": "新闻标题",
-#             "content": "新闻内容",
-#             "url": "新闻链接",
-#             "image": "-",
-#         },
-#         inplace=True,
-#     )
-    
-#     temp_df["关键词"] = keyword
-    
-#     # 截取需要的列
-#     temp_df = temp_df[
-#         [
-#             "关键词",
-#             "新闻标题",
-#             "新闻内容",
-#             "发布时间",
-#             "文章来源",
-#             "新闻链接",
-#         ]
-#     ]
-    
-#     # 批量清洗文本标签和特殊字符
-#     for col in ["新闻标题", "新闻内容"]:
-#         # 你的原版替换逻辑
-#         temp_df[col] = temp_df[col].str.replace(r"\(<em>", "", regex=True)
-#         temp_df[col] = temp_df[col].str.replace(r"</em>\)", "", regex=True)
-#         temp_df[col] = temp_df[col].str.replace(r"<em>", "", regex=True)
-#         temp_df[col] = temp_df[col].str.replace(r"</em>", "", regex=True)
-    
-#     # 清洗正文中的空格和换行符
-#     temp_df["新闻内容"] = temp_df["新闻内容"].str.replace(r"\u3000", "", regex=True)
-#     temp_df["新闻内容"] = temp_df["新闻内容"].str.replace(r"\r\n", " ", regex=True)
-    
-#     # 按时间降序排列，确保最新新闻在最上面
-#     temp_df.sort_values(by="发布时间", ascending=False, inplace=True)
-#     temp_df.reset_index(drop=True, inplace=True)
-
-#     print(f"✅ Completion！Success '{keyword}' all news，total {len(temp_df)} 。")
-#     return temp_df

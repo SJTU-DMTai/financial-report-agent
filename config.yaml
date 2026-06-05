@@ -230,8 +230,12 @@ verify_config:
 wkhtmltopdf_path:
   path: /usr/local/bin/wkhtmltopdf
 
-planner:
-  max_evidences_per_segment: 6
+tracking_board:
+  max_retrieve_attempts: 2
+  max_revise_attempts: 3
+  max_replan_attempts: 1
+  evidence_concurrency: 4
+  segment_concurrency: 3
 
 evaluation:
   report_processing_llm_name: deepseek-v4-flash

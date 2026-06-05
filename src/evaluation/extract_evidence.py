@@ -79,27 +79,27 @@ def get_entity_name_by_code(stock_code: str) -> str:
 
 def _normalize_evidence_tuple(item) -> EvidenceTuple:
     if isinstance(item, Evidence):
-        return item.text.strip(), (item.value or "").strip()
+        return item.text.strip(), (item.fact or "").strip()
     if isinstance(item, dict):
         text = str(item.get("text") or item.get("evidence") or item.get("key") or "").strip()
-        value = str(item.get("value") or item.get("fact") or "").strip()
+        fact = str(item.get("fact") or "").strip()
         if not text and len(item) == 1:
             key, val = next(iter(item.items()))
             return str(key).strip(), str(val).strip() if val is not None else ""
-        return text, value
+        return text, fact
     if isinstance(item, (list, tuple)) and item:
         text = str(item[0]).strip()
-        value = str(item[1]).strip() if len(item) > 1 and item[1] is not None else ""
-        return text, value
+        fact = str(item[1]).strip() if len(item) > 1 and item[1] is not None else ""
+        return text, fact
     return str(item).strip(), ""
 
 
 def _normalize_evidence_tuples(items) -> List[EvidenceTuple]:
     normalized = []
     for item in items or []:
-        text, value = _normalize_evidence_tuple(item)
+        text, fact = _normalize_evidence_tuple(item)
         if text:
-            normalized.append((text, value))
+            normalized.append((text, fact))
     return normalized
 
 

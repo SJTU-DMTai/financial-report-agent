@@ -115,9 +115,14 @@ class Config:
     def get_planner_cfg(self) -> dict:
         return self.data.get("planner", {})
 
-    def get_max_evidences_per_segment(self) -> int:
-        planner_cfg = self.get_planner_cfg() or {}
-        return int(planner_cfg.get("max_evidences_per_segment", 6))
+    def get_tracking_board_cfg(self) -> dict:
+        cfg = deepcopy(self.data.get("tracking_board", {}) or {})
+        cfg.setdefault("max_retrieve_attempts", 2)
+        cfg.setdefault("max_revise_attempts", 3)
+        cfg.setdefault("max_replan_attempts", 1)
+        cfg.setdefault("evidence_concurrency", 4)
+        cfg.setdefault("segment_concurrency", 3)
+        return cfg
 
     def get_citation_extraction_cfg(self, report_format: str | None = None) -> dict:
         evaluation_cfg = self.data.get("evaluation", {}) or {}

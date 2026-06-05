@@ -28,7 +28,7 @@ def _normalize_evidences(evidences) -> List[EvidenceTuple]:
     for item in evidences or []:
         if isinstance(item, dict):
             text = str(item.get("text") or item.get("evidence") or "").strip()
-            value = str(item.get("value") or item.get("fact") or "").strip()
+            value = str(item.get("fact") or "").strip()
         elif isinstance(item, (list, tuple)) and item:
             text = str(item[0]).strip()
             value = str(item[1]).strip() if len(item) > 1 and item[1] is not None else ""
