@@ -5,7 +5,6 @@ import asyncio
 import json
 import os
 import re
-import time as time_module
 from datetime import datetime
 from typing import Any, Dict, Optional
 from urllib.parse import parse_qs, urlparse
@@ -22,9 +21,16 @@ from ..memory.short_term import ShortTermMemoryStore
 from ..memory.long_term import LongTermMemoryStore
 from ..utils.format import fmt_yyyymmdd
 from ..utils.get_entity_info import get_entity_info
+from ..utils.cite_id import cite_id as make_cite_id, id_part, url_part
 from ..utils.task_date import normalize_compact_date
 from ..utils.web_scraping import fetch_page_html, extract_text_and_images
 from .material_tools import extract_keyword_context_snippets
+
+_INDICATOR_CODE = {
+    "按报告期": "report_period",
+    "按年度": "annual",
+    "按单季度": "single_quarter",
+}
 
 def _preview_df(df: pd.DataFrame, max_rows: int | None = None) -> tuple[str, int, int, list[str]]:
     """生成 DataFrame 文本预览及相关统计。"""
@@ -309,7 +315,7 @@ class FinancialDataTools:
             # 文档中 "代码" 列为股票代码
             df = df[df["代码"] == symbol]
             entity = get_entity_info(long_term=self.long_term, text=str(symbol))
-        cite_id = f"{symbol or 'all'}_realtime_price_{int(time_module.time())}"
+        cite_id = make_cite_id("price_realtime", symbol or "all", unique=True)
         if symbol:
             description = f"{entity['name']}（{entity['code']}）股票实时行情数据（获取时间：{time_point}）"
         else:
@@ -463,7 +469,9 @@ class FinancialDataTools:
             )
         # =========================================================================
 
-        cite_id = f"{symbol}_history_price_{start_date}_{end_date}_period={period}{('_adjust=' + adjust) if adjust else ''}"
+        period_code = id_part(period, max_len=12, fallback="daily")
+        adjust_code = id_part(adjust, max_len=8, fallback="raw")
+        cite_id = make_cite_id("price_history", symbol, f"{start_date}-{end_date}", period_code, adjust_code)
         entity = get_entity_info(long_term=self.long_term, text=symbol)
         time_range = {"start": fmt_yyyymmdd(start_date),"end":fmt_yyyymmdd(end_date)}
         if entity:
@@ -583,8 +591,8 @@ class FinancialDataTools:
             if text:  # 只保存有内容的公告
                 # 为每个公告创建唯一的 cite_id
                 announce_date = fmt_yyyymmdd(str(announce_date))
-                date_only = announce_date.replace(".", "-").replace("/", "-")
-                disclosure_cite_id = f"{symbol}_disclosure_{date_only}_{idx}"  # 避免不合法文件名
+                date_only = announce_date.replace("-", "")
+                disclosure_cite_id = make_cite_id("disclosure", symbol, date_only, f"{idx + 1:02d}")
 
                 # 创建详细的描述，包含工具名、源URL等信息
                 description_parts = [
@@ -666,8 +674,8 @@ class FinancialDataTools:
 
         df = ak.stock_financial_debt_ths(symbol=symbol, indicator=indicator)
 
-        safe_indicator = indicator.replace(" ", "")
-        cite_id = f"{symbol}_balance_{safe_indicator}_{int(time_module.time())}"
+        indicator_code = _INDICATOR_CODE.get(indicator, id_part(indicator, max_len=16, fallback="report_period"))
+        cite_id = make_cite_id("financial_balance", symbol, indicator_code)
         entity = get_entity_info(long_term=self.long_term, text=symbol)
         description = f"{entity['name']}（{entity['code']}）{indicator}资产负债表"
         self._save_df_to_material(
@@ -706,8 +714,8 @@ class FinancialDataTools:
 
         df = ak.stock_financial_benefit_ths(symbol=symbol, indicator=indicator)
 
-        safe_indicator = indicator.replace(" ", "")
-        cite_id = f"{symbol}_profit_{safe_indicator}"
+        indicator_code = _INDICATOR_CODE.get(indicator, id_part(indicator, max_len=16, fallback="report_period"))
+        cite_id = make_cite_id("financial_profit", symbol, indicator_code)
         entity = get_entity_info(long_term=self.long_term, text=symbol)
         description = f"{entity['name']}（{entity['code']}）{indicator}利润表"
         self._save_df_to_material(
@@ -744,8 +752,8 @@ class FinancialDataTools:
         """
         df = ak.stock_financial_cash_ths(symbol=symbol, indicator=indicator)
 
-        safe_indicator = indicator.replace(" ", "")
-        cite_id = f"{symbol}_cashflow_{safe_indicator}"
+        indicator_code = _INDICATOR_CODE.get(indicator, id_part(indicator, max_len=16, fallback="report_period"))
+        cite_id = make_cite_id("financial_cashflow", symbol, indicator_code)
         entity = get_entity_info(long_term=self.long_term, text=symbol)
         description = f"{entity['name']}（{entity['code']}）{indicator}现金流量表"
         self._save_df_to_material(
@@ -787,10 +795,8 @@ class FinancialDataTools:
         time_point = fmt_yyyymmdd(date)
         time = {"point": time_point}
         entity_text = _entity_label(symbol, entity)
-        timestamp = int(time_module.time())
-
         top10_df = ak.stock_gdfx_top_10_em(symbol=prefixed_symbol, date=date)
-        top10_cite_id = f"{symbol}_top10_shareholders_{date}_{timestamp}"
+        top10_cite_id = make_cite_id("shareholder_top10", symbol, date)
         self._save_df_to_material(
             df=top10_df,
             cite_id=top10_cite_id,
@@ -801,7 +807,7 @@ class FinancialDataTools:
         )
 
         top10_float_df = ak.stock_gdfx_free_top_10_em(symbol=prefixed_symbol, date=date)
-        top10_float_cite_id = f"{symbol}_top10_float_shareholders_{date}_{timestamp}"
+        top10_float_cite_id = make_cite_id("shareholder_float_top10", symbol, date)
         self._save_df_to_material(
             df=top10_float_df,
             cite_id=top10_float_cite_id,
@@ -850,10 +856,8 @@ class FinancialDataTools:
         """
         entity = get_entity_info(long_term=self.long_term, text=symbol)
         entity_text = _entity_label(symbol, entity)
-        timestamp = int(time_module.time())
-
         main_df = ak.stock_main_stock_holder(stock=symbol)
-        main_cite_id = f"{symbol}_main_shareholders_{timestamp}"
+        main_cite_id = make_cite_id("shareholder_main", symbol)
         self._save_df_to_material(
             df=main_df,
             cite_id=main_cite_id,
@@ -863,7 +867,7 @@ class FinancialDataTools:
         )
 
         count_df = ak.stock_zh_a_gdhs_detail_em(symbol=symbol)
-        count_cite_id = f"{symbol}_shareholder_count_detail_{timestamp}"
+        count_cite_id = make_cite_id("shareholder_count", symbol)
         self._save_df_to_material(
             df=count_df,
             cite_id=count_cite_id,
@@ -873,7 +877,7 @@ class FinancialDataTools:
         )
 
         change_df = ak.stock_shareholder_change_ths(symbol=symbol)
-        change_cite_id = f"{symbol}_shareholder_change_{timestamp}"
+        change_cite_id = make_cite_id("shareholder_change", symbol)
         self._save_df_to_material(
             df=change_df,
             cite_id=change_cite_id,
@@ -924,7 +928,7 @@ class FinancialDataTools:
         entity_text = _entity_label(symbol, entity)
 
         description_df = ak.stock_zyjs_ths(symbol=symbol)
-        description_cite_id = f"{symbol}_business_description"
+        description_cite_id = make_cite_id("business_description", symbol)
         self._save_df_to_material(
             df=description_df,
             cite_id=description_cite_id,
@@ -934,7 +938,7 @@ class FinancialDataTools:
         )
 
         composition_df = ak.stock_zygc_em(symbol=add_exchange_prefix(symbol, "upper"))
-        composition_cite_id = f"{symbol}_business_composition"
+        composition_cite_id = make_cite_id("business_composition", symbol)
         self._save_df_to_material(
             df=composition_df,
             cite_id=composition_cite_id,
@@ -969,10 +973,10 @@ class FinancialDataTools:
                 start_date: str,
                 end_date: str | None = None,
                 query: str = "",
-                latest_num: int = 100,
+                latest_num: int = 50,
         ) -> ToolResponse:
         """获取指定个股的新闻资讯数据，并保存表格结果到Material当中，返回Material标识cite_id，以及关键词附近的上下文。
-        相关的最新新闻资讯（默认为限定时间范围内最近约 100 条），包括新闻标题、内容摘要、发布时间、来源和链接等，
+        相关的最新新闻资讯（默认为限定时间范围内最近约 50 条），包括新闻标题、内容摘要、发布时间、来源和链接等，
         适用场景：为个股研报生成“新闻动态”“舆情分析”等部分提供原始素材；需要快速获取近期与某股票相关的新闻列表。
 
         Args:
@@ -992,8 +996,15 @@ class FinancialDataTools:
         end_date = _clip_end_date(end_date, cur_date)
         assert pd.to_datetime(start_date, format="%Y%m%d") <= pd.to_datetime(end_date, format="%Y%m%d")
         query = (query or "").strip()
-        safe_query = re.sub(r"[\s/\\:]+", "_", query) if query else "all"
-        cite_id = f"{symbol}_{safe_query}_news_daterange_{start_date}-{end_date}_num{latest_num}"
+        query_part = id_part(query, max_len=24, fallback="all")
+        cite_id = make_cite_id(
+            "stock_news",
+            symbol or "all",
+            query_part,
+            f"{start_date}-{end_date}",
+            f"n{latest_num}",
+            hash_parts=(query,) if query else (),
+        )
         start_date, end_date = pd.to_datetime(start_date, format="%Y%m%d"), pd.to_datetime(end_date, format="%Y%m%d")
 
         query_terms = [term.strip() for term in re.split(r"\s+", query) if term.strip()]
@@ -1081,11 +1092,13 @@ class FinancialDataTools:
             domain = urlparse(url).netloc
             if domain.startswith("www."):
                 domain = domain[4:]
-            cite_id = ((str(entity['code']) + "_" if entity else "") +
-                       "url_page_text_" + url.replace(".html", "")
-                       .replace("http://", "")
-                       .replace("https://", "")
-                       .replace("/", "-"))
+            cite_id = make_cite_id(
+                "web_page",
+                str(entity["code"]) if entity else "page",
+                url_part(url),
+                hash_parts=(url,),
+                max_part_len=56,
+            )
 
             published_date = None
             try:

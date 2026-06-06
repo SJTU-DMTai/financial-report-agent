@@ -7,6 +7,7 @@ import re
 import traceback
 import warnings
 from copy import deepcopy
+from itertools import count
 from json import JSONDecodeError
 from typing import Iterable, Type, Callable, Optional
 
@@ -21,10 +22,57 @@ from .global_semaphore import get_global_semaphore
 from .instance import cfg
 
 endpoints = {"ep-20260212213128-4kwzl", "ep-20260205192925-9m7nq", "ep-20250318101605-5c67d"}
+_LLM_DEBUG_CALL_COUNTER = count(1)
 
 class EnvMsg(Exception):
     def __init__(self, *args):
         super().__init__(*args)
+
+
+def _llm_debug_enabled() -> bool:
+    return os.getenv("FRA_LLM_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _debug_text(value) -> str:
+    if value is None:
+        return ""
+    if hasattr(value, "get_text_content"):
+        try:
+            return value.get_text_content()
+        except Exception:
+            pass
+    if isinstance(value, BaseModel):
+        return value.model_dump_json(indent=2)
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False, indent=2)
+    return str(value)
+
+
+def _debug_agent_sys_prompt(agent: ReActAgent) -> str:
+    for attr_name in ("sys_prompt", "_sys_prompt"):
+        value = getattr(agent, attr_name, None)
+        if value:
+            return str(value)
+    return ""
+
+
+def _debug_print_block(title: str, content) -> None:
+    text = (
+        f"\n========== {title} ==========\n"
+        f"{_debug_text(content)}\n"
+        f"========== END {title} ==========\n\n"
+    )
+    debug_file = os.getenv("FRA_LLM_DEBUG_FILE", "").strip()
+    if debug_file:
+        with open(debug_file, "a", encoding="utf-8") as file:
+            file.write(text)
+            file.flush()
+        return
+    print(text, end="", flush=True)
+
+
+def _next_llm_debug_call_id() -> str:
+    return f"{next(_LLM_DEBUG_CALL_COUNTER):06d}"
 
 
 def _build_json_output_prompt(user_prompt: str, structured_model: Type[BaseModel]) -> str:
@@ -77,6 +125,15 @@ async def call_chatbot_with_retry(
         Msg("system", sys_prompt, "system"),
         Msg("user", user_content, "user"),
     ]
+    debug_enabled = _llm_debug_enabled()
+    if debug_enabled:
+        model_name = str(getattr(model, "model_name", model.__class__.__name__))
+        debug_call_id = _next_llm_debug_call_id()
+        debug_title = f"LLM CALL #{debug_call_id} ChatModel {model_name}"
+        _debug_print_block(f"{debug_title} SYSTEM", sys_prompt)
+        _debug_print_block(f"{debug_title} USER", user_content)
+    else:
+        debug_title = ""
 
     res = ""
     async with semaphore:
@@ -85,6 +142,11 @@ async def call_chatbot_with_retry(
             try:
                 _messages = await formatter.format(messages)
                 response = await model(_messages, structured_model=None if text_json_output else structured_model)
+                if debug_enabled:
+                    output_text = getattr(response, "content", "")
+                    if not output_text and getattr(response, "metadata", None):
+                        output_text = response.metadata
+                    _debug_print_block(f"{debug_title} OUTPUT", output_text)
                 if structured_model is not None:
                     if text_json_output:
                         text = Msg(role='assistant', content=response.content, name='assistant').get_text_content()
@@ -100,6 +162,8 @@ async def call_chatbot_with_retry(
                 else:
                     res = Msg(role='assistant', content=response.content, name='assistant').get_text_content()
             except RateLimitError as e:
+                if debug_enabled:
+                    _debug_print_block(f"{debug_title} ERROR", f"RateLimitError: {e}")
                 if cfg.get_model_cfg()['provider'] == 'ark' and os.getenv("LLM_NAME") == 'deepseek-v3.2' and isinstance(e, RateLimitError):
                     print(e)
                     exceed_tpm_models.add(model.model_name)
@@ -109,6 +173,8 @@ async def call_chatbot_with_retry(
                     model.model_name = list(endpoints - exceed_tpm_models)[0]
                     print("切换为", model.model_name, flush=True)
             except Exception as e:
+                if debug_enabled:
+                    _debug_print_block(f"{debug_title} ERROR", f"{type(e).__name__}: {e}")
                 warnings.warn(f"[调用 ChatModel 失败] 第 {_} 次尝试异常：{type(e).__name__}: {e}，")
                 continue
             if res:
@@ -116,6 +182,8 @@ async def call_chatbot_with_retry(
                     try:
                         return hook(res)
                     except handle_hook_exceptions as e:
+                        if debug_enabled:
+                            _debug_print_block(f"{debug_title} HOOK_ERROR", f"{type(e).__name__}: {e}")
                         warnings.warn(f"user: {user_prompt}\n[调用 ChatModel 失败] 第 {_} 次尝试异常：{type(e).__name__}: {e}，")
                         if structured_model is not None:
                             messages.append(Msg("assistant", str(res), "assistant"))
@@ -123,6 +191,8 @@ async def call_chatbot_with_retry(
                             messages.append(Msg("assistant", res, "assistant"))
                         messages.append(Msg("user", f"异常：{type(e).__name__}: {e}", "user"))
                     except Exception as e:
+                        if debug_enabled:
+                            _debug_print_block(f"{debug_title} HOOK_ERROR", f"{type(e).__name__}: {e}")
                         warnings.warn(f"[调用 ChatModel 失败] prompt:{user_prompt} res:{response} 第 {_} 次尝试异常：{type(e).__name__}: {e}，")
                 else:
                     return res
@@ -155,15 +225,29 @@ async def call_agent_with_retry(
         semaphore = get_global_semaphore()
 
     last_exc: BaseException | None = None
+    debug_enabled = _llm_debug_enabled()
+    if debug_enabled:
+        agent_name = str(getattr(agent, "name", agent.__class__.__name__))
+        debug_call_id = _next_llm_debug_call_id()
+        debug_title = f"LLM CALL #{debug_call_id} Agent {agent_name}"
+        _debug_print_block(f"{debug_title} SYSTEM", _debug_agent_sys_prompt(agent))
+        _debug_print_block(f"{debug_title} USER", msg)
+    else:
+        debug_title = ""
     async with semaphore:
         exceed_tpm_models = set()
         for attempt in range(1, max_retries + 1):
             try:
-                return await agent(msg)
+                result = await agent(msg)
+                if debug_enabled:
+                    _debug_print_block(f"{debug_title} OUTPUT", result)
+                return result
             # except non_retry_exceptions as e:
             #     # 这些异常直接抛出去，不做重试
             #     raise e
             except RateLimitError as e:
+                if debug_enabled:
+                    _debug_print_block(f"{debug_title} ERROR attempt={attempt}", f"RateLimitError: {e}")
                 if cfg.get_model_cfg()['provider'] == 'ark' and os.getenv("LLM_NAME") == 'deepseek-v3.2' and isinstance(e, RateLimitError):
                     print(e)
                     exceed_tpm_models.add(agent.model.model_name)
@@ -180,6 +264,8 @@ async def call_agent_with_retry(
                 # print(agent.memory.content, flush=True)
                 await agent.memory.clear()
                 last_exc = e
+                if debug_enabled:
+                    _debug_print_block(f"{debug_title} ERROR attempt={attempt}", f"{type(e).__name__}: {e}")
                 if attempt == max_retries:
                     warnings.warn(f"[重试失败] 第 {attempt} 次仍然报错，放弃重试。异常：{type(e).__name__}: {e}")
                     raise last_exc

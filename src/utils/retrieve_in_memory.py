@@ -11,6 +11,7 @@ import hashlib
 import pandas as pd
 
 from ..utils.get_entity_info import get_entity_info
+from ..utils.cite_id import is_search_cite_id
 
 if TYPE_CHECKING:
     from ..memory.short_term import ShortTermMemoryStore, MaterialMeta
@@ -393,8 +394,8 @@ def retrieve_in_memory(
                     sig_src = head.to_csv(index=False) + "\n---\n" + tail.to_csv(index=False)
                     key = "table:" + hashlib.md5(sig_src.encode("utf-8")).hexdigest()
 
-            # (2) search_engine_*: 用首条 link 去重
-            elif isinstance(m.cite_id, str) and m.cite_id.startswith("search_engine_"):
+            # (2) 搜索结果：用首条 link 去重
+            elif is_search_cite_id(m.cite_id):
                 data = short_term.load_material(m.cite_id)
                 link = ""
                 if isinstance(data, list) and data:

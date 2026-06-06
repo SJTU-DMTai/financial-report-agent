@@ -125,54 +125,66 @@ async def append_verifier_trace_log(title: str, message: str, payload: Optional[
 # ---------------------------------------------------------------------------
 # 安全 JSON 解析（统一使用）
 # ---------------------------------------------------------------------------
-def _extract_balanced_json(text: str, open_ch: str, close_ch: str) -> Optional[str]:
-    for i, ch in enumerate(text):
-        if ch != open_ch:
+def _extract_balanced_json_at(text: str, start: int, open_ch: str, close_ch: str) -> Optional[str]:
+    depth = 1
+    in_string = False
+    escaped = False
+    for j in range(start + 1, len(text)):
+        current = text[j]
+        if escaped:
+            escaped = False
             continue
-        depth = 1
-        in_string = False
-        escaped = False
-        for j in range(i + 1, len(text)):
-            current = text[j]
-            if escaped:
-                escaped = False
-                continue
-            if current == "\\":
-                escaped = True
-                continue
-            if current == '"':
-                in_string = not in_string
-                continue
-            if in_string:
-                continue
-            if current == open_ch:
-                depth += 1
-            elif current == close_ch:
-                depth -= 1
-                if depth == 0:
-                    return text[i:j + 1]
+        if current == "\\":
+            escaped = True
+            continue
+        if current == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if current == open_ch:
+            depth += 1
+        elif current == close_ch:
+            depth -= 1
+            if depth == 0:
+                return text[start:j + 1]
     return None
 
 
-def _safe_parse_json(text: str) -> Dict[str, Any]:
-    """移除 markdown 代码块并提取 JSON 对象/数组，然后解析。"""
-    # 移除可能的 markdown 代码块
-    text = re.sub(r'^```(?:json)?\s*\n?', '', text, flags=re.MULTILINE)
-    text = re.sub(r'\n?```\s*$', '', text, flags=re.MULTILINE)
-    text = text.strip()
+def _iter_balanced_json_candidates(text: str):
+    pairs = {"{": "}", "[": "]"}
+    for index, ch in enumerate(text):
+        close_ch = pairs.get(ch)
+        if close_ch is None:
+            continue
+        extracted = _extract_balanced_json_at(text, index, ch, close_ch)
+        if extracted:
+            yield extracted
 
+
+def _safe_parse_json(text: str) -> Any:
+    """Parse a JSON object/array from raw LLM text without truncating arrays."""
+    text = str(text or "").strip()
+
+    for fence_match in re.finditer(r"```(?:json)?\s*(.*?)```", text, re.DOTALL | re.IGNORECASE):
+        fenced_text = fence_match.group(1).strip()
+        try:
+            return json.loads(fenced_text)
+        except json.JSONDecodeError:
+            continue
+
+    text = re.sub(r'^```(?:json)?\s*\n?', '', text, flags=re.MULTILINE)
+    text = re.sub(r'\n?```\s*$', '', text, flags=re.MULTILINE).strip()
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
 
-    for opener, closer in (('{', '}'), ('[', ']')):
-        extracted = _extract_balanced_json(text, opener, closer)
-        if extracted:
-            try:
-                return json.loads(extracted)
-            except json.JSONDecodeError:
-                continue
+    for extracted in _iter_balanced_json_candidates(text):
+        try:
+            return json.loads(extracted)
+        except json.JSONDecodeError:
+            continue
 
     raise ValueError("Failed to parse JSON from response")
 
@@ -430,8 +442,8 @@ class ClaimIssue:
     type: str
     description: str
     severity: str
-    evidence: List[EvidenceSpan] = field(default_factory=list)
-    suggestion: Dict[str, Any] = field(default_factory=dict)
+    evidence: List[Dict[str, Any]] = field(default_factory=list)
+    suggestion: str = ""
 
 @dataclass
 class ClaimResult:
@@ -448,7 +460,11 @@ class VerifierRouter:
         """verifiers: {"fact": agent, "numeric": agent, "temporal": agent}"""
         self.verifiers = verifiers
 
-    async def verify_claims(self, claims: List[Claim]) -> List[ClaimResult]:
+    async def verify_claims(
+        self,
+        claims: List[Claim],
+        context: Optional[Dict[str, str]] = None,
+    ) -> List[ClaimResult]:
         """批量验证所有 claims，每个类型只调用一次 agent。"""
         # 按类型分组
         claims_by_type: Dict[ClaimType, List[Claim]] = {}
@@ -479,7 +495,7 @@ class VerifierRouter:
         # 去重（一个 claim 可能被多个 verifier 处理，如 factual_numeric）
         # 但我们仍要按 verifier 分别批量调用
         for vname, vclaims in verifier_to_claims.items():
-            tasks.append(self._run_batch(vname, vclaims))
+            tasks.append(self._run_batch(vname, vclaims, context or {}))
 
         # 并行执行所有批量任务
         results = await asyncio.gather(*tasks)
@@ -502,7 +518,12 @@ class VerifierRouter:
     #-----------------------------------------------------------------------
     # 批量执行单个 verifier
     # -----------------------------------------------------------------------
-    async def _run_batch(self, verifier_name: str, claims: List[Claim]) -> Dict[str, List[ClaimIssue]]:
+    async def _run_batch(
+        self,
+        verifier_name: str,
+        claims: List[Claim],
+        context: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, List[ClaimIssue]]:
         """一次性处理多个 claims，返回 {claim_id: [issues]}"""
         agent = self.verifiers[verifier_name]
 
@@ -510,10 +531,7 @@ class VerifierRouter:
         if hasattr(agent, "memory") and agent.memory is not None:
             await agent.memory.clear()
 
-        # 构建批量 payload
-        payload = {
-            "claims": [c.to_dict() for c in claims]
-        }
+        payload = self._batch_payload_for_verifier(verifier_name, claims, context)
 
         try:
             msg = Msg(
@@ -572,8 +590,8 @@ class VerifierRouter:
                     type=item.get("type", "unknown"),
                     description=f"[{verifier_name}] {item.get('description', '')}",
                     severity=self._normalize_severity(item.get("severity")),
-                    suggestion=item.get("suggestion", {}),
-                    evidence=item.get("evidence", [])
+                    suggestion=self._normalize_suggestion(item.get("suggestion")),
+                    evidence=self._normalize_evidence(item.get("evidence")),
                 ))
             if skipped_items:
                 await append_verifier_trace_log(
@@ -613,10 +631,83 @@ class VerifierRouter:
     # -----------------------------------------------------------------------
     # 工具函数
     # -----------------------------------------------------------------------
+    def _claim_payload_for_verifier(self, claim: Claim, verifier_name: str) -> Dict[str, Any]:
+        payload = {
+            "claim_id": claim.claim_id,
+            "original_text": claim.original_text,
+            "normalized_text": claim.normalized_text,
+            "cite_ids": claim.cite_ids,
+        }
+        if verifier_name == "fact":
+            payload["factual"] = claim.slots.get("factual", {})
+        elif verifier_name == "numeric":
+            payload["numeric"] = claim.slots.get("numeric", [])
+        elif verifier_name == "temporal":
+            payload["temporal"] = claim.slots.get("temporal", [])
+        return payload
+
+    def _batch_payload_for_verifier(
+        self,
+        verifier_name: str,
+        claims: List[Claim],
+        context: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, Any]:
+        payload = {
+            "claims": [self._claim_payload_for_verifier(c, verifier_name) for c in claims]
+        }
+        if context:
+            cleaned_context = {
+                key: value
+                for key, value in context.items()
+                if value
+            }
+            if cleaned_context:
+                payload["context"] = cleaned_context
+        return payload
+
+    def _normalize_suggestion(self, suggestion: Any) -> str:
+        if suggestion is None:
+            return ""
+        if isinstance(suggestion, str):
+            return suggestion.strip()
+        if isinstance(suggestion, (dict, list)):
+            return json.dumps(suggestion, ensure_ascii=False)
+        return str(suggestion).strip()
+
+    def _normalize_evidence(self, evidence: Any) -> List[Dict[str, Any]]:
+        if evidence is None:
+            return []
+        if isinstance(evidence, dict):
+            evidence_items = [evidence]
+        elif isinstance(evidence, list):
+            evidence_items = evidence
+        else:
+            evidence_items = [{"text": str(evidence)}]
+
+        normalized = []
+        for item in evidence_items:
+            if isinstance(item, EvidenceSpan):
+                normalized.append({
+                    "cite_id": item.cite_id,
+                    "text": item.text,
+                    **({"score": item.score} if item.score is not None else {}),
+                })
+                continue
+            if isinstance(item, dict):
+                normalized_item = dict(item)
+                if "cite_id" in normalized_item:
+                    normalized_item["cite_id"] = str(normalized_item["cite_id"])
+                if "text" in normalized_item:
+                    normalized_item["text"] = str(normalized_item["text"])
+                normalized.append(normalized_item)
+                continue
+            normalized.append({"text": str(item)})
+        return normalized
+
     def _normalize_severity(self, s: str) -> str:
         if not s:
             return "minor"
-        s = s.lower()
+        s = str(s).lower()
         if s in ["critical", "high"]:
             return "critical"
         if s in ["major", "medium"]:
@@ -709,7 +800,13 @@ class SegmentVerifier:
             ),
         )
 
-        claim_results = await self.router.verify_claims(selected_claims)
+        claim_results = await self.router.verify_claims(
+            selected_claims,
+            context={
+                "company_name": company_name or "",
+                "report_date": report_date or "",
+            },
+        )
 
         # 展平所有 issues
         flat = []

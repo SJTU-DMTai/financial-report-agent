@@ -80,6 +80,18 @@ prompt_dict["evaluate_segment_user_prompt"] = """
 **AI Agent生成的研报片段（待评估）:**
 {segment_content}
 """
+
+prompt_dict["evaluate_segment_without_ref_user_prompt"] = """
+# 评估任务
+
+**核心主题:** {segment_topic}
+
+**写作要求:**
+{segment_requirements}
+
+**AI Agent生成的研报片段（待评估）:**
+{segment_content}
+"""
 prompt_dict["section_polish_sys_prompt"] = """
 你是资深卖方金融分析师和研究所主编，负责将若干段落初稿整合、重构并最终润色为一个高质量研报章节。
 
@@ -142,10 +154,28 @@ prompt_dict["verifier_fact_prompt"] = """
 任务：验证 claim 中的 factual 信息（subject / predicate / object）是否可以被材料直接支持。
 
 # 输入说明
-- claim.original_text
-- claim.normalized_text
-- claim.slots.factual
-- claim.cite_ids
+用户输入是批量 JSON：
+{
+  "context": {
+    "company_name": "当前研报公司名称，用于解析公司、本公司等指代",
+    "report_date": "当前研报日期，用于解析当前、今年、报告期等相对时间"
+  },
+  "claims": [
+    {
+      "claim_id": "原始 claim 的唯一 ID，输出问题时必须原样保留",
+      "original_text": "正文中的原始表述",
+      "normalized_text": "抽取器给出的规范化表述，仅用于辅助理解，不能替代材料证据",
+      "factual": {
+        "subject": "事实主体",
+        "predicate": "事实关系或动作",
+        "object": "事实客体或结果"
+      },
+      "cite_ids": ["该 claim 引用的材料 ID，只允许读取这些材料"]
+    }
+  ]
+}
+
+你需要逐条验证 `claims` 中与事实关系有关的信息。
 
 你必须使用 read_material 工具读取材料。
 
@@ -181,14 +211,14 @@ prompt_dict["verifier_fact_prompt"] = """
 
 # 输出格式（严格）
 
-返回 JSON 数组：
+返回 JSON 数组，数组中只包含存在问题的 claim；无问题返回空数组 []：
 [
   {
-    "claim_id": "c0",
-    "type": "...",
-    "description": "...",
+    "claim_id": "对应输入中的 claim_id",
+    "type": "问题类型，例如 unsupported_fact / contradiction / subject_mismatch",
+    "description": "问题描述",
     "severity": "critical|major|minor",
-    "evidence": [{"cite_id": "...", "text": "原文片段"}],
+    "evidence": [{"cite_id": "证据材料 ID", "text": "材料原文片段"}],
     "suggestion": "字符串形式的修改建议"
   }
 ]
@@ -206,10 +236,33 @@ prompt_dict["verifier_numeric_prompt"] = """
 任务：验证 claim 中 numeric 信息（value / unit / period / comparison）是否与材料一致。
 
 # 输入说明
-- claim.original_text
-- claim.normalized_text
-- claim.slots.numeric
-- claim.cite_ids
+用户输入是批量 JSON：
+{
+  "context": {
+    "company_name": "当前研报公司名称，用于解析公司、本公司等指代",
+    "report_date": "当前研报日期，用于解析当前、今年、报告期等相对时间"
+  },
+  "claims": [
+    {
+      "claim_id": "原始 claim 的唯一 ID，输出问题时必须原样保留",
+      "original_text": "正文中的原始表述",
+      "normalized_text": "抽取器给出的规范化表述，仅用于辅助理解，不能替代材料证据",
+      "numeric": [
+        {
+          "entity": "数值所属主体",
+          "metric": "指标名称",
+          "value": "数值本身",
+          "unit": "数值单位",
+          "period": "数值对应时间或区间",
+          "comparison": "比较关系，例如同比、环比、基期和值"
+        }
+      ],
+      "cite_ids": ["该 claim 引用的材料 ID，只允许读取这些材料"]
+    }
+  ]
+}
+
+你需要逐条验证 `claims` 中与数值、单位、期间、比较关系有关的信息。
 
 # 核心规则（必须遵守）
 
@@ -249,14 +302,14 @@ suggestion 必须是字符串，包含：
 
 # 输出格式（严格）
 
-返回 JSON 数组：
+返回 JSON 数组，数组中只包含存在问题的 claim；无问题返回空数组 []：
 [
   {
-    "claim_id": "c0",
-    "type": "...",
-    "description": "...",
+    "claim_id": "对应输入中的 claim_id",
+    "type": "问题类型，例如 value_mismatch / unit_error / period_mismatch",
+    "description": "问题描述",
     "severity": "critical|major|minor",
-    "evidence": [{"cite_id": "...", "text": "包含数值的原文句子"}],
+    "evidence": [{"cite_id": "证据材料 ID", "text": "包含数值的材料原文句子"}],
     "suggestion": "字符串形式的修改建议"
   }
 ]
@@ -274,10 +327,30 @@ prompt_dict["verifier_temporal_prompt"] = """
 任务：验证 claim 中 temporal 信息（time_expr / event / relation）是否与材料一致。
 
 # 输入说明
-- claim.original_text
-- claim.normalized_text
-- claim.slots.temporal
-- claim.cite_ids
+用户输入是批量 JSON：
+{
+  "context": {
+    "company_name": "当前研报公司名称，用于解析公司、本公司等指代",
+    "report_date": "当前研报日期，用于解析当前、今年、报告期等相对时间"
+  },
+  "claims": [
+    {
+      "claim_id": "原始 claim 的唯一 ID，输出问题时必须原样保留",
+      "original_text": "正文中的原始表述",
+      "normalized_text": "抽取器给出的规范化表述，仅用于辅助理解，不能替代材料证据",
+      "temporal": [
+        {
+          "event": "需要验证时间的事件或指标",
+          "time_expr": "时间表达",
+          "relation": "时间关系，例如 during / before / after / as_of"
+        }
+      ],
+      "cite_ids": ["该 claim 引用的材料 ID，只允许读取这些材料"]
+    }
+  ]
+}
+
+你需要逐条验证 `claims` 中与时间表达、事件时间、时间范围有关的信息。
 
 # 核心规则（必须遵守）
 
@@ -313,14 +386,14 @@ suggestion 必须是字符串，包含：
 
 # 输出格式（严格）
 
-返回 JSON 数组：
+返回 JSON 数组，数组中只包含存在问题的 claim；无问题返回空数组 []：
 [
   {
-    "claim_id": "c0",
-    "type": "...",
-    "description": "...",
+    "claim_id": "对应输入中的 claim_id",
+    "type": "问题类型，例如 time_mismatch / event_time_conflict",
+    "description": "问题描述",
     "severity": "critical",
-    "evidence": [{"cite_id": "...", "text": "原文片段"}],
+    "evidence": [{"cite_id": "证据材料 ID", "text": "包含时间信息的材料原文片段"}],
     "suggestion": "字符串形式的修改建议"
   }
 ]

@@ -2,6 +2,8 @@
 import re
 from urllib.parse import urlparse
 
+from src.utils.cite_id import is_calc_cite_id, is_search_cite_id
+
 CITE_RE = re.compile(r"\[\^cite_id:([A-Za-z0-9_\-]+)(?:\|[^\]]*)?\]")
 
 def material_source_key(
@@ -12,14 +14,14 @@ def material_source_key(
     给定 cite_id，返回“来源归一化 key”，用于判定两个 material 是否来自同一来源。
 
     规则：
-      - search_engine：按 domain 聚合（同域名视为同来源）
+      - search：按 domain 聚合（同域名视为同来源）
       - 计算工具：每个 cite_id 视为独立来源
       - AKshare API：按api的数据来源
       - 其它：按 meta.source 归一化（source 为空则回退到 filename）
 
     返回示例：
       - "web:zhihu.com"
-      - "calc:calculate_financial_ratio_result_1767927143"
+      - "calc:calculate_ratio_roe_600519_tk9p2a"
       - "akshare:eastmoney"
       - "src:xxx"
       - "file:xxx.csv"
@@ -40,11 +42,11 @@ def material_source_key(
         return f"akshare:{provider}"
 
     # 2) 计算工具：每个结果独立算一个来源
-    if cite_id.startswith("calculate_"):
+    if is_calc_cite_id(cite_id):
         return f"calc:{cite_id}"
 
     # 3) Search engine：按 domain 聚合
-    if cite_id.startswith("search_engine") or ("search engine" in src_lower):
+    if is_search_cite_id(cite_id):
         domain = None
         if not src_raw:
             domain = None

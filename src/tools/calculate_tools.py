@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 # from __future__ import annotations
-import time
 import re
 from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
@@ -12,7 +11,18 @@ import pandas as pd
 from agentscope.tool._coding._python import execute_python_code
 from ..memory.short_term import ShortTermMemoryStore
 from ..memory.long_term import LongTermMemoryStore
+from ..utils.cite_id import cite_id as make_cite_id, id_part
 from ..utils.get_entity_info import get_entity_info
+
+tool_cite_prefix_map = {
+    "calculate_valuation_metric": "valuation",
+    "calculate_financial_ratio": "ratio",
+    "calculate_cashflow_metric": "cashflow",
+    "calculate_timeseries_transform": "timeseries",
+    "calculate_forecast_metric": "forecast",
+    "calculate_math_metric": "math",
+    "calculate_or_analysis_by_python_code": "python",
+}
 
 tool_label_map = {
     "calculate_valuation_metric": "估值指标计算",
@@ -127,9 +137,10 @@ class CalculateTools:
         final_description = f"{base_description} {extra}" if extra else base_description
         entity = get_entity_info(self.long_term, final_description)
 
-        cite_id = f"{tool_name}_result_{int(time.time())}"
-        if entity and 'code' in entity:
-            cite_id = f"{entity['code']}_{cite_id}"
+        tool_part = tool_cite_prefix_map.get(tool_name, id_part(tool_name, max_len=10, fallback="tool"))
+        code_part = entity.get("code") if entity and "code" in entity else ""
+        subtype_part = id_part(sub_type, max_len=10)
+        cite_id = make_cite_id("calculate", tool_part, subtype_part, code_part, unique=True)
 
         content = [
             {
@@ -1378,7 +1389,7 @@ class CalculateTools:
                     - key: 你在代码中使用的变量名
                     - value: 已有 material 的 cite_id
                 若为 None，则不注入任何material变量。
-                注意，可以被注入到变量的material必须包含数值数据，比如TABLE会完整加载为dataframe，calculate_*_result会提取其中result字段的数据。
+                注意，可以被注入到变量的material必须包含数值数据，比如TABLE会完整加载为dataframe，计算结果 material 会提取其中result字段的数据。
             description (str | None):
                 可选，对本次计算的补充说明文字，建议简要说明计算对象（如股票名称）、时间范围以及所计算的指标或变换。
 

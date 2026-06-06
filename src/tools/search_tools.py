@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import time as time_module
 from typing import Any, Callable, Dict, List
 from urllib.parse import urlparse
 
@@ -20,8 +19,9 @@ from agentscope.agent import ReActAgent
 from agentscope.message import Msg
 from ..memory.short_term import ShortTermMemoryStore
 from ..memory.long_term import LongTermMemoryStore
-from .material_tools import bind_query_tool, extract_keyword_context_snippets, get_retrieve_fn
+from .material_tools import bind_async_query_tool, extract_keyword_context_snippets, get_retrieve_fn
 from ..utils.call_with_retry import call_agent_with_retry
+from ..utils.cite_id import cite_id as make_cite_id, id_part, short_time_token
 from ..utils.get_entity_info import get_entity_info
 
 
@@ -32,7 +32,7 @@ async def _run_searcher_tool(
     query: str,
 ) -> ToolResponse:
     retrieve_fn = get_retrieve_fn(short_term, long_term)
-    final_prompt = await retrieve_fn(query)
+    final_prompt = retrieve_fn(query)
     final_prompt = final_prompt.content
     msg = Msg(
         name="user",
@@ -232,9 +232,9 @@ class SearchTools:
             if len(candidates) > max_results:
                 candidates = candidates[:max_results]
 
-            pre_cite_id = f"search_engine_{int(time_module.time())}"
+            search_token = short_time_token()
+            query_slug = id_part(query, max_len=28, fallback="query")
             for i, item in enumerate(candidates):
-                item_cite_id = pre_cite_id + f"{i:03d}"
                 published_date = item.get("published_date")
                 time = {"point": published_date} if published_date else None
 
@@ -242,6 +242,8 @@ class SearchTools:
                     long_term=self.long_term,
                     text=item["page_description"] + item["page_text"],
                 )
+                entity_part = entity.get("code") if entity else query_slug
+                item_cite_id = make_cite_id("search", entity_part, search_token, f"{i:02d}")
 
                 desc_text = ""
                 if published_date:
@@ -325,7 +327,7 @@ class SearchTools:
 
     def searcher_tool(self, searcher: ReActAgent) -> Callable[[str], ToolResponse]:
         """把 Searcher agent 封装成 agent 可见的工具函数。"""
-        return bind_query_tool(
+        return bind_async_query_tool(
             _run_searcher_tool,
             "search_with_searcher",
             """使用指定的 Searcher 工具基于 query 执行一次检索并返回总结结果。同时将获取的结果保存为Material。

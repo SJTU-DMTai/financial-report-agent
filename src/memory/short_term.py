@@ -12,6 +12,7 @@ import re
 from datetime import datetime
 from threading import Lock, RLock
 from src.utils.instance import cfg
+from src.utils.cite_id import is_calc_cite_id, is_search_cite_id
 
 _REGISTRY_LOCKS: Dict[str, RLock] = {}
 _REGISTRY_LOCKS_GUARD = Lock()
@@ -223,8 +224,8 @@ class ShortTermMemoryStore:
             return ""
 
 
-        # (A) 搜索引擎：search_engine_*
-        if isinstance(cite_id, str) and cite_id.startswith("search_engine_"):
+        # (A) 搜索结果
+        if is_search_cite_id(cite_id):
             page_text = ""
             if isinstance(content, list) and content and isinstance(content[0], dict):
                 page_text = content[0].get("page_text") or ""
@@ -247,8 +248,8 @@ class ShortTermMemoryStore:
                     return _truncate("\n".join(previews))
             return ""
 
-        # (B) 计算结果：calculate_*
-        if isinstance(cite_id, str) and "calculate_" in cite_id:
+        # (B) 计算结果
+        if is_calc_cite_id(cite_id):
             params = None
             result = None
             if isinstance(content, list) and content and isinstance(content[0], dict):

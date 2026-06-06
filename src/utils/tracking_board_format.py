@@ -13,16 +13,26 @@ if TYPE_CHECKING:
     from src.memory.short_term import ShortTermMemoryStore
 
 
-CITE_ID_RE = re.compile(r"\[\^cite_id:([A-Za-z0-9_\-]+)(?:\|[^\]]*)?\]")
+CITE_ID_RE = re.compile(r"\[\^\s*(?:(?:cite_id)\s*[:=]\s*)?([^\]\|\s]+)(\|[^\]]*)?\]", re.IGNORECASE)
 
 
 def extract_cite_ids(text: str) -> list[str]:
     cite_ids = []
     for match in CITE_ID_RE.finditer(text or ""):
-        cite_id = match.group(1)
+        cite_id = match.group(1).strip()
         if cite_id not in cite_ids:
             cite_ids.append(cite_id)
     return cite_ids
+
+
+def _normalize_cite_marker_match(match: re.Match) -> str:
+    cite_id = match.group(1).strip()
+    suffix = match.group(2) or ""
+    return f"[^cite_id:{cite_id}{suffix}]"
+
+
+def normalize_cite_markers(text: str) -> str:
+    return CITE_ID_RE.sub(_normalize_cite_marker_match, text or "")
 
 
 def extract_json_object(text: str) -> dict[str, Any] | None:
@@ -71,39 +81,58 @@ def parse_section_polish_response(text: str):
     return _strip_section_number_prefix(title.strip().strip("#").strip()), content
 
 
+def _format_resolved_evidence_record(
+    record: EvidenceRecord,
+    index: int,
+    short_term: "ShortTermMemoryStore" | None = None,
+) -> str:
+    lines = [
+        f"{index}. {record.description}",
+    ]
+    if record.search_result and record.cite_ids:
+        lines.append(f"   搜索结果: {record.search_result}")
+    elif record.search_result:
+        lines.append("   note: 无 cite_id，仅用于理解，不要作为可核验事实写入正文")
+        lines.append(f"   搜索结果: {record.search_result}")
+    if record.cite_ids:
+        lines.append(f"   cite_ids: {', '.join(record.cite_ids)}")
+        if not record.search_result and short_term is not None:
+            previews = []
+            for cite_id in record.cite_ids[:4]:
+                preview = short_term.load_material_preview(cite_id, max_chars=700)
+                if preview:
+                    previews.append(f"      [^cite_id:{cite_id}] 摘要：\n{preview}")
+            if previews:
+                lines.append("   material_previews:")
+                lines.extend(previews)
+    return "\n".join(lines)
+
+
 def build_evidence_context(
     registry: EvidenceRegistry,
     segment_id: str,
     short_term: "ShortTermMemoryStore",
 ) -> str:
-    lines = []
+    blocks = []
     for record in registry.records_for_segment(segment_id):
         if record.state != "RESOLVED":
             continue
-        lines.append(f"证据需求：{record.description}")
-        if record.search_result and record.cite_ids:
-            lines.append("检索结果：")
-            lines.append(record.search_result)
-        elif record.search_result:
-            lines.append("规划约束（无 cite_id，仅用于理解，不要作为可核验事实写入正文）：")
-            lines.append(record.search_result)
-        elif record.cite_ids:
-            lines.append("可用引用材料：")
-            for cite_id in record.cite_ids[:4]:
-                preview = short_term.load_material_preview(cite_id, max_chars=700)
-                if preview:
-                    lines.append(f"[^cite_id:{cite_id}] 摘要：\n{preview}")
-        lines.append("")
-    return "\n".join(lines).strip() or "暂无可用证据材料。"
+        blocks.append(_format_resolved_evidence_record(record, len(blocks) + 1, short_term))
+    return "\n\n".join(blocks).strip()
 
 
-def build_known_evidence_context(registry: EvidenceRegistry, exclude_id: str | None = None) -> str:
+def build_known_evidence_context(registry: EvidenceRegistry, evidence_ids: list[str] | None = None) -> str:
     lines = []
-    for record in registry.records.values():
-        if record.evidence_id == exclude_id or record.state != "RESOLVED":
+    records = (
+        [registry.records[evidence_id] for evidence_id in evidence_ids or [] if evidence_id in registry.records]
+        if evidence_ids is not None
+        else list(registry.records.values())
+    )
+    for record in records:
+        if record.state != "RESOLVED":
             continue
         if record.search_result:
-            lines.append(record.search_result)
+            lines.append(_format_resolved_evidence_record(record, len(lines) + 1))
     if not lines:
         return ""
-    return "当前已收集的其他论据：\n" + "\n".join(lines) + "\n"
+    return "当前 evidence 依赖的已解决证据：\n" + "\n\n".join(lines) + "\n"

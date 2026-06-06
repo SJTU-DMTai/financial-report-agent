@@ -93,6 +93,31 @@ class EvidenceRegistry:
         self.records[evidence_id] = record
         return record
 
+    def active_records(self) -> list[EvidenceRecord]:
+        return [
+            record
+            for record in self.records.values()
+            if record.used_by_segments
+        ]
+
+    def prune_unlinked_records(self) -> int:
+        unlinked_ids = {
+            evidence_id
+            for evidence_id, record in self.records.items()
+            if not record.used_by_segments
+        }
+        if not unlinked_ids:
+            return 0
+        for evidence_id in unlinked_ids:
+            self.records.pop(evidence_id, None)
+        for record in self.records.values():
+            record.depends_on = [
+                prerequisite_id
+                for prerequisite_id in record.depends_on
+                if prerequisite_id not in unlinked_ids
+            ]
+        return len(unlinked_ids)
+
     def find_by_canonical_key(self, canonical_key: str) -> EvidenceRecord | None:
         for record in self.records.values():
             if record.canonical_key == canonical_key:
@@ -127,6 +152,8 @@ class EvidenceRegistry:
             return False
         if evidence_id not in self.records or prerequisite_id not in self.records:
             return False
+        if not self.records[evidence_id].used_by_segments or not self.records[prerequisite_id].used_by_segments:
+            return False
         if self.has_dependency_path(prerequisite_id, evidence_id):
             return False
         record = self.records[evidence_id]
@@ -155,32 +182,17 @@ class EvidenceRegistry:
         record = self.records[evidence_id]
         for prerequisite_id in record.depends_on:
             prerequisite = self.records.get(prerequisite_id)
-            if prerequisite is None or prerequisite.state not in {"RESOLVED", "SKIPPED"}:
+            if prerequisite is None:
+                continue
+            if prerequisite.state not in {"RESOLVED", "SKIPPED", "UNAVAILABLE"}:
                 return False
         return True
-
-    def has_unavailable_dependency(self, evidence_id: str) -> bool:
-        record = self.records[evidence_id]
-        for prerequisite_id in record.depends_on:
-            prerequisite = self.records.get(prerequisite_id)
-            if prerequisite is None or prerequisite.state == "UNAVAILABLE":
-                return True
-        return False
-
-    def mark_records_blocked_by_unavailable_dependencies(self) -> int:
-        changed = 0
-        for record in self.records.values():
-            if record.state not in {"NEW", "WAITING", "PLANNED"}:
-                continue
-            if self.has_unavailable_dependency(record.evidence_id):
-                record.state = "UNAVAILABLE"
-                changed += 1
-        return changed
 
     def ready_to_search_records(self) -> list[EvidenceRecord]:
         return [
             record
             for record in self.records.values()
+            if record.used_by_segments
             if record.state in {"NEW", "WAITING", "PLANNED"}
             and self.dependencies_resolved(record.evidence_id)
         ]

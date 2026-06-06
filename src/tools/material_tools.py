@@ -13,6 +13,7 @@ from agentscope.tool import ToolResponse
 
 from ..memory.short_term import ShortTermMemoryStore, MaterialType
 from ..memory.long_term import LongTermMemoryStore
+from ..utils.cite_id import is_calc_cite_id, is_search_cite_id
 from ..utils.retrieve_in_memory import retrieve_in_memory
 
 def _normalize_search_keywords(
@@ -67,22 +68,6 @@ def _find_keyword_matches(
     return matches
 
 
-def _extract_json_path(obj, path: str):
-    cur = obj
-    for k in path.split("."):
-        if isinstance(cur, dict) and k in cur:
-            cur = cur[k]
-        else:
-            return None
-    return cur
-
-
-def _truncate_preview_cell(value, max_cell_chars: int, suffix: str):
-    if isinstance(value, str) and len(value) > max_cell_chars:
-        return value[:max_cell_chars] + suffix
-    return value
-
-
 class _BoundQueryTool:
     def __init__(self, func, name: str, doc: str, *args) -> None:
         self._func = func
@@ -90,12 +75,21 @@ class _BoundQueryTool:
         self.__name__ = name
         self.__doc__ = doc
 
-    async def __call__(self, query: str) -> ToolResponse:
-        return await self._func(*self._args, query)
+    def __call__(self, query: str) -> ToolResponse:
+        return self._func(*self._args, query)
 
 
 def bind_query_tool(func, name: str, doc: str, *args):
     return _BoundQueryTool(func, name, doc, *args)
+
+
+def bind_async_query_tool(func, name: str, doc: str, *args):
+    async def tool(query: str) -> ToolResponse:
+        return await func(*args, query)
+
+    tool.__name__ = name
+    tool.__doc__ = doc
+    return tool
 
 
 def grep_file_with_context(
@@ -335,7 +329,7 @@ def extract_keyword_context_snippets(
     return snippets
 
 
-async def retrieve_local_material(
+def retrieve_local_material(
     short_term: ShortTermMemoryStore,
     long_term: LongTermMemoryStore,
     query: str,
@@ -375,13 +369,13 @@ async def retrieve_local_material(
             except Exception:
                 content = None
 
-            if isinstance(cite_id, str) and cite_id.startswith("search_engine_"):
+            if is_search_cite_id(cite_id):
                 preview = short_term.load_material_preview(cite_id=cite_id)
                 if preview:
                     lines.append("    部分内容预览：")
                     lines.append(f"   {preview}")
 
-            elif isinstance(cite_id, str) and "calculate_" in cite_id:
+            elif is_calc_cite_id(cite_id):
                 params = None
                 result = None
                 if isinstance(content, list) and content:
@@ -402,7 +396,11 @@ async def retrieve_local_material(
                     suffix = "...[内容过长，已截断]"
                     for col in df_preview.columns:
                         df_preview[col] = df_preview[col].apply(
-                            lambda value: _truncate_preview_cell(value, max_cell_chars, suffix)
+                            lambda value: (
+                                value[:max_cell_chars] + suffix
+                                if isinstance(value, str) and len(value) > max_cell_chars
+                                else value
+                            )
                         )
                     columns_preview = ", ".join(content.columns)
                     preview = df_preview.to_csv(index=False)
@@ -452,21 +450,18 @@ class MaterialTools:
         context_lines: int = 20,
     ) -> ToolResponse:
         """
-        统一读取material。支持读取全文、通过参数、按行/条目截取其中部分，以及关键词搜索。
-        - 表格：可通过按名为query_key的列筛选。
-        - 文本：可通过关键词 query_key 进行内容搜索。
-        - JSON：可通过 query_key 获取特定条目内容。
+        读取已保存的 Material 内容。
+        - 表格：query_key 为空时返回完整表格；query_key 不为空时按列名筛选，多个列名用英文逗号分隔。
+        - 文本：query_key 为空时返回完整文本；query_key 不为空时按关键词搜索并返回上下文。
+        - JSON：query_key 为空时返回完整 JSON；query_key 不为空时按点分字段路径提取内容，例如 "title" 或 "metadata.source"。
 
-        如果start_index, end_index, query_key 都为空表示读取全文。
         Args:
             cite_id (str): Material 的唯一标识 ID。
             query_key (str | None):
-                - 对于 JSON list：可选，用于对每个条目提取该字段。
-                - 对于表格：可选，用于筛选特定列（如 "Date,Close"）。
-                - 对于文本：可选，用于在内容中搜索特定关键词，返回匹配结果及若干行上下文。类似于grep的精确匹配，不支持空格、AND、OR等语法。
+                可选查询条件。表格中表示列名列表，文本中表示关键词，JSON 中表示字段路径。
             context_lines (int):
-                - 关键词搜索时的上下文行数（关键词前后各显示该行数）。
-                - 默认为20行。只在使用keyword参数时有效。
+                文本关键词搜索时的上下文行数，关键词前后各显示该行数；默认为 20。
+                仅在读取文本且 query_key 不为空时有效。
         """
         meta = self.short_term.get_material_meta(cite_id) 
 
@@ -586,7 +581,7 @@ class MaterialTools:
 
         sliced_df = df.copy()
 
-        if ("_disclosure_" in cite_id) and ("公告" in sliced_df.columns):
+        if cite_id.startswith("disclosure_") and ("公告" in sliced_df.columns):
             MAX_TOTAL_CHARS = 20000
             MIN_PER_CELL = 200
             SUFFIX = "\n...... [内容过长，已截断，如需要完整阅读请对此条结果单独使用read_material工具]"
@@ -653,7 +648,7 @@ class MaterialTools:
         # if isinstance(data, list):
         sliced = copy.deepcopy(data)
 
-        if (cite_id.startswith("search_engine")):
+        if is_search_cite_id(cite_id):
             if isinstance(sliced, list):
                 for item in sliced:
                     if isinstance(item, dict):
@@ -662,7 +657,17 @@ class MaterialTools:
 
         # 如果有 key_path，则提取每条对应字段，否则展示整个条目
         if key_path:
-            sliced = [_extract_json_path(item, key_path) for item in sliced]
+            extracted = []
+            for item in sliced:
+                cur = item
+                for key in key_path.split("."):
+                    if isinstance(cur, dict) and key in cur:
+                        cur = cur[key]
+                    else:
+                        cur = None
+                        break
+                extracted.append(cur)
+            sliced = extracted
 
         # 序列化成 JSON 字符串
         json_str = json.dumps(sliced, ensure_ascii=False, indent=2)

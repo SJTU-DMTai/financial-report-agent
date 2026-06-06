@@ -327,7 +327,7 @@ async def process_single_segment(segment: Segment,
             suggestions = await call_chatbot_with_retry(
                 llm_judge,
                 create_agent_formatter(),
-                prompt_dict['compare_content_with_ref'],
+                prompt_dict["evaluate_segment_quality_with_ref"],
                 evaluate_user_prompt,
                 hook=_extract_score_suggestion,
                 handle_hook_exceptions=(AssertionError, KeyError),
