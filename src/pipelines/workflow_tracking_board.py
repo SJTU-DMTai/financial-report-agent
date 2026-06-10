@@ -26,7 +26,7 @@ from src.memory.tracking_board import (
     TrackingBoard,
     build_tracking_board,
 )
-from src.memory.working import Section, load_section_from_json_text, _normalize_evidences
+from src.memory.working import Evidence, Section, load_section_from_json_text, _normalize_evidences
 from src.pipelines.planning import process_pdf_to_outline
 from src.prompt import prompt_dict
 from src.utils.call_with_retry import call_agent_with_retry, call_chatbot_with_retry
@@ -60,6 +60,7 @@ from src.utils.tracking_board_format import (
     build_evidence_context,
     build_known_evidence_context,
     extract_cite_ids,
+    is_unavailable_marker,
     normalize_cite_markers,
     parse_replan_response,
     parse_section_polish_response,
@@ -154,6 +155,19 @@ def repair_registry_citation_states(registry: EvidenceRegistry) -> int:
     return repaired
 
 
+def apply_static_reference_citation(record: EvidenceRecord, reference_cite_id: str) -> None:
+    static_fact = str(record.fields.get("fact") or "").strip()
+    if not bool(record.fields.get("is_static", False)) or not static_fact:
+        return
+
+    marker = f"[^cite_id:{reference_cite_id}]"
+    description = record.description or str(record.fields.get("description") or "").strip()
+    record.search_result = f"{description}：{static_fact}{marker}"
+    if reference_cite_id not in record.cite_ids:
+        record.cite_ids.append(reference_cite_id)
+    record.state = "RESOLVED"
+
+
 def section_has_unfinished(section: Section) -> bool:
     if section.segments:
         for segment in section.segments:
@@ -187,6 +201,7 @@ def initialize_registry_for_board(
     board: TrackingBoard,
     bindings: dict[str, SegmentBinding],
     company_name: str,
+    reference_cite_id: str,
 ) -> None:
     current_segment_ids = set(board.records)
     # Drop stale segment links before rebuilding the current outline bindings.
@@ -210,6 +225,8 @@ def initialize_registry_for_board(
     repaired_count = repair_registry_citation_states(registry)
     if repaired_count:
         print(f"[Evidence Registry] repaired citation states: {repaired_count}", flush=True)
+    for evidence_record in registry.active_records():
+        apply_static_reference_citation(evidence_record, reference_cite_id)
 
 
 def merge_loaded_board(
@@ -245,6 +262,34 @@ def sync_board_records_to_segments(
             binding.segment.finished = True
 
 
+def evidence_record_to_evidence(record: EvidenceRecord) -> Evidence:
+    fields = dict(record.fields or {})
+    description = str(fields.get("description") or record.description or "").strip()
+    return Evidence(
+        text=description,
+        description=description,
+        entity=str(fields.get("entity") or "").strip() or None,
+        aspect=str(fields.get("aspect") or "").strip() or None,
+        period=str(fields.get("period") or "").strip() or None,
+        scope=str(fields.get("scope") or "").strip() or None,
+        required=bool(fields.get("required", record.required)),
+        fact=str(fields.get("fact") or "").strip() or None,
+        is_static=bool(fields.get("is_static", False)),
+    )
+
+
+def sync_segment_evidences_from_record(
+    record: SegmentRecord,
+    binding: SegmentBinding,
+    registry: EvidenceRegistry,
+) -> None:
+    binding.segment.evidences = [
+        evidence_record_to_evidence(registry.records[evidence_id])
+        for evidence_id in record.evidences
+        if evidence_id in registry.records
+    ] or None
+
+
 def apply_replan_payload(
     payload: dict[str, Any],
     record: SegmentRecord,
@@ -273,22 +318,28 @@ def apply_replan_payload(
         record.template = template
         binding.segment.template = template
     if evidences_payload is not None:
-        binding.segment.evidences = evidences
-
-    # Replan replaces this segment's evidence links without deleting shared records.
-    for evidence_id in record.evidences:
-        evidence_record = registry.records.get(evidence_id)
-        if evidence_record and record.segment_id in evidence_record.used_by_segments:
-            evidence_record.used_by_segments.remove(record.segment_id)
-
-    record.evidences = []
-    for evidence in binding.segment.evidences or []:
-        evidence_record = registry.add_or_reuse(evidence, record.segment_id, default_entity=company_name)
-        record.evidences.append(evidence_record.evidence_id)
-    registry.prune_unlinked_records()
+        unavailable_ids = [
+            evidence_id
+            for evidence_id in record.evidences
+            if registry.records.get(evidence_id) and registry.records[evidence_id].state == "UNAVAILABLE"
+        ]
+        for evidence_id in unavailable_ids:
+            evidence_record = registry.records.get(evidence_id)
+            if evidence_record and record.segment_id in evidence_record.used_by_segments:
+                evidence_record.used_by_segments.remove(record.segment_id)
+        record.evidences = [
+            evidence_id
+            for evidence_id in record.evidences
+            if evidence_id not in unavailable_ids
+        ]
+        for evidence in evidences or []:
+            evidence_record = registry.add_or_reuse(evidence, record.segment_id, default_entity=company_name)
+            if evidence_record.evidence_id not in record.evidences:
+                record.evidences.append(evidence_record.evidence_id)
+        registry.prune_unlinked_records()
+        sync_segment_evidences_from_record(record, binding, registry)
 
     record.issue = None
-    set_segment_state(record, "PLANNED", "replan_applied")
 
 
 async def replan_segment_after_not_found(
@@ -398,9 +449,8 @@ async def resolve_global_evidence_record(
         return False
     static_fact = str(record.fields.get("fact") or "").strip()
     if bool(record.fields.get("is_static", False)) and static_fact:
-        # Static evidence with a concrete planned fact needs no additional search.
-        record.search_result = record.search_result or f"{record.description}：{static_fact}"
-        record.state = "RESOLVED"
+        # Static facts are copied from the reference report and must cite it explicitly.
+        apply_static_reference_citation(record, f"{demo_date}_reference_report")
         return True
 
     registry.records[record.evidence_id].state = "SEARCHING"
@@ -424,6 +474,11 @@ async def resolve_global_evidence_record(
         record.search_result = ""
         record.state = "SKIPPED"
         return True
+    if is_unavailable_marker(result_text):
+        record.search_result = ""
+        record.cite_ids = []
+        record.state = "UNAVAILABLE"
+        return False
     result_text = normalize_cite_markers(result_text)
     cite_ids = extract_cite_ids(result_text)
     registry.mark_resolved(
@@ -477,6 +532,8 @@ async def resolve_global_evidence_registry(
 async def check_segment_evidences_ready(
     record: SegmentRecord,
     registry: EvidenceRegistry,
+    *,
+    preserve_state: bool = False,
 ) -> bool:
     unresolved = registry.unresolved_required_for_segment(record.segment_id)
     unavailable = [item for item in unresolved if item.state == "UNAVAILABLE"]
@@ -490,10 +547,12 @@ async def check_segment_evidences_ready(
         return False
     if unresolved:
         record.issue = None
-        set_segment_state(record, "RETRIEVING", "waiting_for_required_evidence")
+        if not preserve_state:
+            set_segment_state(record, "RETRIEVING", "waiting_for_required_evidence")
         return False
     record.issue = None
-    set_segment_state(record, "EVIDENCE_READY", "all_required_evidence_ready")
+    if not preserve_state:
+        set_segment_state(record, "EVIDENCE_READY", "all_required_evidence_ready")
     return True
 
 
@@ -662,13 +721,13 @@ async def verify_segment_fact(
         return None
 
     lines = []
-    for index, issue in enumerate(major_issues[:8], 1):
+    for index, issue in enumerate(major_issues[:10], 1):
         lines.append(
             f"{index}. [{issue.severity.upper()}] {issue.description}\n"
             f"   建议: {issue.suggestion}\n"
             f"   证据: {issue.evidence}"
         )
-    feedback = "\n\n".join(lines)[:1500]
+    feedback = "\n\n".join(lines)[:2000]
     await append_verifier_trace(
         topic=record.topic,
         round_idx=round_idx,
@@ -693,7 +752,6 @@ def add_issue_evidences_to_registry(
             record.evidences.append(evidence_record.evidence_id)
         added_ids.add(evidence_record.evidence_id)
     record.issue = None
-    set_segment_state(record, "RETRIEVING", "issue_added_evidence")
     return added_ids
 
 
@@ -729,18 +787,32 @@ async def handle_segment_issue(
             company_name,
         )
     if action == "REVISE":
-        attempts = record.increment_attempt("REVISE")
-        if attempts > int(tracking_cfg["max_revise_attempts"]):
-            set_segment_state(record, "BLOCKED", "max_revise_attempts")
+        is_verifier_revise = record.issue.type == "VERIFICATION_GAP"
+        attempt_key = "VERIFY_REVISE" if is_verifier_revise else "REVISE"
+        max_attempts = (
+            int(tracking_cfg["max_verification_revise_attempts"])
+            if is_verifier_revise
+            else int(tracking_cfg["max_quality_revise_attempts"])
+        )
+        attempts = record.increment_attempt(attempt_key)
+        if attempts > max_attempts:
+            set_segment_state(
+                record,
+                "BLOCKED",
+                "max_verification_revise_attempts" if is_verifier_revise else "max_quality_revise_attempts",
+            )
             return True
-        ok = await revise_segment_draft(record, binding, writer, record.issue.detail, "revise_after_issue")
+        reason = "revise_after_verifier_issue" if is_verifier_revise else "revise_after_issue"
+        ok = await revise_segment_draft(record, binding, writer, record.issue.detail, reason)
         record.issue = None
-        set_segment_state(record, "DRAFTED" if ok else "BLOCKED", "revise_after_issue")
+        if not ok:
+            set_segment_state(record, "BLOCKED", reason)
         return True
     if action == "RETRY":
         attempts = record.increment_attempt("RETRY")
         record.issue = None
-        set_segment_state(record, "EVIDENCE_READY" if attempts <= 1 else "BLOCKED", "retry_after_issue")
+        if attempts > 1:
+            set_segment_state(record, "BLOCKED", "retry_after_issue")
         return True
     set_segment_state(record, "BLOCKED", f"unknown_issue_action_{action}")
     return True
@@ -758,7 +830,6 @@ async def process_segment_record(
     cur_date: str,
     tracking_cfg: dict[str, Any],
     multi_source_verification_enabled: bool,
-    max_verify_rounds: int,
 ) -> None:
     print(f"[{time.strftime('%H:%M:%S')}] Tracking segment start: {record.segment_id} {record.topic}", flush=True)
     for _ in range(40):
@@ -766,8 +837,17 @@ async def process_segment_record(
             return
         if record.issue is not None:
             action = record.issue.action.upper()
-            await handle_segment_issue(record, binding, registry, writer, task_desc, cur_date, company_name, tracking_cfg)
-            if action == "RETRIEVE" and record.state == "RETRIEVING":
+            await handle_segment_issue(
+                record,
+                binding,
+                registry,
+                writer,
+                task_desc,
+                cur_date,
+                company_name,
+                tracking_cfg,
+            )
+            if action == "RETRIEVE":
                 return
             continue
         if record.state in {"EMPTY", "PLANNED"}:
@@ -780,6 +860,8 @@ async def process_segment_record(
                 return
             continue
         if record.state == "EVIDENCE_READY":
+            if not await check_segment_evidences_ready(record, registry, preserve_state=True):
+                return
             if not await check_writer_evidence_sufficiency(
                 record,
                 binding,
@@ -806,8 +888,20 @@ async def process_segment_record(
             if not multi_source_verification_enabled:
                 set_segment_state(record, "VERIFIED", "verification_disabled")
                 continue
-            verified = await run_verifier_loop(record, binding, verifier, writer, company_name, cur_date, max_verify_rounds)
-            set_segment_state(record, "VERIFIED" if verified else "BLOCKED", "verifier_loop")
+            verified = await run_verifier_check(
+                record,
+                binding,
+                verifier,
+                company_name,
+                cur_date,
+                int(tracking_cfg["max_verification_revise_attempts"]),
+            )
+            if verified:
+                set_segment_state(record, "VERIFIED", "verifier_check_passed")
+            elif record.issue is not None:
+                continue
+            else:
+                set_segment_state(record, "BLOCKED", "max_verification_revise_attempts")
             continue
         if record.state == "VERIFIED":
             binding.segment.finished = True
@@ -818,25 +912,26 @@ async def process_segment_record(
     set_segment_state(record, "BLOCKED", "state_loop_exhausted")
 
 
-async def run_verifier_loop(
+async def run_verifier_check(
     record: SegmentRecord,
     binding: SegmentBinding,
     verifier: SegmentVerifier,
-    writer,
     company_name: str,
     cur_date: str,
-    max_verify_rounds: int,
+    max_verification_revise_attempts: int,
 ) -> bool:
-    for round_idx in range(1, max_verify_rounds + 1):
-        feedback = await verify_segment_fact(record, binding, verifier, company_name, cur_date, round_idx)
-        if feedback is None:
-            return True
-        attempts = record.increment_attempt("VERIFY_REVISE")
-        if attempts > max_verify_rounds:
-            return False
-        ok = await revise_segment_draft(record, binding, writer, feedback, "revise_after_verifier")
-        if not ok:
-            return False
+    verify_revise_attempts = record.attempts.get("VERIFY_REVISE", 0)
+    round_idx = verify_revise_attempts + 1
+    feedback = await verify_segment_fact(record, binding, verifier, company_name, cur_date, round_idx)
+    if feedback is None:
+        return True
+    if verify_revise_attempts >= max_verification_revise_attempts:
+        return False
+    record.issue = SegmentIssue(
+        type="VERIFICATION_GAP",
+        detail=feedback,
+        action="REVISE",
+    )
     return False
 
 
@@ -852,7 +947,6 @@ async def process_tracking_board(
     cur_date: str,
     tracking_cfg: dict[str, Any],
     multi_source_verification_enabled: bool,
-    max_verify_rounds: int,
 ) -> None:
     semaphore = asyncio.Semaphore(int(tracking_cfg["segment_concurrency"]))
     for _ in range(50):
@@ -890,7 +984,6 @@ async def process_tracking_board(
                 cur_date,
                 tracking_cfg,
                 multi_source_verification_enabled,
-                max_verify_rounds,
             )
             tasks.append(task)
         if not tasks:
@@ -918,7 +1011,6 @@ async def process_tracking_segment_with_semaphore(
     cur_date: str,
     tracking_cfg: dict[str, Any],
     multi_source_verification_enabled: bool,
-    max_verify_rounds: int,
 ) -> None:
     async with semaphore:
         writer, verifier = create_segment_agents(short_term, long_term)
@@ -935,7 +1027,6 @@ async def process_tracking_segment_with_semaphore(
                 cur_date,
                 tracking_cfg,
                 multi_source_verification_enabled,
-                max_verify_rounds,
             )
         except Exception as exc:
             traceback.print_exc()
@@ -944,7 +1035,6 @@ async def process_tracking_segment_with_semaphore(
                 detail=f"{type(exc).__name__}: {exc}",
                 action="RETRY",
             )
-            set_segment_state(record, "BLOCKED", "segment_execution_error")
 
 
 async def polish_completed_sections(section: Section) -> None:
@@ -1097,7 +1187,13 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
             board = merge_loaded_board(board, loaded_board)
             sync_board_records_to_segments(board, bindings)
             registry = EvidenceRegistry.load(short_term.base_dir / f"{cfg.llm_name}_evidence_registry.json")
-            initialize_registry_for_board(registry, board, bindings, company_name)
+            initialize_registry_for_board(
+                registry,
+                board,
+                bindings,
+                company_name,
+                f"{demo_date}_reference_report",
+            )
             await build_evidence_dependencies(registry, llm_instruct, formatter)
             registry.save()
 
@@ -1113,7 +1209,6 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
                 cur_date,
                 cfg.get_tracking_board_cfg(),
                 cfg.is_multi_source_verification_enabled(),
-                cfg.get_max_verify_rounds(),
             )
             registry.save()
             board.save(board_path)
@@ -1149,3 +1244,4 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
                 os.environ["FRA_LLM_DEBUG_FILE"] = previous_llm_debug_file
             log_file.close()
             set_verifier_trace_path(None)
+

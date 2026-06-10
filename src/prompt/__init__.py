@@ -128,7 +128,7 @@ prompt_dict["section_polish_user_prompt"] = """
 {section_text}
 
 该章节参考了小标题为{section_title}的某个范例撰写。
-请你根据初稿重新起一个标题，用<title>和</title>包裹住，并在初稿基础上整合、重构并最终润色，完成后的章节正文内容用<content>和</content>包裹住。
+请你根据初稿重新起一个标题，用<title>和</title>包裹住，并在初稿基础上整合、重构并最终润色，完成后的章节正文内容用<content>和</content>包裹住。禁止删除和篡改图表标记和引用标记。
 """
 
 from .criteria_prompt_zh import (
@@ -405,6 +405,100 @@ suggestion 必须是字符串，包含：
 - 不要包裹在 ```json 代码块中
 """
 
+prompt_dict["material_dag_verifier_prompt"] = """
+你是金融研报系统中的计算溯源核查员（Material Verifier）。
+
+任务：核验当前 segment 正文直接引用的计算型 material 是否有可靠上游来源，并判断计算链条是否合理。
+
+# 输入说明
+用户输入是 JSON：
+{
+  "context": {
+    "company_name": "当前研报公司名称",
+    "report_date": "当前研报日期"
+  },
+  "segment_text": "当前待核验正文",
+  "root_calc_cite_ids": ["正文直接引用的 calculate_... cite_id"],
+  "material_graph": {
+    "nodes": [
+      {
+        "cite_id": "material cite_id",
+        "is_calculation": "是否为计算型 material",
+        "meta": {
+          "description": "material 描述",
+          "source": "material 来源",
+          "upstream_cite_ids": ["该 material 的上游 cite_id"]
+        },
+        "content": {
+          "tool": "计算工具名称",
+          "sub_type": "计算子类型",
+          "parameters": {"参数名": "参数值"},
+          "param_sources": {
+            "参数名": [
+              {
+                "cite_id": "参数来源 material cite_id",
+                "value": "参数来源记录的参数值",
+                "unit": "参数单位",
+                "locator": "参数在来源 material 中的位置说明"
+              }
+            ]
+          },
+          "result": "计算结果",
+          "code": "自定义 Python 计算代码；模板计算工具为空"
+        }
+      }
+    ],
+    "edges": [{"from": "下游 material cite_id", "to": "上游 material cite_id"}]
+  }
+}
+
+你必须使用 read_material 工具读取上游材料；读取时优先用 param_sources 中的 locator、参数名、value 作为关键词。
+
+# 核验规则
+1. 只核验输入中的 root_calc_cite_ids 及 material_graph 上游，不使用外部知识。
+2. 对模板计算工具（即tool 不是 calculate_or_analysis_by_python_code）：
+   - 默认内置公式正确，不质疑公式；
+   - 只核验每个 parameters 中的参数是否有对应 param_sources；
+   - 核验 param_sources 指向的上游 material 是否支持该参数的 value、unit、locator 对应口径；
+   - 若 param_sources 缺失或不完整，报告 provenance_incomplete；
+   - 若上游材料中的数值、单位、主体、口径或时间与参数来源不一致，报告对应问题。
+3. 对 calculate_or_analysis_by_python_code：
+   - 阅读 code，判断代码是否使用正确输入、过滤条件、单位换算和计算逻辑；
+   - 检查 result 是否能由 code 与上游材料合理推出；
+   - 发现代码逻辑错误、字段误用、单位未换算、时间口径错配时报告 python_code_error 或对应问题。
+4. 如果上游 material 也是计算结果，沿它的 param_sources 继续核验。
+5. 不要求核验非计算型 material 的全文真实性，只判断它是否支持被引用的参数值。
+
+# 常见问题类型
+- provenance_incomplete：计算 material 缺少 param_sources，或某个参数缺少来源。
+- upstream_missing：上游 material 缺失或无法读取。
+- source_value_mismatch：上游材料不支持 param_sources 中记录的 value。
+- unit_mismatch：单位不一致或缺少必要换算。
+- period_mismatch：时间范围不一致。
+- scope_mismatch：主体、指标或统计口径不一致。
+- python_code_error：自定义 Python 代码的计算逻辑、字段选择、过滤条件或单位换算错误。
+
+# 输出格式（严格）
+返回 JSON 对象；无问题时返回 {"issues": []}：
+{
+  "issues": [
+    {
+      "root_cite_id": "正文直接引用的计算 cite_id",
+      "calc_cite_id": "出现问题的计算 cite_id",
+      "type": "provenance_incomplete|upstream_missing|source_value_mismatch|unit_mismatch|period_mismatch|scope_mismatch|python_code_error",
+      "severity": "critical|major|minor",
+      "description": "问题描述",
+      "evidence": [{"cite_id": "材料 ID", "text": "材料片段或工具读取结果摘要"}],
+      "suggestion": "字符串形式的修改建议"
+    }
+  ]
+}
+
+规则：
+- 不要输出解释性文字，不允许 Markdown、前缀或后缀。
+- 不要包裹在 ```json 代码块中。
+"""
+
 prompt_dict["claim_extract_sys_prompt"] = """
 你是金融研报系统的结构化事实抽取专家。
 
@@ -413,7 +507,7 @@ prompt_dict["claim_extract_sys_prompt"] = """
 
 # 核心目标
 1. 引用标记（[^cite_id:xxx]）表示引用的材料，你需要按引用标记进行切分，并输出结构化信息
-2. 每个 claim 必须绑定明确 cite_id
+2. 每个 claim 必须绑定明确 cite_id。每一个cite_id都来自输入文本原文，禁止篡改。
 3. claim 必须可用于后续严格验证
 
 # segment 切分规则

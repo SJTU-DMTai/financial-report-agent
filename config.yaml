@@ -223,7 +223,6 @@ pdf_style:
 
 
 verify_config:
-  max_verify_rounds: 2
   max_claims_per_segment: 10
   enable_multi_source_verification: true
 
@@ -231,8 +230,8 @@ wkhtmltopdf_path:
   path: /usr/local/bin/wkhtmltopdf
 
 tracking_board:
-  max_retrieve_attempts: 2
-  max_revise_attempts: 3
+  max_quality_revise_attempts: 3
+  max_verification_revise_attempts: 2
   max_replan_attempts: 1
   evidence_concurrency: 4
   segment_concurrency: 3
@@ -264,4 +263,5 @@ evaluation:
       citation_patterns:
         - match_pattern: '\[\d+(?:\s*,\s*\d+)*\]'
           split_pattern: '\d+'
+
 

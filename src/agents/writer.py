@@ -17,7 +17,6 @@ from ..tools.search_tools import *
 from ..tools.calculate_tools import *
 from ..memory.short_term import ShortTermMemoryStore
 from ..memory.long_term import LongTermMemoryStore
-from ..memory.working_memory import SlidingWindowMemory
 from ..prompt import prompt_dict
 
 
@@ -31,7 +30,6 @@ def create_writer_agent(
         name="Writer",
         sys_prompt=sys_prompt or prompt_dict['writer_sys_prompt'],
         model=model,
-        # memory=SlidingWindowMemory(),
         formatter=formatter,
         toolkit=toolkit,
         parallel_tool_calls=False,
@@ -41,18 +39,9 @@ def create_writer_agent(
 # ---- Toolkit Builder ----
 def build_writer_toolkit(
     short_term: ShortTermMemoryStore,
-    long_term: LongTermMemoryStore,
-    searcher: ReActAgent | None = None,
+    long_term: LongTermMemoryStore
 ) -> Toolkit:
     toolkit = Toolkit()
-
-    # manuscript_tools = ManuscriptTools(short_term=short_term)
-    # toolkit.register_tool_function(manuscript_tools.read_manuscript_section)
-    # toolkit.register_tool_function(manuscript_tools.replace_manuscript_section)
-
-    if searcher is not None:
-        search_tools = SearchTools(short_term=short_term,long_term=long_term)
-        toolkit.register_tool_function(search_tools.searcher_tool(searcher))
 
     chart_tools = GraphicTools(short_term=short_term)
     toolkit.register_tool_function(chart_tools.generate_chart_by_template)

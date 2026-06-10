@@ -20,10 +20,23 @@ template:
   ],
   "evidences": [
     {{
-      "description": "替换后的证据"
+      "description": "替换后的证据 1",
+      "entity": "证据主体",
+      "aspect": "指标、事件或分析维度",
+      "period": "时间范围",
+      "scope": "口径范围",
+      "required": true
+    }},
+    {{
+      "description": "替换后的证据 2",
+      "entity": "证据主体",
+      "aspect": "指标、事件或分析维度",
+      "period": "时间范围",
+      "scope": "口径范围",
+      "required": true
     }}
   ]
 }}
 
 requirements 必须是字符串数组，每一项是一条独立写作要求。
-如果无法找到合理替代 evidence，可以输出空数组 `"evidences": []`，并在 requirements 中删除或弱化对应论点。
+如果无法找到合理替代 evidence，可以输出空数组 `"evidences": []`，并**在 requirements 中删除或弱化对应论点**。

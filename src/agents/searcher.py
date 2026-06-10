@@ -13,7 +13,6 @@ from ..tools.material_tools import MaterialTools, get_retrieve_fn
 from ..tools.search_tools import SearchTools
 from ..memory.short_term import ShortTermMemoryStore
 from ..memory.long_term import LongTermMemoryStore
-from ..memory.working_memory import SlidingWindowMemory
 
 def create_searcher_agent(
     model,

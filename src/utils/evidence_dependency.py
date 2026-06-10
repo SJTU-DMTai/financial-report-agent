@@ -69,7 +69,7 @@ def should_check_dependency(left: EvidenceRecord, right: EvidenceRecord) -> bool
         return False
     left_text = f"{left.description} {left.fields.get('aspect', '')}"
     right_text = f"{right.description} {right.fields.get('aspect', '')}"
-    if evidence_semantic_similarity(left_text, right_text) >= 0.30:
+    if evidence_semantic_similarity(left_text, right_text) >= 0.35:
         return True
     if _looks_like_explanation(left_text) != _looks_like_explanation(right_text):
         if _shares_financial_topic(left_text, right_text):

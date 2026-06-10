@@ -96,10 +96,6 @@ class Config:
         model_cfg.setdefault("api_key_env", "EMB_API_KEY")
         return model_cfg
 
-    def get_max_verify_rounds(self) -> int:
-        verify_config = self.data.get("verify_config", {}) or {}
-        return int(verify_config.get("max_verify_rounds", 2))
-
     def get_max_claims_per_segment(self) -> int:
         verify_config = self.data.get("verify_config", {}) or {}
         return int(verify_config.get("max_claims_per_segment", 15))
@@ -117,8 +113,8 @@ class Config:
 
     def get_tracking_board_cfg(self) -> dict:
         cfg = deepcopy(self.data.get("tracking_board", {}) or {})
-        cfg.setdefault("max_retrieve_attempts", 2)
-        cfg.setdefault("max_revise_attempts", 3)
+        cfg.setdefault("max_quality_revise_attempts", 3)
+        cfg.setdefault("max_verification_revise_attempts", 2)
         cfg.setdefault("max_replan_attempts", 1)
         cfg.setdefault("evidence_concurrency", 4)
         cfg.setdefault("segment_concurrency", 3)
@@ -134,3 +130,4 @@ class Config:
     def get_report_processing_llm_name(self) -> str:
         evaluation_cfg = self.data.get("evaluation", {}) or {}
         return str(evaluation_cfg.get("report_processing_llm_name") or self.llm_name)
+

@@ -30,6 +30,8 @@ from agentscope.tool import Toolkit
 from src.agents.verifier import create_three_verifiers
 from src.memory.short_term import ShortTermMemoryStore
 from src.memory.long_term import LongTermMemoryStore
+from src.tools.material_tools import MaterialTools
+from src.utils.cite_id import is_calc_cite_id
 from src.utils.instance import create_chat_model, create_agent_formatter
 from src.utils.call_with_retry import call_agent_with_retry
 from src.prompt import prompt_dict
@@ -220,6 +222,24 @@ def _strip_chart_references_for_claim_extract(text: str) -> str:
     return cleaned.strip()
 
 
+def _normalize_claim_extract_segments(data: Any) -> List[Dict[str, Any]]:
+    if isinstance(data, dict):
+        segments = data.get("segments", [])
+    elif isinstance(data, list):
+        segments = data
+    else:
+        return []
+
+    if not isinstance(segments, list):
+        return []
+
+    normalized: List[Dict[str, Any]] = []
+    for segment in segments:
+        if isinstance(segment, dict):
+            normalized.append(segment)
+    return normalized
+
+
 # ---------------------------------------------------------------------------
 # §2  Claim Extractor - 完全由 LLM 驱动的原子声明提取器
 # ---------------------------------------------------------------------------
@@ -373,11 +393,11 @@ class ClaimExtractor:
             )
             return []
 
-        segments = data.get("segments", [])
+        segments = _normalize_claim_extract_segments(data)
         if not segments:
             await append_verifier_trace_log(
                 "ClaimExtractor",
-                "[ClaimExtractor] No segments returned from LLM",
+                f"[ClaimExtractor] No valid segments returned from LLM; parsed_type={type(data).__name__}",
                 payload=f"Raw text:\n{raw}",
             )
             return []
@@ -385,7 +405,12 @@ class ClaimExtractor:
         claims: List[Claim] = []
         for seg in segments:
             seg_cite_ids = seg.get("cite_ids", [])
-            for item in seg.get("claims", []):
+            segment_claims = seg.get("claims", [])
+            if not isinstance(segment_claims, list):
+                continue
+            for item in segment_claims:
+                if not isinstance(item, dict):
+                    continue
                 claim_type_str = item.get("claim_type", "factual")
                 try:
                     claim_type = ClaimType(claim_type_str)
@@ -449,6 +474,254 @@ class ClaimIssue:
 class ClaimResult:
     claim_id: str
     issues: List[ClaimIssue]
+
+
+SEGMENT_CITE_RE = re.compile(r"\[\^\s*(?:(?:cite_id)\s*[:=]\s*)?([^\]\|\s]+)(?:\|[^\]]*)?\]", re.IGNORECASE)
+MAX_MATERIAL_PREVIEW_CHARS = 1600
+MAX_CALC_CODE_CHARS = 4000
+
+
+def extract_segment_cite_ids(text: str) -> List[str]:
+    cite_ids: List[str] = []
+    for match in SEGMENT_CITE_RE.finditer(text or ""):
+        cite_id = match.group(1).strip()
+        if cite_id and cite_id not in cite_ids:
+            cite_ids.append(cite_id)
+    return cite_ids
+
+
+def extract_calc_root_cite_ids(text: str) -> List[str]:
+    return [cite_id for cite_id in extract_segment_cite_ids(text) if is_calc_cite_id(cite_id)]
+
+
+def truncate_for_verifier(value: Any, max_chars: int) -> Any:
+    if not isinstance(value, str):
+        return value
+    if len(value) <= max_chars:
+        return value
+    return value[:max_chars] + "...[内容过长，已截断]"
+
+
+def first_calc_record(content: Any) -> Dict[str, Any] | None:
+    if isinstance(content, list) and content and isinstance(content[0], dict):
+        return dict(content[0])
+    if isinstance(content, dict):
+        return dict(content)
+    return None
+
+
+def calc_content_payload(content: Any) -> Dict[str, Any] | None:
+    record = first_calc_record(content)
+    if record is None:
+        return None
+    payload = {
+        "description": record.get("description", ""),
+        "tool": record.get("tool", ""),
+        "sub_type": record.get("sub_type", ""),
+        "parameters": record.get("parameters", {}),
+        "param_sources": record.get("param_sources", {}),
+        "result_type": record.get("result_type", ""),
+        "result": record.get("result"),
+        "code": truncate_for_verifier(record.get("code", ""), MAX_CALC_CODE_CHARS),
+    }
+    return payload
+
+
+def material_meta_payload(short_term: ShortTermMemoryStore, cite_id: str) -> Dict[str, Any] | None:
+    meta = short_term.get_material_meta(cite_id)
+    if meta is None:
+        return None
+    return {
+        "description": meta.description,
+        "source": meta.source,
+        "filename": meta.filename,
+        "m_type": getattr(meta.m_type, "value", str(meta.m_type)),
+        "entity": meta.entity,
+        "time": meta.time,
+        "upstream_cite_ids": list(getattr(meta, "upstream_cite_ids", []) or []),
+    }
+
+
+def material_node_payload(short_term: ShortTermMemoryStore, cite_id: str) -> Dict[str, Any] | None:
+    meta_payload = material_meta_payload(short_term, cite_id)
+    if meta_payload is None:
+        return None
+
+    node = {
+        "cite_id": cite_id,
+        "is_calculation": is_calc_cite_id(cite_id),
+        "meta": meta_payload,
+    }
+    content = short_term.load_material(cite_id)
+    if is_calc_cite_id(cite_id):
+        node["content"] = calc_content_payload(content)
+    else:
+        node["preview"] = short_term.load_material_preview(
+            cite_id,
+            max_chars=MAX_MATERIAL_PREVIEW_CHARS,
+        )
+    return node
+
+
+def collect_material_graph(
+    short_term: ShortTermMemoryStore,
+    root_cite_ids: List[str],
+) -> Dict[str, Any]:
+    nodes: List[Dict[str, Any]] = []
+    edges: List[Dict[str, str]] = []
+    missing: List[str] = []
+    cycles: List[List[str]] = []
+    visited: set[str] = set()
+    stack: List[Tuple[str, List[str]]] = [(cite_id, []) for cite_id in root_cite_ids]
+
+    while stack:
+        cite_id, path = stack.pop()
+        if cite_id in path:
+            cycles.append(path + [cite_id])
+            continue
+        if cite_id in visited:
+            continue
+        node = material_node_payload(short_term, cite_id)
+        if node is None:
+            if cite_id not in missing:
+                missing.append(cite_id)
+            continue
+        visited.add(cite_id)
+        nodes.append(node)
+        upstream_ids = node["meta"].get("upstream_cite_ids", []) or []
+        next_path = path + [cite_id]
+        for upstream_cite_id in upstream_ids:
+            upstream = str(upstream_cite_id).strip()
+            if not upstream:
+                continue
+            edges.append({"from": cite_id, "to": upstream})
+            stack.append((upstream, next_path))
+
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "missing": missing,
+        "cycles": cycles,
+    }
+
+
+def calc_node_missing_param_sources(node: Dict[str, Any]) -> bool:
+    content = node.get("content")
+    if not isinstance(content, dict):
+        return True
+    param_sources = content.get("param_sources")
+    return not isinstance(param_sources, dict) or not param_sources
+
+
+def calc_node_parameters_without_sources(node: Dict[str, Any]) -> List[str]:
+    content = node.get("content")
+    if not isinstance(content, dict):
+        return []
+    parameters = content.get("parameters")
+    param_sources = content.get("param_sources")
+    if not isinstance(parameters, dict) or not isinstance(param_sources, dict):
+        return []
+    return [param_name for param_name in parameters if param_name not in param_sources]
+
+
+def material_issue(
+    issue_type: str,
+    severity: str,
+    description: str,
+    suggestion: str,
+    evidence: List[Dict[str, Any]] | None = None,
+) -> ClaimIssue:
+    return ClaimIssue(
+        type=issue_type,
+        description=f"[material_dag] {description}",
+        severity=severity,
+        evidence=evidence or [],
+        suggestion=suggestion,
+    )
+
+
+def local_material_graph_issues(graph: Dict[str, Any]) -> List[ClaimIssue]:
+    issues: List[ClaimIssue] = []
+    for cite_id in graph.get("missing", []) or []:
+        issues.append(material_issue(
+            "upstream_missing",
+            "critical",
+            f"material 不存在或无法读取：{cite_id}",
+            f"删除或改写依赖 material {cite_id} 的计算表述；如果必须保留该计算，需要重新生成有效 material 后再引用。",
+            evidence=[{"cite_id": cite_id, "text": "material missing"}],
+        ))
+    for cycle in graph.get("cycles", []) or []:
+        cycle_text = " -> ".join(cycle)
+        issues.append(material_issue(
+            "material_dag_cycle",
+            "critical",
+            f"material DAG 存在循环依赖：{cycle_text}",
+            "删除或改写涉及该循环依赖的计算表述；如果必须保留该计算，需要重新生成无循环依赖的计算 material。",
+            evidence=[{"text": cycle_text}],
+        ))
+    for node in graph.get("nodes", []) or []:
+        if not node.get("is_calculation"):
+            continue
+        cite_id = str(node.get("cite_id") or "")
+        if calc_node_missing_param_sources(node):
+            issues.append(material_issue(
+                "provenance_incomplete",
+                "major",
+                f"计算 material {cite_id} 缺少 param_sources，无法沿参数溯源核验。",
+                "删除或改写正文中对该计算结果的引用；如果必须保留该计算，需要重新生成带 param_sources 的计算 material。",
+                evidence=[{"cite_id": cite_id, "text": "missing param_sources"}],
+            ))
+            continue
+        missing_params = calc_node_parameters_without_sources(node)
+        for param_name in missing_params:
+            issues.append(material_issue(
+                "provenance_incomplete",
+                "major",
+                f"计算 material {cite_id} 的参数 {param_name} 缺少来源。",
+                f"删除或改写正文中对该计算结果的引用；如果必须保留该计算，需要为参数 {param_name} 补充 param_sources 后重新计算。",
+                evidence=[{"cite_id": cite_id, "text": f"parameter without source: {param_name}"}],
+            ))
+    return issues
+
+
+def normalize_material_verifier_severity(value: Any) -> str:
+    severity = str(value or "").lower()
+    if severity in {"critical", "high"}:
+        return "critical"
+    if severity in {"major", "medium"}:
+        return "major"
+    if severity in {"minor", "low"}:
+        return "minor"
+    return "major"
+
+
+def material_verifier_issues_from_payload(payload: Any) -> List[ClaimIssue]:
+    if isinstance(payload, dict):
+        raw_issues = payload.get("issues", [])
+    elif isinstance(payload, list):
+        raw_issues = payload
+    else:
+        raw_issues = []
+
+    issues: List[ClaimIssue] = []
+    for item in raw_issues:
+        if not isinstance(item, dict):
+            continue
+        calc_cite_id = str(item.get("calc_cite_id") or item.get("root_cite_id") or "").strip()
+        evidence = item.get("evidence")
+        if not isinstance(evidence, list):
+            evidence = []
+        description = str(item.get("description") or "").strip()
+        if calc_cite_id and calc_cite_id not in description:
+            description = f"{calc_cite_id}: {description}"
+        issues.append(material_issue(
+            str(item.get("type") or "material_dag_issue"),
+            normalize_material_verifier_severity(item.get("severity")),
+            description or "计算材料溯源存在问题。",
+            str(item.get("suggestion") or "").strip(),
+            evidence=evidence,
+        ))
+    return issues
 
 
 # ---------------------------------------------------------------------------
@@ -581,6 +854,9 @@ class VerifierRouter:
             result: Dict[str, List[ClaimIssue]] = {c.claim_id: [] for c in claims}
             skipped_items = []
             for item in issues_list:
+                if not isinstance(item, dict):
+                    skipped_items.append(item)
+                    continue
                 cid = item.get("claim_id")
                 if not cid or cid not in result:
                     skipped_items.append(item)
@@ -728,6 +1004,80 @@ class VerifierRouter:
 # §5  SegmentVerifier — 总控制器
 # ---------------------------------------------------------------------------
 
+class MaterialDAGVerifier:
+    def __init__(
+        self,
+        short_term: ShortTermMemoryStore,
+        long_term: LongTermMemoryStore,
+        model,
+        formatter,
+    ) -> None:
+        toolkit = Toolkit()
+        material_tools = MaterialTools(short_term=short_term, long_term=long_term)
+        toolkit.register_tool_function(material_tools.read_material)
+        self.short_term = short_term
+        self.agent = ReActAgent(
+            name="MaterialDAGVerifier",
+            sys_prompt=prompt_dict["material_dag_verifier_prompt"],
+            model=model,
+            memory=InMemoryMemory(),
+            formatter=formatter,
+            toolkit=toolkit,
+            parallel_tool_calls=False,
+            max_iters=10,
+        )
+
+    async def verify(
+        self,
+        segment: str,
+        company_name: Optional[str] = None,
+        report_date: Optional[str] = None,
+        root_calc_cite_ids: Optional[List[str]] = None,
+    ) -> List[ClaimIssue]:
+        root_ids = list(root_calc_cite_ids or extract_calc_root_cite_ids(segment))
+        if not root_ids:
+            return []
+
+        graph = collect_material_graph(self.short_term, root_ids)
+        local_issues = local_material_graph_issues(graph)
+        payload = {
+            "context": {
+                "company_name": company_name or "",
+                "report_date": report_date or "",
+            },
+            "segment_text": segment,
+            "root_calc_cite_ids": root_ids,
+            "material_graph": graph,
+        }
+
+        await append_verifier_trace_log(
+            "MaterialDAGVerifier",
+            "material DAG collected for calculation citations",
+            payload=json.dumps(payload, ensure_ascii=False, indent=2, default=str),
+        )
+        if hasattr(self.agent, "memory") and self.agent.memory is not None:
+            await self.agent.memory.clear()
+
+        try:
+            msg = Msg(
+                role="user",
+                content=json.dumps(payload, ensure_ascii=False, default=str),
+                name="MaterialDAGVerifier",
+            )
+            response_msg = await call_agent_with_retry(self.agent, msg)
+            response_text = _extract_text_response(response_msg)
+            parsed = _safe_parse_json(response_text)
+            llm_issues = material_verifier_issues_from_payload(parsed)
+            return local_issues + llm_issues
+        except Exception as exc:
+            await append_verifier_trace_log(
+                "MaterialDAGVerifier",
+                f"material DAG verification failed: {type(exc).__name__}: {exc}",
+                payload=traceback.format_exc(),
+            )
+            return local_issues
+
+
 class SegmentVerifier:
     def __init__(self, short_term: ShortTermMemoryStore, long_term: LongTermMemoryStore):
         self.model = create_chat_model(reasoning=False)
@@ -755,6 +1105,43 @@ class SegmentVerifier:
         )
 
         self.router = VerifierRouter(self.verifiers)
+        self.material_dag_verifier = MaterialDAGVerifier(
+            short_term=short_term,
+            long_term=long_term,
+            model=self.model,
+            formatter=self.formatter,
+        )
+        self.material_dag_cache: Dict[str, List[ClaimIssue]] = {}
+
+    async def verify_material_dag(
+        self,
+        segment: str,
+        company_name: Optional[str] = None,
+        report_date: Optional[str] = None,
+    ) -> List[ClaimIssue]:
+        root_calc_cite_ids = extract_calc_root_cite_ids(segment)
+        if not root_calc_cite_ids:
+            return []
+
+        cached_issues: List[ClaimIssue] = []
+        missing_root_ids: List[str] = []
+        for cite_id in root_calc_cite_ids:
+            if cite_id in self.material_dag_cache:
+                cached_issues.extend(self.material_dag_cache[cite_id])
+            else:
+                missing_root_ids.append(cite_id)
+
+        for cite_id in missing_root_ids:
+            fresh_issues = await self.material_dag_verifier.verify(
+                segment,
+                company_name=company_name,
+                report_date=report_date,
+                root_calc_cite_ids=[cite_id],
+            )
+            self.material_dag_cache[cite_id] = fresh_issues
+            cached_issues.extend(fresh_issues)
+
+        return cached_issues
 
     async def verify(
         self,
@@ -763,6 +1150,11 @@ class SegmentVerifier:
         report_date: Optional[str] = None,
     ) -> List[ClaimIssue]:
         """主入口：segment → claims → batch verification → issues"""
+        material_issues = await self.verify_material_dag(
+            segment,
+            company_name=company_name,
+            report_date=report_date,
+        )
         segment_for_extract = _strip_chart_references_for_claim_extract(segment)
         if company_name or report_date:
             context_lines = ["# 任务上下文"]
@@ -774,7 +1166,7 @@ class SegmentVerifier:
             segment_for_extract = "\n".join(context_lines) + "\n\n# 待抽取正文\n" + segment_for_extract
         claims = await self.extractor.extract(segment_for_extract)
         if not claims:
-            return []
+            return material_issues
         selected_claims = select_high_risk_claims(claims, self.max_claims_per_segment)
         await append_verifier_trace_log(
             "SegmentVerifier",
@@ -810,6 +1202,7 @@ class SegmentVerifier:
 
         # 展平所有 issues
         flat = []
+        flat.extend(material_issues)
         for cr in claim_results:
             flat.extend(cr.issues)
         return flat

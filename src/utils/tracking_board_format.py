@@ -35,6 +35,10 @@ def normalize_cite_markers(text: str) -> str:
     return CITE_ID_RE.sub(_normalize_cite_marker_match, text or "")
 
 
+def is_unavailable_marker(text: str) -> bool:
+    return str(text or "").strip().upper() == "UNAVAILABLE"
+
+
 def extract_json_object(text: str) -> dict[str, Any] | None:
     raw = str(text or "").strip()
     fence_match = re.search(r"```(?:json)?\s*(\{.+?\})\s*```", raw, re.DOTALL | re.IGNORECASE)

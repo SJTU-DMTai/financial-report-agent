@@ -8,7 +8,7 @@ import argparse
 import traceback
 from pathlib import Path
 
-from src.pipelines.workflow_concurrent import run_workflow
+from src.pipelines.workflow_tracking_board import run_workflow
 from src.memory.long_term import LongTermMemoryStore
 from src.utils.get_entity_info import get_entity_info
 from src.utils.local_file import DEMO_DIR

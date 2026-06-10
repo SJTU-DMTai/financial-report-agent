@@ -483,6 +483,13 @@ def _as_file_uri(p: str) -> str:
         return ""
     return Path(p).expanduser().resolve().as_uri()
 
+def _allowed_local_resource_dirs(short_term: ShortTermMemoryStore, out_dir: Path) -> list[str]:
+    dirs = [out_dir]
+    manuscript_dir = getattr(short_term, "manuscript_dir", None)
+    if manuscript_dir:
+        dirs.append(Path(manuscript_dir))
+    return [str(p.expanduser().resolve()) for p in dirs]
+
 def _safe_trim_title(title: str, max_len: int) -> str:
     title = (title or "").strip()
     if max_len and len(title) > max_len:
@@ -725,6 +732,7 @@ def md_to_pdf(
         "no-stop-slow-scripts": None,
         "load-error-handling": "ignore",
         "load-media-error-handling": "ignore",
+        "allow": _allowed_local_resource_dirs(short_term, out_dir),
 
         "header-html": _as_file_uri(str(header_path)),
         "header-spacing": "6",

@@ -78,16 +78,13 @@ class EvidenceRegistry:
             return existing
 
         evidence_id = self.next_evidence_id()
-        static_fact = str(fields.get("fact") or "").strip()
-        static_resolved = bool(fields.get("is_static", False)) and bool(static_fact)
         record = EvidenceRecord(
             evidence_id=evidence_id,
             description=str(fields.get("description") or ""),
             canonical_key=canonical_key,
-            state="RESOLVED" if static_resolved else "NEW",
+            state="NEW",
             required=bool(fields.get("required", True)),
             used_by_segments=[segment_id],
-            search_result=f"{fields.get('description')}：{static_fact}" if static_resolved else "",
             fields=dict(fields),
         )
         self.records[evidence_id] = record
