@@ -30,6 +30,12 @@ from src.memory.working import Evidence, Section, load_section_from_json_text, _
 from src.pipelines.planning import process_pdf_to_outline
 from src.prompt import prompt_dict
 from src.utils.call_with_retry import call_agent_with_retry, call_chatbot_with_retry
+from src.utils.evidence_batching import (
+    EvidenceBatchResult,
+    cluster_ready_evidence_records,
+    format_evidence_batch_xml,
+    parse_batch_search_xml,
+)
 from src.utils.evidence_dependency import build_evidence_dependencies
 from src.utils.file_converter import md_to_pdf, section_to_markdown
 from src.utils.format import (
@@ -57,6 +63,7 @@ from src.utils.multi_types_verification import (
 )
 from src.utils.outline_refine import refine_outline
 from src.utils.tracking_board_format import (
+    apply_search_result_to_evidence_record,
     build_evidence_context,
     build_known_evidence_context,
     extract_cite_ids,
@@ -69,6 +76,7 @@ from src.utils.tracking_board_format import (
 
 
 SAVE_LOCK = asyncio.Lock()
+DEFAULT_EVIDENCE_BATCH_SIZE = 6
 
 
 def set_segment_state(record: SegmentRecord, state: str, reason: str) -> None:
@@ -166,6 +174,10 @@ def apply_static_reference_citation(record: EvidenceRecord, reference_cite_id: s
     if reference_cite_id not in record.cite_ids:
         record.cite_ids.append(reference_cite_id)
     record.state = "RESOLVED"
+
+
+def is_static_fact_record(record: EvidenceRecord) -> bool:
+    return bool(record.fields.get("is_static", False)) and bool(str(record.fields.get("fact") or "").strip())
 
 
 def section_has_unfinished(section: Section) -> bool:
@@ -390,41 +402,50 @@ def select_evidence_segment_context(
     return record.description, None
 
 
-async def search_tracking_evidence(
-    record: EvidenceRecord,
-    known_evidence: str,
+async def search_tracking_evidence_batch(
+    records: list[EvidenceRecord],
+    registry: EvidenceRegistry,
+    bindings: dict[str, SegmentBinding],
     task_desc: str,
     demo_date: str,
-    segment_topic: str,
     searcher,
-    reference: str | None = None,
 ) -> str:
+    topics: list[str] = []
+    reference = None
+    for record in records:
+        segment_topic, segment_reference = select_evidence_segment_context(record, bindings)
+        if segment_topic and segment_topic not in topics:
+            topics.append(segment_topic)
+        if reference is None and segment_reference:
+            reference = segment_reference
     reference_context = (
         f"{demo_date}发布了一份历史研报，以下片段可能包含所需材料：\n{reference}\n"
-        f"如果该片段包含所需材料，并且一定不会因时间变化，在当前撰写时间依然成立，"
-        f"可以摘取相关两三句话作为论据，并加上 [^cite_id:{demo_date}_reference_report]。"
+        f"如果该片段包含某个 evidence 所需材料，并且一定不会因时间变化，"
+        f"在当前撰写时间依然成立，可以摘取相关两三句话作为该 evidence 的论据，"
+        f"并加上 [^cite_id:{demo_date}_reference_report]。"
         if reference
         else ""
     )
-    searcher_input = Msg(
-        name="user",
-        content=prompt_dict["search_tracking_evidence_user_prompt"].format(
-            task_desc=task_desc,
-            segment_topic=segment_topic,
-            known_evidence=known_evidence,
-            evidence_description=record.description,
-            reference_context=reference_context,
-        ),
-        role="user",
+    known_evidence_by_id = {
+        record.evidence_id: build_known_evidence_context(registry, record.depends_on)
+        for record in records
+    }
+    prompt = prompt_dict["search_tracking_evidence_batch_user_prompt"].format(
+        task_desc=task_desc,
+        segment_topic="；".join(topics) if topics else "未指定",
+        reference_context=reference_context,
+        evidences_xml=format_evidence_batch_xml(records, known_evidence_by_id),
     )
+    searcher_input = Msg(name="user", content=prompt, role="user")
     print(searcher_input.content)
     msg = await call_agent_with_retry(searcher, searcher_input)
-    print(f"[Searcher] Finished searching: {record.description[:20]}...")
+    batch_label = ", ".join(record.evidence_id for record in records)
+    print(f"[Searcher] Finished batch searching: {batch_label}", flush=True)
     return msg.get_text_content()
 
 
-async def resolve_global_evidence_record(
-    record: EvidenceRecord,
+async def resolve_global_evidence_cluster(
+    records: list[EvidenceRecord],
     registry: EvidenceRegistry,
     bindings: dict[str, SegmentBinding],
     short_term: ShortTermMemoryStore,
@@ -432,61 +453,86 @@ async def resolve_global_evidence_record(
     task_desc: str,
     demo_date: str,
 ) -> bool:
-    if record.state == "RESOLVED":
-        return True
-    if record.state == "SKIPPED":
-        return True
-    if record.state == "UNAVAILABLE":
+    active_records = [
+        record
+        for record in records
+        if record.state in {"NEW", "WAITING", "PLANNED"}
+        and registry.dependencies_resolved(record.evidence_id)
+    ]
+    if not active_records:
         return False
-    if record.state == "SEARCHING":
-        # Another concurrent segment is already resolving the shared evidence.
-        for _ in range(120):
-            await asyncio.sleep(1)
-            if record.state != "SEARCHING":
-                return record.state == "RESOLVED"
-        return False
-    if not registry.dependencies_resolved(record.evidence_id):
-        return False
-    static_fact = str(record.fields.get("fact") or "").strip()
-    if bool(record.fields.get("is_static", False)) and static_fact:
-        # Static facts are copied from the reference report and must cite it explicitly.
-        apply_static_reference_citation(record, f"{demo_date}_reference_report")
-        return True
 
-    registry.records[record.evidence_id].state = "SEARCHING"
-    segment_topic, reference = select_evidence_segment_context(record, bindings)
-    known_evidence = build_known_evidence_context(registry, record.depends_on)
+    for record in active_records:
+        record.state = "SEARCHING"
+
     searcher = create_evidence_searcher(short_term, long_term)
     try:
-        result_text = await search_tracking_evidence(
-            record,
-            known_evidence,
+        raw_text = await search_tracking_evidence_batch(
+            active_records,
+            registry,
+            bindings,
             task_desc,
             demo_date,
-            segment_topic,
             searcher,
-            reference=reference,
         )
+        try:
+            parsed_results = parse_batch_search_xml(raw_text)
+        except Exception:
+            stripped_text = str(raw_text or "").strip()
+            if len(active_records) == 1:
+                parsed_results = {
+                    active_records[0].evidence_id: EvidenceBatchResult(
+                        evidence_id=active_records[0].evidence_id,
+                        status="",
+                        answer=stripped_text,
+                    )
+                }
+            elif stripped_text.upper() == "SKIP":
+                parsed_results = {
+                    record.evidence_id: EvidenceBatchResult(record.evidence_id, "SKIPPED", "")
+                    for record in active_records
+                }
+            elif is_unavailable_marker(stripped_text):
+                parsed_results = {
+                    record.evidence_id: EvidenceBatchResult(record.evidence_id, "UNAVAILABLE", "")
+                    for record in active_records
+                }
+            else:
+                raise
     except Exception:
-        record.state = "PLANNED"
+        for record in active_records:
+            record.state = "PLANNED"
         raise
-    if str(result_text or "").strip().upper() == "SKIP":
-        record.search_result = ""
-        record.state = "SKIPPED"
-        return True
-    if is_unavailable_marker(result_text):
-        record.search_result = ""
-        record.cite_ids = []
-        record.state = "UNAVAILABLE"
-        return False
-    result_text = normalize_cite_markers(result_text)
-    cite_ids = extract_cite_ids(result_text)
-    registry.mark_resolved(
-        record.evidence_id,
-        cite_ids=cite_ids,
-        search_result=result_text,
-    )
-    return registry.records[record.evidence_id].state == "RESOLVED"
+
+    changed = False
+    for record in active_records:
+        result = parsed_results.get(record.evidence_id)
+        if result is None:
+            record.state = "PLANNED"
+            print(
+                f"[Searcher] Batch result missing evidence_id={record.evidence_id}; will retry later.",
+                flush=True,
+            )
+            continue
+        apply_search_result_to_evidence_record(
+            record,
+            result.answer,
+            result.status,
+        )
+        changed = True
+    return changed
+
+
+def apply_ready_static_records(
+    records: list[EvidenceRecord],
+    demo_date: str,
+) -> int:
+    applied = 0
+    for record in records:
+        if is_static_fact_record(record):
+            apply_static_reference_citation(record, f"{demo_date}_reference_report")
+            applied += 1
+    return applied
 
 
 async def resolve_global_evidence_registry(
@@ -497,18 +543,37 @@ async def resolve_global_evidence_registry(
     task_desc: str,
     demo_date: str,
     evidence_concurrency: int,
+    evidence_batch_size: int = DEFAULT_EVIDENCE_BATCH_SIZE,
 ) -> bool:
     changed = False
     concurrency = max(int(evidence_concurrency), 1)
+    batch_size = max(int(evidence_batch_size), 1)
     for _ in range(max(len(registry.records), 1)):
         ready_records = registry.ready_to_search_records()
         if not ready_records:
             break
-        batch = ready_records[:concurrency]
+        static_count = apply_ready_static_records(ready_records, demo_date)
+        if static_count:
+            changed = True
+            continue
+
+        dynamic_records = [
+            record
+            for record in ready_records
+            if not is_static_fact_record(record)
+        ]
+        clusters = cluster_ready_evidence_records(
+            dynamic_records,
+            registry,
+            batch_size,
+        )
+        if not clusters:
+            break
+        batch = clusters[:concurrency]
         results = await asyncio.gather(
             *[
-                resolve_global_evidence_record(
-                    record,
+                resolve_global_evidence_cluster(
+                    cluster,
                     registry,
                     bindings,
                     short_term,
@@ -516,16 +581,18 @@ async def resolve_global_evidence_registry(
                     task_desc,
                     demo_date,
                 )
-                for record in batch
+                for cluster in batch
             ],
             return_exceptions=True,
         )
-        for record, result in zip(batch, results):
+        for cluster, result in zip(batch, results):
             if isinstance(result, Exception):
                 traceback.print_exception(type(result), result, result.__traceback__)
-                record.state = "PLANNED"
+                for record in cluster:
+                    if record.state == "SEARCHING":
+                        record.state = "PLANNED"
                 continue
-            changed = True
+            changed = bool(result) or changed
     return changed
 
 
@@ -648,10 +715,12 @@ async def revise_segment_draft(
     feedback: str,
     reason: str,
 ) -> bool:
+    current_text = (binding.segment.content or record.latest_draft() or "").strip()
     writer_input = Msg(
         name="user",
         content=(
-            f"以下是当前正文的修改意见：\n{feedback}\n\n"
+            f"当前正文：\n{current_text}\n\n"
+            f"修改意见：\n{feedback}\n\n"
             "请只基于已有证据修改正文。修改后的正文必须使用<content>和</content>包裹，"
             "不要输出额外说明。"
         ),
@@ -776,7 +845,26 @@ async def handle_segment_issue(
     if action == "REPLAN":
         attempts = record.increment_attempt("REPLAN")
         if attempts > int(tracking_cfg["max_replan_attempts"]):
-            set_segment_state(record, "BLOCKED", "max_replan_attempts")
+            ignored_ids = [
+                evidence_id
+                for evidence_id in record.evidences
+                if registry.records.get(evidence_id)
+                and registry.records[evidence_id].state == "UNAVAILABLE"
+            ]
+            for evidence_id in ignored_ids:
+                evidence_record = registry.records[evidence_id]
+                if record.segment_id in evidence_record.used_by_segments:
+                    evidence_record.used_by_segments.remove(record.segment_id)
+            record.evidences = [
+                evidence_id
+                for evidence_id in record.evidences
+                if evidence_id not in ignored_ids
+            ]
+            registry.prune_unlinked_records()
+            sync_segment_evidences_from_record(record, binding, registry)
+            record.issue = None
+            if ignored_ids:
+                set_segment_state(record, "PLANNED", "max_replan_attempts_ignore_evidence")
             return True
         return await replan_segment_after_not_found(
             record,
@@ -811,7 +899,7 @@ async def handle_segment_issue(
     if action == "RETRY":
         attempts = record.increment_attempt("RETRY")
         record.issue = None
-        if attempts > 1:
+        if attempts > int(tracking_cfg["max_retry_attempts"]):
             set_segment_state(record, "BLOCKED", "retry_after_issue")
         return True
     set_segment_state(record, "BLOCKED", f"unknown_issue_action_{action}")
@@ -894,14 +982,11 @@ async def process_segment_record(
                 verifier,
                 company_name,
                 cur_date,
-                int(tracking_cfg["max_verification_revise_attempts"]),
             )
             if verified:
                 set_segment_state(record, "VERIFIED", "verifier_check_passed")
-            elif record.issue is not None:
-                continue
             else:
-                set_segment_state(record, "BLOCKED", "max_verification_revise_attempts")
+                continue
             continue
         if record.state == "VERIFIED":
             binding.segment.finished = True
@@ -918,15 +1003,12 @@ async def run_verifier_check(
     verifier: SegmentVerifier,
     company_name: str,
     cur_date: str,
-    max_verification_revise_attempts: int,
 ) -> bool:
     verify_revise_attempts = record.attempts.get("VERIFY_REVISE", 0)
     round_idx = verify_revise_attempts + 1
     feedback = await verify_segment_fact(record, binding, verifier, company_name, cur_date, round_idx)
     if feedback is None:
         return True
-    if verify_revise_attempts >= max_verification_revise_attempts:
-        return False
     record.issue = SegmentIssue(
         type="VERIFICATION_GAP",
         detail=feedback,
@@ -967,6 +1049,7 @@ async def process_tracking_board(
             task_desc,
             demo_date,
             int(tracking_cfg["evidence_concurrency"]),
+            int(tracking_cfg.get("evidence_batch_size", DEFAULT_EVIDENCE_BATCH_SIZE)),
         )
         tasks = []
         for segment_id, record in board.records.items():

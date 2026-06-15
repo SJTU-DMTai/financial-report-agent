@@ -10,6 +10,7 @@ from src.memory.tracking_board import SegmentIssue
 from src.utils.format import _strip_section_number_prefix, extract_tagged_text
 
 if TYPE_CHECKING:
+    from src.memory.evidence_registry import EvidenceRecord
     from src.memory.short_term import ShortTermMemoryStore
 
 
@@ -37,6 +38,30 @@ def normalize_cite_markers(text: str) -> str:
 
 def is_unavailable_marker(text: str) -> bool:
     return str(text or "").strip().upper() == "UNAVAILABLE"
+
+
+def apply_search_result_to_evidence_record(record: "EvidenceRecord", result_text: str, status: str = "") -> bool:
+    normalized_status = str(status or "").strip().upper()
+    stripped_text = str(result_text or "").strip()
+    if normalized_status in {"SKIPPED", "SKIP"} or stripped_text.upper() == "SKIP":
+        record.search_result = ""
+        record.state = "SKIPPED"
+        return True
+    if normalized_status == "UNAVAILABLE" or is_unavailable_marker(stripped_text):
+        record.search_result = ""
+        record.cite_ids = []
+        record.state = "UNAVAILABLE"
+        return False
+
+    normalized_text = normalize_cite_markers(stripped_text)
+    cite_ids = extract_cite_ids(normalized_text)
+    record.cite_ids = []
+    for cite_id in cite_ids:
+        if cite_id and cite_id not in record.cite_ids:
+            record.cite_ids.append(cite_id)
+    record.search_result = normalized_text
+    record.state = "RESOLVED" if record.cite_ids else "UNAVAILABLE"
+    return record.state == "RESOLVED"
 
 
 def extract_json_object(text: str) -> dict[str, Any] | None:

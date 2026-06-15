@@ -16,6 +16,17 @@ from src.utils.cite_id import is_calc_cite_id, is_search_cite_id
 
 _REGISTRY_LOCKS: Dict[str, RLock] = {}
 _REGISTRY_LOCKS_GUARD = Lock()
+_DESC_WS_RE = re.compile(r"\s+")
+
+
+def _append_table_columns_to_description(description: str, content: pd.DataFrame) -> str:
+    columns = [str(col).strip() for col in content.columns if str(col).strip()]
+    if not columns:
+        return description
+    columns_text = ", ".join(columns)
+    if description:
+        return f"{description}；列名：{columns_text}"
+    return f"列名：{columns_text}"
 
 
 class MaterialType(str, Enum):
@@ -148,6 +159,7 @@ class ShortTermMemoryStore:
                 ext, m_type = "csv", MaterialType.TABLE
                 if content.index.name is None:
                     content.index.name = "index"
+                description = _append_table_columns_to_description(description, content)
                 content.to_csv(self.material_dir / f"{cite_id}.csv", index=True)
             elif isinstance(content, (dict, list)):
                 ext, m_type = "json", MaterialType.JSON
@@ -168,8 +180,6 @@ class ShortTermMemoryStore:
             time = time if time is not None else {}
             upstream_cite_ids = upstream_cite_ids or []
             upstream_cite_ids = [str(item).strip() for item in upstream_cite_ids if str(item).strip()]
-
-            _DESC_WS_RE = re.compile(r"\s+")
 
             description = (description or "").strip()
             description = _DESC_WS_RE.sub(" ", description)

@@ -116,7 +116,9 @@ class Config:
         cfg.setdefault("max_quality_revise_attempts", 3)
         cfg.setdefault("max_verification_revise_attempts", 2)
         cfg.setdefault("max_replan_attempts", 1)
+        cfg.setdefault("max_retry_attempts", 5)
         cfg.setdefault("evidence_concurrency", 4)
+        cfg.setdefault("evidence_batch_size", 6)
         cfg.setdefault("segment_concurrency", 3)
         return cfg
 

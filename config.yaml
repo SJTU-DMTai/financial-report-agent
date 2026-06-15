@@ -233,7 +233,9 @@ tracking_board:
   max_quality_revise_attempts: 3
   max_verification_revise_attempts: 2
   max_replan_attempts: 1
+  max_retry_attempts: 5
   evidence_concurrency: 4
+  evidence_batch_size: 6
   segment_concurrency: 3
 
 evaluation:

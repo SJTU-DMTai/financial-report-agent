@@ -353,6 +353,9 @@ class ClaimExtractor:
         if not text.strip():
             return []
 
+        if hasattr(self.agent, "memory") and self.agent.memory is not None:
+            await self.agent.memory.clear()
+
         msg = Msg(
             name="extractor",
             role="user",
@@ -479,6 +482,18 @@ class ClaimResult:
 SEGMENT_CITE_RE = re.compile(r"\[\^\s*(?:(?:cite_id)\s*[:=]\s*)?([^\]\|\s]+)(?:\|[^\]]*)?\]", re.IGNORECASE)
 MAX_MATERIAL_PREVIEW_CHARS = 1600
 MAX_CALC_CODE_CHARS = 4000
+GLOBAL_MATERIAL_DAG_CACHE: Dict[str, List[ClaimIssue]] = {}
+GLOBAL_MATERIAL_DAG_CACHE_LOCKS: Dict[str, asyncio.Lock] = {}
+GLOBAL_MATERIAL_DAG_CACHE_LOCKS_LOCK = asyncio.Lock()
+
+
+async def get_material_dag_cache_lock(cite_id: str) -> asyncio.Lock:
+    async with GLOBAL_MATERIAL_DAG_CACHE_LOCKS_LOCK:
+        lock = GLOBAL_MATERIAL_DAG_CACHE_LOCKS.get(cite_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            GLOBAL_MATERIAL_DAG_CACHE_LOCKS[cite_id] = lock
+        return lock
 
 
 def extract_segment_cite_ids(text: str) -> List[str]:
@@ -1111,7 +1126,7 @@ class SegmentVerifier:
             model=self.model,
             formatter=self.formatter,
         )
-        self.material_dag_cache: Dict[str, List[ClaimIssue]] = {}
+        self.material_dag_cache = GLOBAL_MATERIAL_DAG_CACHE
 
     async def verify_material_dag(
         self,
@@ -1124,22 +1139,19 @@ class SegmentVerifier:
             return []
 
         cached_issues: List[ClaimIssue] = []
-        missing_root_ids: List[str] = []
         for cite_id in root_calc_cite_ids:
             if cite_id in self.material_dag_cache:
                 cached_issues.extend(self.material_dag_cache[cite_id])
-            else:
-                missing_root_ids.append(cite_id)
-
-        for cite_id in missing_root_ids:
-            fresh_issues = await self.material_dag_verifier.verify(
-                segment,
-                company_name=company_name,
-                report_date=report_date,
-                root_calc_cite_ids=[cite_id],
-            )
-            self.material_dag_cache[cite_id] = fresh_issues
-            cached_issues.extend(fresh_issues)
+                continue
+            async with await get_material_dag_cache_lock(cite_id):
+                if cite_id not in self.material_dag_cache:
+                    self.material_dag_cache[cite_id] = await self.material_dag_verifier.verify(
+                        segment,
+                        company_name=company_name,
+                        report_date=report_date,
+                        root_calc_cite_ids=[cite_id],
+                    )
+                cached_issues.extend(self.material_dag_cache[cite_id])
 
         return cached_issues
 

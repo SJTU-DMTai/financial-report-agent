@@ -146,6 +146,56 @@ def _tokenize_for_bm25(text: str) -> List[str]:
     return toks
 
 
+def _entity_query_terms(entity_terms: Dict[str, Any]) -> List[str]:
+    terms: List[str] = []
+    for value in entity_terms.values():
+        if isinstance(value, (list, tuple, set)):
+            values = value
+        else:
+            values = [value]
+        for item in values:
+            term = str(item or "").strip()
+            if term:
+                terms.append(term)
+    return sorted(set(terms), key=len, reverse=True)
+
+
+def _entity_terms_with_material_names(
+    entity_terms: Dict[str, Any],
+    metas: List[MaterialMeta],
+) -> Dict[str, Any]:
+    merged = dict(entity_terms)
+    material_terms = []
+    for meta in metas:
+        entity = meta.entity or {}
+        for key in ("code", "name"):
+            value = str(entity.get(key) or "").strip()
+            if value:
+                material_terms.append(value)
+    if material_terms:
+        merged["material_entity_terms"] = material_terms
+    return merged
+
+
+def _strip_entity_terms_from_query(query: str, entity_terms: Dict[str, Any]) -> str:
+    text = query or ""
+    for term in _entity_query_terms(entity_terms):
+        text = re.sub(re.escape(term), " ", text, flags=re.IGNORECASE)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _weighted_intent_query_tokens(
+    query: str,
+    entity_terms: Dict[str, Any],
+    repeat: int = 3,
+) -> List[str]:
+    intent_text = _strip_entity_terms_from_query(query, entity_terms)
+    intent_tokens = _tokenize_for_bm25(intent_text)
+    if intent_tokens:
+        return intent_tokens * max(int(repeat), 1)
+    return _tokenize_for_bm25(query)
+
+
 # ========= 规则召回 =========
 
 _DEFAULT_KEYWORDS = [
@@ -180,9 +230,9 @@ def _rule_score(
 
     if code:
         if (meta.entity or {}).get("code") == code:
-            score += 1.2
+            score += 0.2
         if code in desc:
-            score += 0.6
+            score += 0.1
 
 
     # 2) time
@@ -428,7 +478,9 @@ def retrieve_in_memory(
     
 
     time_sig = _extract_query_time_signals(query)
-    kw = query.split()
+    ranking_entity_terms = _entity_terms_with_material_names(entity_terms, metas)
+    intent_query = _strip_entity_terms_from_query(query, ranking_entity_terms)
+    kw = intent_query.split() if intent_query else query.split()
 
     # 层1：规则召回打分并截断
     rule_scored: List[Tuple[float, MaterialMeta]] = []
@@ -448,15 +500,8 @@ def retrieve_in_memory(
     cand_metas = [m for _, m in candidates]
     docs_tokens = [_tokenize_for_bm25(m.cite_id + "\n\n" + m.description or "") for m in cand_metas]
 
-    # query tokens：把 query + entity 信息一起纳入（提升稳定性）
-    q_extra = []
-    if code:
-        q_extra.append(code)
-    if name:
-        q_extra.append(name)
-
-    q_text = query + " " + " ".join(q_extra)
-    q_tokens = _tokenize_for_bm25(q_text)
+    # query tokens：entity 已用于过滤，排序阶段强调 entity 以外的意图词
+    q_tokens = _weighted_intent_query_tokens(query, ranking_entity_terms, repeat=3)
 
     bm25_scores = _bm25_scores(q_tokens, docs_tokens, k1=bm25_k1, b=bm25_b)
 

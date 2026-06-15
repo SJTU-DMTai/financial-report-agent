@@ -32,6 +32,49 @@ _INDICATOR_CODE = {
     "按单季度": "single_quarter",
 }
 
+NEWS_PAGE_TEXT_WINDOW_CHARS = 2000
+NEWS_PAGE_TEXT_OVERLAP_CHARS = 200
+
+
+def _split_text_windows(
+    text: str,
+    window_chars: int = NEWS_PAGE_TEXT_WINDOW_CHARS,
+    overlap_chars: int = NEWS_PAGE_TEXT_OVERLAP_CHARS,
+) -> list[str]:
+    text = str(text or "")
+    if not text or len(text) <= window_chars:
+        return [text]
+
+    step = max(window_chars - overlap_chars, 1)
+    windows: list[str] = []
+    start = 0
+    while start < len(text):
+        end = min(start + window_chars, len(text))
+        windows.append(text[start:end])
+        if end >= len(text):
+            break
+        start += step
+    return windows
+
+
+def _expand_news_page_text_windows(df: pd.DataFrame, text_col: str = "网页全文") -> pd.DataFrame:
+    if text_col not in df.columns:
+        return df.reset_index(drop=True)
+
+    rows: list[dict[str, Any]] = []
+    source_df = df.reset_index(drop=True)
+    if source_df.empty:
+        return source_df
+    for news_idx, row in source_df.iterrows():
+        base = row.to_dict()
+        windows = _split_text_windows(str(base.get(text_col) or ""))
+        for window in windows:
+            item = dict(base)
+            item[text_col] = window
+            rows.append(item)
+    return pd.DataFrame(rows).reset_index(drop=True)
+
+
 def _preview_df(df: pd.DataFrame, max_rows: int | None = None) -> tuple[str, int, int, list[str]]:
     """生成 DataFrame 文本预览及相关统计。"""
     total_rows = len(df)
@@ -594,22 +637,17 @@ class FinancialDataTools:
                 date_only = announce_date.replace("-", "")
                 disclosure_cite_id = make_cite_id("disclosure", symbol, date_only, f"{idx + 1:02d}")
 
-                # 创建详细的描述，包含工具名、源URL等信息
+                entity_label = f"{entity['name']}（{entity['code']}）" if entity else symbol
                 description_parts = [
-                    "fetch_disclosure_material",  # 工具名
-                    f"source={entity['name']} ({entity['code']}) 信息披露公告",
-                    f"title={announce_title}",
-                    f"date={announce_date}",
-                    f"market={market}",
+                    f"{entity_label}于{announce_date}发布信息披露公告《{announce_title}》",
+                    f"市场：{market}",
                 ]
                 if keyword:
-                    description_parts.append(f"keyword={keyword}")
+                    description_parts.append(f"检索关键词：{keyword}")
                 if category:
-                    description_parts.append(f"category={category}")
-                if pdf_url:
-                    description_parts.append(f"url={pdf_url}")
+                    description_parts.append(f"公告类别：{category}")
 
-                description = " | ".join(description_parts)
+                description = "，".join(description_parts)
 
                 # 保存公告文本为单独的文件
                 self.short_term.save_material(
@@ -1026,6 +1064,7 @@ class FinancialDataTools:
                 break
         df = pd.concat(dfs)
         df.sort_values("发布时间", inplace=True, ascending=False)
+        df.reset_index(drop=True, inplace=True)
 
         # =====================================================================
         # === 新增：1. 获取网页内容； 2. 检索关键词获取上下文 ===
@@ -1048,8 +1087,9 @@ class FinancialDataTools:
             
         # =====================================================================
 
+        material_df = _expand_news_page_text_windows(df)
         self._save_df_to_material(
-            df=df,
+            df=material_df,
             cite_id=cite_id,
             source="AKshare API:eastmoney",
             entity=entity,

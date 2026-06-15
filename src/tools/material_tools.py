@@ -16,6 +16,83 @@ from ..memory.long_term import LongTermMemoryStore
 from ..utils.cite_id import is_calc_cite_id, is_search_cite_id
 from ..utils.retrieve_in_memory import retrieve_in_memory
 
+READ_MATERIAL_MAX_CHARS = 5000
+READ_MATERIAL_PREVIEW_ROWS = 5
+READ_MATERIAL_MATCH_ROWS = 20
+READ_MATERIAL_TRUNCATED_SUFFIX = "\n...[内容超过 read_material 返回上限，已截断；请使用 query_key 缩小读取范围]"
+
+
+def _truncate_read_material_text(text: str) -> str:
+    if len(text) <= READ_MATERIAL_MAX_CHARS:
+        return text
+    limit = max(0, READ_MATERIAL_MAX_CHARS - len(READ_MATERIAL_TRUNCATED_SUFFIX))
+    return text[:limit] + READ_MATERIAL_TRUNCATED_SUFFIX
+
+
+def _split_column_query(query_key: str | None) -> list[str]:
+    return [item.strip() for item in (query_key or "").split(",") if item.strip()]
+
+
+def _split_keyword_query(query_key: str | None) -> list[str]:
+    return [
+        item.strip()
+        for item in re.split(r"[,\s]+", query_key or "")
+        if item.strip()
+    ]
+
+
+def _json_path_get(value: Any, key_path: str) -> tuple[Any, bool]:
+    current = value
+    for key in key_path.split("."):
+        if isinstance(current, dict) and key in current:
+            current = current[key]
+            continue
+        return None, False
+    return current, True
+
+
+def _json_path_extract(data: Any, key_path: str) -> tuple[Any, bool]:
+    if isinstance(data, list):
+        extracted = []
+        hit = False
+        for item in data:
+            value, item_hit = _json_path_get(item, key_path)
+            extracted.append(value)
+            hit = hit or item_hit
+        return extracted, hit
+    return _json_path_get(data, key_path)
+
+
+def _contains_keywords(text: str, keywords: list[str], require_all: bool) -> bool:
+    if not keywords:
+        return False
+    lower_text = text.casefold()
+    if require_all:
+        return all(keyword.casefold() in lower_text for keyword in keywords)
+    return any(keyword.casefold() in lower_text for keyword in keywords)
+
+
+def _json_keyword_filter(data: Any, keywords: list[str]) -> tuple[Any, int]:
+    if not keywords:
+        return [], 0
+    if isinstance(data, list):
+        matched = []
+        for item in data:
+            text = json.dumps(item, ensure_ascii=False)
+            if _contains_keywords(text, keywords, require_all=True):
+                matched.append(item)
+        if not matched:
+            for item in data:
+                text = json.dumps(item, ensure_ascii=False)
+                if _contains_keywords(text, keywords, require_all=False):
+                    matched.append(item)
+        return matched, len(matched)
+    text = json.dumps(data, ensure_ascii=False)
+    if _contains_keywords(text, keywords, require_all=True) or _contains_keywords(text, keywords, require_all=False):
+        return data, 1
+    return [], 0
+
+
 def _normalize_search_keywords(
     keywords: list[str],
     min_keyword_len: int = 1,
@@ -451,14 +528,14 @@ class MaterialTools:
     ) -> ToolResponse:
         """
         读取已保存的 Material 内容。
-        - 表格：query_key 为空时返回完整表格；query_key 不为空时按列名筛选，多个列名用英文逗号分隔。
+        - 表格：query_key 为空时返回完整表格或预览；query_key 不为空时优先按列名筛选，否则按关键词搜行。
         - 文本：query_key 为空时返回完整文本；query_key 不为空时按关键词搜索并返回上下文。
-        - JSON：query_key 为空时返回完整 JSON；query_key 不为空时按点分字段路径提取内容，例如 "title" 或 "metadata.source"。
+        - JSON：query_key 为空时返回完整 JSON；query_key 不为空时优先按点分字段路径提取，否则按关键词搜索。
 
         Args:
             cite_id (str): Material 的唯一标识 ID。
             query_key (str | None):
-                可选查询条件。表格中表示列名列表，文本中表示关键词，JSON 中表示字段路径。
+                可选查询条件。表格中可表示列名列表或关键词，文本中表示关键词，JSON 中表示字段路径或关键词。
             context_lines (int):
                 文本关键词搜索时的上下文行数，关键词前后各显示该行数；默认为 20。
                 仅在读取文本且 query_key 不为空时有效。
@@ -494,6 +571,12 @@ class MaterialTools:
             )
 
     # ========== 辅助函数 ==========
+
+    def _text_response(self, text: str, metadata: dict[str, Any]) -> ToolResponse:
+        return ToolResponse(
+            content=[TextBlock(type="text", text=_truncate_read_material_text(text))],
+            metadata=metadata,
+        )
 
     def _read_with_keyword(self, cite_id: str, keyword: str, context_lines: int, meta) -> ToolResponse:
         """
@@ -547,9 +630,9 @@ class MaterialTools:
                 f"{formatted_results}"
             )
 
-            return ToolResponse(
-                content=[TextBlock(type="text", text=text)],
-                metadata={
+            return self._text_response(
+                text,
+                {
                     "cite_id": cite_id,
                     "keyword": keyword,
                     "matches": len(results),
@@ -565,59 +648,71 @@ class MaterialTools:
                 metadata={"cite_id": cite_id, "error": str(e)}
             )
 
-    def _read_table_impl(self, cite_id, cols):
+    def _read_table_impl(self, cite_id: str, query_key: str | None) -> ToolResponse:
         df = self.short_term.load_material(cite_id)
-
-        # 1. 列筛选 (Horizontal Slicing)
-        if cols:
-            col_list = [c.strip() for c in cols.split(",")]
-            # 容错处理：只保留存在的列
-            valid_cols = [c for c in col_list if c in df.columns]
-            if valid_cols:
-                df = df[valid_cols]
-
-        # 2. 行筛选 (Vertical Slicing)
         total_rows = len(df)
+        if query_key:
+            valid_cols = [col for col in _split_column_query(query_key) if col in df.columns]
+            if valid_cols:
+                return self._format_table_response(cite_id, df[valid_cols], total_rows, "按列名筛选结果")
+            matched_df, match_count = self._filter_table_rows(df, query_key)
+            if match_count:
+                limited_df = matched_df.head(READ_MATERIAL_MATCH_ROWS)
+                note = f"按关键词命中 {match_count} 行，返回前 {len(limited_df)} 行"
+                return self._format_table_response(cite_id, limited_df, total_rows, note)
+            full_text = self._format_full_table_text(cite_id, df, total_rows, "query_key 未命中列名或行内容")
+            if len(full_text) <= READ_MATERIAL_MAX_CHARS:
+                return self._text_response(full_text, {"cite_id": cite_id, "type": "table", "rows": total_rows})
+            preview_df = df.head(READ_MATERIAL_PREVIEW_ROWS)
+            return self._format_table_response(cite_id, preview_df, total_rows, "query_key 未命中，完整表格过长，仅返回预览")
+        return self._format_table_response(cite_id, df, total_rows, "完整表格")
 
-        sliced_df = df.copy()
-
-        if cite_id.startswith("disclosure_") and ("公告" in sliced_df.columns):
-            MAX_TOTAL_CHARS = 20000
-            MIN_PER_CELL = 200
-            SUFFIX = "\n...... [内容过长，已截断，如需要完整阅读请对此条结果单独使用read_material工具]"
-
-            # 只统计当前页（切片范围内）“公告”列的字符数
-            ann_series = sliced_df["公告"]
-
-            # 只对 str 进行统计/截断；非字符串保持原样
-            valid_indices = []
-            total_len = 0
-
-            for idx, v in ann_series.items():
-                if isinstance(v, str) and v:
-                    l = len(v)
-                    valid_indices.append(idx)
-                    total_len += l
-            if total_len > MAX_TOTAL_CHARS and valid_indices:
-                n_items = len(valid_indices)
-                per_limit = max(MAX_TOTAL_CHARS // n_items, MIN_PER_CELL)
-
-                for idx in valid_indices:
-                    v = sliced_df.at[idx, "公告"]
-                    if isinstance(v, str) and v:
-                        if len(v) > per_limit:
-                            sliced_df.at[idx, "公告"] = v[:per_limit] + SUFFIX
-
-        # preview_str = sliced_df.to_markdown(index=False, disable_numparse=True)
-        preview_str = sliced_df.to_csv(index=False)
-        text = (f"[read_material] ID: {cite_id}\n"
-                f"完整 material 共 {total_rows} 行。\n"
-                f"内容:\n{preview_str}")
-
-        return ToolResponse(
-            content=[TextBlock(type="text", text=text)],
-            metadata={"cite_id": cite_id, "type": "table", "rows": len(sliced_df)}
+    def _filter_table_rows(self, df: pd.DataFrame, query_key: str) -> tuple[pd.DataFrame, int]:
+        keywords = _split_keyword_query(query_key)
+        if not keywords:
+            return df.iloc[0:0], 0
+        row_text = df.fillna("").astype(str).agg(" ".join, axis=1)
+        mask = pd.Series(
+            [_contains_keywords(text, keywords, require_all=True) for text in row_text],
+            index=row_text.index,
         )
+        if not mask.any():
+            mask = pd.Series(
+                [_contains_keywords(text, keywords, require_all=False) for text in row_text],
+                index=row_text.index,
+            )
+        matched = df[mask]
+        return matched, len(matched)
+
+    def _format_full_table_text(self, cite_id: str, df: pd.DataFrame, total_rows: int, note: str) -> str:
+        preview_str = df.to_csv(index=False)
+        return (
+            f"[read_material] ID: {cite_id}\n"
+            f"{note}。\n"
+            f"完整 material 共 {total_rows} 行，当前返回 {len(df)} 行。\n"
+            f"内容:\n{preview_str}"
+        )
+
+    def _format_table_response(
+        self,
+        cite_id: str,
+        df: pd.DataFrame,
+        total_rows: int,
+        note: str,
+    ) -> ToolResponse:
+        full_text = self._format_full_table_text(cite_id, df, total_rows, note)
+        if len(full_text) <= READ_MATERIAL_MAX_CHARS:
+            text = full_text
+        else:
+            preview_df = df.head(READ_MATERIAL_PREVIEW_ROWS)
+            text = (
+                f"[read_material] ID: {cite_id}\n"
+                f"{note}，但返回内容超过上限，仅返回预览。\n"
+                f"完整 material 共 {total_rows} 行，当前结果共 {len(df)} 行，{len(df.columns)} 列。\n"
+                f"列名: {', '.join(str(col) for col in df.columns)}\n"
+                f"预览前 {len(preview_df)} 行:\n{preview_df.to_csv(index=False)}"
+            )
+        return self._text_response(text, {"cite_id": cite_id, "type": "table", "rows": len(df)})
 
     def _read_text_impl(self, cite_id):
         # 适用于 .txt, .md
@@ -625,19 +720,11 @@ class MaterialTools:
         lines = content.split('\n')
         total_lines = len(lines)
 
-        # 截取
-        sliced_lines = lines
-        preview_str = "\n".join(sliced_lines)
-        assert len(preview_str) < 5000, f"{cite_id}完整内容过长，建议根据关键词读取上下文。"
-
         text = (f"[read_material] ID: {cite_id}\n"
                 f"完整 material 共 {total_lines} 行。\n"
-                f"内容:\n{preview_str}")
+                f"内容:\n{content}")
 
-        return ToolResponse(
-            content=[TextBlock(type="text", text=text)],
-            metadata={"cite_id": cite_id, "type": "text", "lines": len(sliced_lines)}
-        )
+        return self._text_response(text, {"cite_id": cite_id, "type": "text", "lines": total_lines})
 
     def _read_json_impl(
             self,
@@ -655,30 +742,28 @@ class MaterialTools:
                         # 删除 relevance 字段
                         item.pop("relevance", None)
 
-        # 如果有 key_path，则提取每条对应字段，否则展示整个条目
+        query_note = ""
         if key_path:
-            extracted = []
-            for item in sliced:
-                cur = item
-                for key in key_path.split("."):
-                    if isinstance(cur, dict) and key in cur:
-                        cur = cur[key]
-                    else:
-                        cur = None
-                        break
-                extracted.append(cur)
-            sliced = extracted
+            extracted, hit = _json_path_extract(sliced, key_path)
+            if hit:
+                sliced = extracted
+                query_note = f"字段路径: {key_path}\n"
+            else:
+                matched, match_count = _json_keyword_filter(sliced, _split_keyword_query(key_path))
+                if match_count:
+                    sliced = matched
+                    query_note = f"关键词: {key_path}\n命中 {match_count} 条。\n"
+                else:
+                    query_note = f"query_key '{key_path}' 未命中字段路径或关键词，返回原始 JSON。\n"
 
         # 序列化成 JSON 字符串
         json_str = json.dumps(sliced, ensure_ascii=False, indent=2)
 
         text = (
             f"[read_material] ID: {cite_id}\n"
+            f"{query_note}"
             f"内容:\n{json_str}"
         )
 
-        return ToolResponse(
-            content=[TextBlock(type="text", text=text)],
-            metadata={"cite_id": cite_id, "type": "json_list"}
-        )
+        return self._text_response(text, {"cite_id": cite_id, "type": "json_list"})
 
