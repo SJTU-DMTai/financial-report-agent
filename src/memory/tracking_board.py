@@ -48,6 +48,7 @@ class SegmentRecord:
     evidences: list[str] = field(default_factory=list)
     draft_versions: list[DraftVersion] = field(default_factory=list)
     issue: Optional[SegmentIssue] = None
+    issue_seen: bool = False
     attempts: dict[str, int] = field(default_factory=dict)
 
     def latest_draft(self) -> str:
@@ -111,6 +112,7 @@ class TrackingBoard:
                 evidences=list(raw_record.get("evidences") or []),
                 draft_versions=drafts,
                 issue=SegmentIssue(**issue) if issue else None,
+                issue_seen=bool(raw_record.get("issue_seen", False) or issue),
                 attempts=dict(raw_record.get("attempts") or {}),
             )
         return cls(records=records)

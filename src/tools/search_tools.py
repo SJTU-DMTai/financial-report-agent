@@ -8,6 +8,7 @@ from typing import Any, Callable, Dict, List
 from urllib.parse import urlparse
 
 from ddgs import DDGS
+from htmldate import find_date
 import jieba
 import requests
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -21,8 +22,24 @@ from ..memory.short_term import ShortTermMemoryStore
 from ..memory.long_term import LongTermMemoryStore
 from .material_tools import bind_async_query_tool, extract_keyword_context_snippets, get_retrieve_fn
 from ..utils.call_with_retry import call_agent_with_retry
-from ..utils.cite_id import cite_id as make_cite_id, id_part, short_time_token
+from ..utils.cite_id import cite_id as make_cite_id, id_part, short_time_token, url_part
+from ..utils.format import fmt_yyyymmdd
 from ..utils.get_entity_info import get_entity_info
+from ..utils.token_tracking import track_api_call, track_tool_result
+from ..utils.web_scraping import fetch_page_html, extract_text_and_images
+
+
+def _search_tool_response(text: str, metadata: Dict[str, Any] | None = None) -> ToolResponse:
+    response = ToolResponse(
+        content=[
+            TextBlock(
+                type="text",
+                text=text,
+            ),
+        ],
+    )
+    track_tool_result("search_engine", text, metadata or {})
+    return response
 
 
 async def _run_searcher_tool(
@@ -120,6 +137,7 @@ class SearchTools:
             "count": max_results * 2,
         }
 
+        track_api_call("search_engine", "Bocha", {"query": query, "max_results": max_results})
         response = requests.post(bocha_url, headers=headers, data=json.dumps(payload), timeout=15)
         response.raise_for_status()
         res_data = response.json()
@@ -150,6 +168,7 @@ class SearchTools:
         return candidates
 
     def _fetch_duckduckgo_candidates(self, query: str, max_results: int) -> List[Dict[str, Any]]:
+        track_api_call("search_engine", "DuckDuckGo", {"query": query, "max_results": max_results})
         raw_results = DDGS().text(
             query=query,
             backend="auto",
@@ -220,7 +239,7 @@ class SearchTools:
             if bocha_error or duckduckgo_error:
                 details = f" Bocha失败: {bocha_error or '无结果'}; DuckDuckGo失败: {duckduckgo_error or '无结果'}"
             text = f"[search_engine] 对查询「{query}」未找到足够相关的结果。{details}"
-            return ToolResponse(content=[TextBlock(type="text", text=text)])
+            return _search_tool_response(text, {"query": query, "max_results": max_results})
 
         item_cite_ids: List[str] = []
         try:
@@ -316,14 +335,67 @@ class SearchTools:
         except Exception as e:
             text = f"[search_engine] 搜索出错：{e}"
 
-        return ToolResponse(
-            content=[
-                TextBlock(
-                    type="text",
-                    text=text,
-                ),
-            ],
-        )
+        return _search_tool_response(text, {"query": query, "max_results": max_results})
+
+    async def fetch_url_page_text(self, url: str, symbol: str | None = None) -> ToolResponse:
+        """返回url对应网页的文本结果，如果不为空则保存到本地。"""
+        html_bytes = fetch_page_html(url)
+        page_text, img_urls = extract_text_and_images(html_bytes, url)
+        page_text = page_text or ""
+        if page_text:
+            entity = get_entity_info(long_term=self.long_term, text=symbol or page_text)
+            domain = urlparse(url).netloc
+            if domain.startswith("www."):
+                domain = domain[4:]
+            cite_id = make_cite_id(
+                "web_page",
+                str(entity["code"]) if entity else "page",
+                url_part(url),
+                hash_parts=(url,),
+                max_part_len=56,
+            )
+
+            published_date = None
+            try:
+                published_date = find_date(
+                    html_bytes,
+                    url=url,
+                    original_date=True,
+                    extensive_search=True,
+                    deferred_url_extractor=True,
+                )
+            except Exception:
+                published_date = None
+
+            desc = ""
+            time = None
+            if published_date:
+                published_date = fmt_yyyymmdd(published_date)
+                desc += f"网页发布时间：{published_date} "
+                time = {"point": published_date}
+            if entity:
+                desc += f"发布关于{entity['name']}（{entity['code']}）的内容:"
+            desc += page_text[:50]
+
+            self.short_term.save_material(
+                cite_id=cite_id,
+                content=page_text,
+                description=desc,
+                source=f"web search（来源：{domain}）",
+                entity=entity,
+                time=time,
+            )
+
+            text = (
+                f"[fetch_url_page_text] url:{url}对应的网页文本结果获取如下：\n"
+                f"Material 已写入 cite_id='{cite_id}' TXT 格式）\n"
+            )
+            track_tool_result("fetch_url_page_text", text, {"cite_id": cite_id, "url": url})
+            return ToolResponse(content=[TextBlock(type="text", text=text)], metadata={"cite_id": cite_id})
+
+        text = f"[fetch_url_page_text] url:{url}对应的网页文本为空。"
+        track_tool_result("fetch_url_page_text", text, {"url": url})
+        return ToolResponse(content=[TextBlock(type="text", text=text)])
 
     def searcher_tool(self, searcher: ReActAgent) -> Callable[[str], ToolResponse]:
         """把 Searcher agent 封装成 agent 可见的工具函数。"""

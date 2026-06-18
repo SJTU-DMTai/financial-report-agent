@@ -14,10 +14,12 @@ from ..tools.search_tools import SearchTools
 from ..memory.short_term import ShortTermMemoryStore
 from ..memory.long_term import LongTermMemoryStore
 
+
 def create_searcher_agent(
     model,
     formatter,
     toolkit: Toolkit,
+    max_iters: int = 5,
 ) -> ReActAgent:
     """Searcher 使用 ReActAgent 实现。
     """
@@ -29,7 +31,7 @@ def create_searcher_agent(
         formatter=formatter,
         toolkit=toolkit,
         parallel_tool_calls=True,
-        max_iters=8,
+        max_iters=max_iters,
     )
 
 def build_searcher_toolkit(
@@ -42,11 +44,10 @@ def build_searcher_toolkit(
 
     material_tools = MaterialTools(short_term=short_term, long_term=long_term)
     financial_data_tools = FinancialDataTools(short_term=short_term, long_term=long_term)
+    search_tools = SearchTools(short_term=short_term, long_term=long_term)
 
     toolkit.register_tool_function(get_retrieve_fn(short_term, long_term))
-    toolkit.register_tool_function(financial_data_tools.fetch_url_page_text)
-
-    search_tools = SearchTools(short_term=short_term, long_term=long_term)
+    toolkit.register_tool_function(search_tools.fetch_url_page_text)
     toolkit.register_tool_function(search_tools.search_engine)
     # -------- Material Tools --------
 

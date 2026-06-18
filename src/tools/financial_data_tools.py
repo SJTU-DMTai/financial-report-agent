@@ -15,14 +15,14 @@ import pandas as pd
 import requests
 from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
-from htmldate import find_date
 
 from ..memory.short_term import ShortTermMemoryStore
 from ..memory.long_term import LongTermMemoryStore
 from ..utils.format import fmt_yyyymmdd
 from ..utils.get_entity_info import get_entity_info
-from ..utils.cite_id import cite_id as make_cite_id, id_part, url_part
+from ..utils.cite_id import cite_id as make_cite_id, id_part
 from ..utils.task_date import normalize_compact_date
+from ..utils.token_tracking import track_tool_result
 from ..utils.web_scraping import fetch_page_html, extract_text_and_images
 from .material_tools import extract_keyword_context_snippets
 
@@ -113,10 +113,12 @@ def _build_tool_response_from_df(
     meta: Dict[str, Any] = {"cite_id": cite_id, "row_count": total_rows}
     if extra_meta:
         meta.update(extra_meta)
-    return ToolResponse(
+    response = ToolResponse(
         content=[TextBlock(type="text", text=text)],
         metadata=meta,
     )
+    track_tool_result("financial_data_tool", text, {"cite_id": cite_id, **meta})
+    return response
 
 
 def _build_multi_material_response(
@@ -158,10 +160,12 @@ def _build_multi_material_response(
     }
     if extra_meta:
         meta.update(extra_meta)
-    return ToolResponse(
+    response = ToolResponse(
         content=[TextBlock(type="text", text="\n".join(lines))],
         metadata=meta,
     )
+    track_tool_result("financial_data_tool", "\n".join(lines), meta)
+    return response
 
 
 def _entity_label(symbol: str, entity: Dict[str, str] | None) -> str:
@@ -1114,82 +1118,6 @@ class FinancialDataTools:
             if len(context_lines) > 2:
                 response.content[0]["text"] += "\n" + "\n".join(context_lines)
         return response
-
-    async def fetch_url_page_text(self, url: str, symbol: str | None = None) -> ToolResponse:
-        """返回url对应网页的文本结果，如果不为空则保存到本地。
-        Args:
-            url (str):
-                网页地址。
-            symbol (str | None):
-                新闻对应股票代码或名称。如果无法判断，可以不提供。
-        """
-        bytes = fetch_page_html(url)
-        page_text, img_urls = extract_text_and_images(bytes, url)
-        page_text = page_text or ""
-        if page_text:
-            # 保存网页提取的文本为单独的文件
-            entity = get_entity_info(long_term=self.long_term, text=symbol or page_text)
-            domain = urlparse(url).netloc
-            if domain.startswith("www."):
-                domain = domain[4:]
-            cite_id = make_cite_id(
-                "web_page",
-                str(entity["code"]) if entity else "page",
-                url_part(url),
-                hash_parts=(url,),
-                max_part_len=56,
-            )
-
-            published_date = None
-            try:
-                published_date = find_date(
-                    bytes,
-                    url=url,
-                    original_date=True,
-                    extensive_search=True,
-                    deferred_url_extractor=True,
-                )
-            except Exception:
-                published_date = None
-
-            desc = ""
-            time = None
-            if published_date:
-                published_date = fmt_yyyymmdd(published_date)
-                desc = desc + f"网页发布时间：{published_date} "
-                time = {"point": published_date}
-            if entity:
-                desc = desc + f"发布关于{entity['name']}（{entity['code']}）的内容:"
-
-            desc = desc + page_text[:50]
-
-            self.short_term.save_material(
-                cite_id=cite_id,
-                content=page_text,
-                description=desc,
-                source=f"web search（来源：{domain}）",
-                entity=entity,
-                time=time
-            )
-
-            text_block: TextBlock = {
-                "type": "text",
-                "text": (
-                    f"[fetch_url_page_text] url:{url}对应的网页文本结果获取如下：\n"
-                    f"Material 已写入 cite_id='{cite_id}' TXT 格式）\n"
-                ),
-            }
-            return ToolResponse(content=[text_block], metadata={"cite_id": cite_id})
-        else:
-            text = f"[fetch_url_page_text] url:{url}对应的网页文本为空。"
-            return ToolResponse(
-                content=[
-                    TextBlock(
-                    type="text",
-                    text=text,
-                ),
-            ],
-        )
 
 def stock_news_em(keyword: str = "603777", page_idx=1) -> pd.DataFrame:
     """

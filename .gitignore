@@ -18,6 +18,9 @@ cache.db
 .vscode/ 
 config.local.yaml
 verifier_trace_*
+llm_debug_*
+token_usage_*
+usage_tracking_*
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

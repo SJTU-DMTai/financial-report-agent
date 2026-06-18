@@ -15,8 +15,25 @@ from ..memory.short_term import ShortTermMemoryStore, MaterialType
 from ..memory.long_term import LongTermMemoryStore
 from ..utils.cite_id import is_calc_cite_id, is_search_cite_id
 from ..utils.retrieve_in_memory import retrieve_in_memory
+from ..utils.token_tracking import track_tool_result
 
-READ_MATERIAL_MAX_CHARS = 5000
+
+def _tool_response_text(response: ToolResponse) -> str:
+    parts = []
+    for block in response.content or []:
+        if isinstance(block, dict):
+            parts.append(str(block.get("text") or ""))
+        else:
+            parts.append(str(getattr(block, "text", "") or ""))
+    return "\n".join(part for part in parts if part)
+
+
+def _track_material_response(tool_name: str, response: ToolResponse, metadata: dict[str, Any]) -> ToolResponse:
+    track_tool_result(tool_name, _tool_response_text(response), metadata)
+    return response
+
+
+READ_MATERIAL_MAX_CHARS = 3000
 READ_MATERIAL_PREVIEW_ROWS = 5
 READ_MATERIAL_MATCH_ROWS = 20
 READ_MATERIAL_TRUNCATED_SUFFIX = "\n...[内容超过 read_material 返回上限，已截断；请使用 query_key 缩小读取范围]"
@@ -540,35 +557,44 @@ class MaterialTools:
                 文本关键词搜索时的上下文行数，关键词前后各显示该行数；默认为 20。
                 仅在读取文本且 query_key 不为空时有效。
         """
-        meta = self.short_term.get_material_meta(cite_id) 
+        meta = self.short_term.get_material_meta(cite_id)
+        tracking_meta = {
+            "cite_id": cite_id,
+            "query_key": query_key or "",
+            "context_lines": context_lines,
+            "material_type": str(getattr(meta, "m_type", "")) if meta else "",
+            "filename": str(getattr(meta, "filename", "")) if meta else "",
+        }
 
         if not meta:
-            return ToolResponse(
+            response = ToolResponse(
                 content=[TextBlock(type="text", text=f"[read_material]未找到该 ID 对应的 Material")],
                 metadata={"cite_id": cite_id}
             )
+            return _track_material_response("read_material", response, tracking_meta)
 
         try:
             if meta.m_type == MaterialType.TABLE:
-                return self._read_table_impl(cite_id, query_key)
+                response = self._read_table_impl(cite_id, query_key)
             elif meta.m_type == MaterialType.TEXT:
                 # 如果提供了关键词，使用关键词搜索
                 if query_key:
-                    return self._read_with_keyword(cite_id, query_key, context_lines, meta)
+                    response = self._read_with_keyword(cite_id, query_key, context_lines, meta)
                 else:
-                    return self._read_text_impl(cite_id)
+                    response = self._read_text_impl(cite_id)
             elif meta.m_type == MaterialType.JSON:
-                return self._read_json_impl(cite_id, query_key)
-            else:  
-                return ToolResponse(
+                response = self._read_json_impl(cite_id, query_key)
+            else:
+                response = ToolResponse(
                     content=[TextBlock(type="text", text=f"[read_material]不支持的文件类型: {meta.m_type}")],
                     metadata={"cite_id": cite_id}
                 )
         except Exception as e:
-            return ToolResponse(
-            content=[TextBlock(type="text", text=f"[read_material]读取失败: {str(e)}")],
-            metadata={"cite_id": cite_id}
+            response = ToolResponse(
+                content=[TextBlock(type="text", text=f"[read_material]读取失败: {str(e)}")],
+                metadata={"cite_id": cite_id}
             )
+        return _track_material_response("read_material", response, tracking_meta)
 
     # ========== 辅助函数 ==========
 

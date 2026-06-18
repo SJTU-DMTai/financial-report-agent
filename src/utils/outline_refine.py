@@ -582,6 +582,7 @@ async def _call_chatbot_with_message_history_retry(
 ):
     from src.utils.call_with_retry import endpoints
     from src.utils.global_semaphore import get_global_semaphore
+    from src.utils.token_tracking import reset_token_context, set_token_context
 
     semaphore = get_global_semaphore()
     result = ""
@@ -591,7 +592,11 @@ async def _call_chatbot_with_message_history_retry(
         for _ in range(max_retries):
             try:
                 formatted_messages = await formatter.format(messages)
-                response = await model(formatted_messages, structured_model=structured_model)
+                token_context = set_token_context("ChatModel OutlineRefine", "outline_refine")
+                try:
+                    response = await model(formatted_messages, structured_model=structured_model)
+                finally:
+                    reset_token_context(token_context)
                 if structured_model is not None:
                     result = response.metadata
                 else:

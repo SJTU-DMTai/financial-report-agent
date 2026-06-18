@@ -34,7 +34,7 @@ def create_writer_agent(
         formatter=formatter,
         toolkit=toolkit,
         parallel_tool_calls=False,
-        max_iters=10,
+        max_iters=6,
     )
 
 # ---- Toolkit Builder ----

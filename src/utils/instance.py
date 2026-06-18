@@ -19,6 +19,7 @@ from agentscope.model import (
 from openai import OpenAI
 
 from src.utils.format import PatchedOpenAIChatFormatter
+from src.utils.token_tracking import MeteredChatModel
 import config
 
 cfg = config.Config()
@@ -29,6 +30,12 @@ def _create_openai_chat_model(**kwargs):
     if "client_kwargs" in kwargs and "client_kwargs" not in params:
         kwargs["client_args"] = kwargs.pop("client_kwargs")
     return OpenAIChatModel(**kwargs)
+
+
+def _meter_model(model):
+    if isinstance(model, MeteredChatModel):
+        return model
+    return MeteredChatModel(model)
 
 
 def create_chat_model(reasoning=True, model_cfg=None, api_key=None):
@@ -55,20 +62,26 @@ def create_chat_model(reasoning=True, model_cfg=None, api_key=None):
 
     if provider == "openrouter":
         extra_body = {"top_k": top_k}
+        openrouter_provider = m.get("openrouter_provider")
+        if openrouter_provider:
+            extra_body["provider"] = {
+                "order": [openrouter_provider],
+                "allow_fallbacks": False,
+            }
         if reasoning or reasoning_only:
             extra_body["reasoning"] = {"enabled": True}
         resolved_model_name = model_name
         if not reasoning and not reasoning_only:
             resolved_model_name = non_reasoning_model_name or model_name.replace("-thinking", "")
             extra_body["reasoning"] = {"enabled": False}
-        return _create_openai_chat_model(
+        return _meter_model(_create_openai_chat_model(
             model_name=resolved_model_name,
             api_key=api_key,
             stream=stream,
             client_kwargs={"base_url": base_url},
             generate_kwargs={"extra_body": extra_body,
                              "temperature": temperature},
-        )
+        ))
 
     elif provider == "deepseek":
         thinking_enabled = reasoning or reasoning_only
@@ -83,32 +96,32 @@ def create_chat_model(reasoning=True, model_cfg=None, api_key=None):
             generate_kwargs["reasoning_effort"] = m.get("reasoning_effort", "high")
         else:
             generate_kwargs["temperature"] = temperature
-        return _create_openai_chat_model(
+        return _meter_model(_create_openai_chat_model(
             model_name=model_name,
             api_key=api_key,
             stream=stream,
             client_kwargs={"base_url": base_url},
             generate_kwargs=generate_kwargs,
-        )
+        ))
 
     elif provider == "dashscope":
-        return DashScopeChatModel(
+        return _meter_model(DashScopeChatModel(
             model_name=model_name,
             api_key=api_key,
             stream=stream,
-        )
+        ))
 
     elif provider in ["xiaomi"]:
-        return _create_openai_chat_model(
+        return _meter_model(_create_openai_chat_model(
             model_name=model_name,
             api_key=api_key,
             stream=stream,
             client_kwargs={"base_url": base_url},
             generate_kwargs={"extra_body":{"enable_thinking": reasoning}}
-        )
+        ))
 
     elif provider in ["ark"]:
-        return _create_openai_chat_model(
+        return _meter_model(_create_openai_chat_model(
             model_name=model_name,
             api_key=api_key,
             stream=stream,
@@ -116,7 +129,7 @@ def create_chat_model(reasoning=True, model_cfg=None, api_key=None):
             generate_kwargs={'extra_body': {"thinking":{"type": 'enabled' if reasoning else 'disabled'}},
                              "temperature": temperature,
                              'max_tokens': 16384},
-        )
+        ))
 
     elif provider in ["kalm"]:
 
@@ -127,7 +140,7 @@ def create_chat_model(reasoning=True, model_cfg=None, api_key=None):
                    "ADAMS-PREDICT-LIMIT-S": "300",  # 配置前端超时为300秒
                    }
         model_name = client.models.list(extra_headers=headers).data[0].id  # 获取服务对应的模型名
-        return _create_openai_chat_model(
+        return _meter_model(_create_openai_chat_model(
             model_name=model_name,
             api_key=api_key,
             stream=stream,
@@ -136,17 +149,17 @@ def create_chat_model(reasoning=True, model_cfg=None, api_key=None):
                              "extra_headers": headers,
                              "temperature": temperature,
                              'max_tokens': 16384},
-        )
+        ))
 
     else:
-        return _create_openai_chat_model(
+        return _meter_model(_create_openai_chat_model(
             model_name=model_name,
             api_key=api_key,
             stream=stream,
             client_kwargs={"base_url": base_url},
             generate_kwargs={"extra_body": {"reasoning": {"enabled": reasoning, "exclude": False}},
                              "temperature": temperature},
-        )
+        ))
 
 def create_emb_model(model_cfg=None):
     m = model_cfg or cfg.get_embedding_cfg()
@@ -241,28 +254,28 @@ def create_vlm_model():
     temperature = m.get("vision_temperature", 0.1)
 
     if provider == "openrouter":
-        return _create_openai_chat_model(
+        return _meter_model(_create_openai_chat_model(
             model_name=model_name,
             api_key = os.environ.get("VLM_API_KEY") or os.environ.get("API_KEY"),
             stream=stream,
             client_kwargs={"base_url": base_url},
             generate_kwargs={"temperature": temperature},
-        )
+        ))
     elif provider in ["ark"]:
-        return _create_openai_chat_model(
+        return _meter_model(_create_openai_chat_model(
             model_name=model_name,
             api_key="7e3cde63-e447-4a63-9445-69c8942fdfa9",
             stream=stream,
             client_kwargs={"base_url": base_url},
-        )
+        ))
     elif provider == "xiaomi":
-        return _create_openai_chat_model(
+        return _meter_model(_create_openai_chat_model(
             model_name=model_name,
             api_key = os.environ.get("VLM_API_KEY") or os.environ.get("API_KEY"),
             stream=stream,
             client_kwargs={"base_url": base_url},
             generate_kwargs={"temperature": temperature},
-        )
+        ))
 
     elif provider in ["kalm"]:
 
@@ -273,7 +286,7 @@ def create_vlm_model():
                    "ADAMS-PREDICT-LIMIT-S": "300",  # 配置前端超时为300秒
                    }
         model_name = client.models.list(extra_headers=headers).data[0].id  # 获取服务对应的模型名
-        return _create_openai_chat_model(
+        return _meter_model(_create_openai_chat_model(
             model_name=model_name,
             api_key=os.environ.get("API_KEY"),
             stream=stream,
@@ -281,7 +294,7 @@ def create_vlm_model():
             generate_kwargs={"extra_headers": headers,
                              "temperature": temperature,
                              'max_tokens': 16384},
-        )
+        ))
 
     else:
         raise ValueError(f"未知 provider: {provider}")

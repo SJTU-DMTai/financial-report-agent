@@ -487,6 +487,65 @@ GLOBAL_MATERIAL_DAG_CACHE_LOCKS: Dict[str, asyncio.Lock] = {}
 GLOBAL_MATERIAL_DAG_CACHE_LOCKS_LOCK = asyncio.Lock()
 
 
+def format_verifier_feedback_for_writer(
+    issues: List[ClaimIssue],
+    max_items: int = 10,
+    max_chars: int = 2000,
+) -> str:
+    """Format verifier issues as actionable Chinese feedback for Writer."""
+    type_labels = {
+        "fact": "事实错误",
+        "factual": "事实错误",
+        "numeric": "数字错误",
+        "temporal": "时间错误",
+        "upstream_missing": "计算溯源错误",
+        "material_dag_cycle": "计算溯源错误",
+        "material_dag_issue": "计算溯源错误",
+        "provenance_incomplete": "计算溯源错误",
+        "citation": "引用错误",
+    }
+    lines = []
+    for index, issue in enumerate(issues[:max_items], 1):
+        description = str(issue.description or "").strip()
+        issue_type = str(issue.type or "").strip().lower()
+        while description.startswith("[") and "]" in description[:20]:
+            tag, description = description[1:].split("]", 1)
+            if not issue_type or issue_type == "unknown":
+                issue_type = tag.strip().lower()
+            description = description.strip()
+        if "numeric" in issue_type:
+            type_label = "数字错误"
+        elif "temporal" in issue_type:
+            type_label = "时间错误"
+        elif "material" in issue_type or "provenance" in issue_type or "calc" in issue_type or "upstream" in issue_type:
+            type_label = "计算溯源错误"
+        else:
+            type_label = type_labels.get(issue_type, "事实错误")
+
+        severity_label = "必须修改" if issue.severity == "critical" else "重点修改"
+        evidence_items = []
+        for item in issue.evidence[:3]:
+            if not isinstance(item, dict):
+                evidence_items.append(str(item).strip())
+                continue
+            cite_id = str(item.get("cite_id") or "").strip()
+            text = str(item.get("text") or "").strip()
+            if cite_id and text:
+                evidence_items.append(f"{cite_id}: {text}")
+            elif cite_id:
+                evidence_items.append(cite_id)
+            elif text:
+                evidence_items.append(text)
+        evidence_text = "；".join(item for item in evidence_items if item)
+        suggestion = str(issue.suggestion or "").strip() or "请根据证据删除、改写或补充该表述。"
+        lines.append(
+            f"{index}. {severity_label} - {type_label}：{description}\n"
+            f"   修改建议：{suggestion}\n"
+            f"   证据：{evidence_text}"
+        )
+    return "\n\n".join(lines)[:max_chars]
+
+
 async def get_material_dag_cache_lock(cite_id: str) -> asyncio.Lock:
     async with GLOBAL_MATERIAL_DAG_CACHE_LOCKS_LOCK:
         lock = GLOBAL_MATERIAL_DAG_CACHE_LOCKS.get(cite_id)

@@ -36,13 +36,13 @@ def reset_token_context(tokens: tuple[contextvars.Token, contextvars.Token]) -> 
 
 
 def token_tracking_enabled() -> bool:
-    if os.getenv("FRA_TOKEN_TRACKING", "").strip() == "0":
+    if os.getenv("FRA_USAGE_TRACKING", "").strip() == "0":
         return False
-    return bool(os.getenv("FRA_TOKEN_TRACKING_FILE", "").strip())
+    return bool(os.getenv("FRA_USAGE_TRACKING_FILE", "").strip())
 
 
 def token_tracking_path() -> Path | None:
-    raw = os.getenv("FRA_TOKEN_TRACKING_FILE", "").strip()
+    raw = os.getenv("FRA_USAGE_TRACKING_FILE", "").strip()
     if not raw:
         return None
     return Path(raw)
@@ -74,6 +74,38 @@ def track_tool_result(
         "text_chars": len(text_value),
         "text_tokens_est": estimate_tokens(text_value),
         "metadata": metadata or {},
+    }
+    append_token_event(event)
+
+
+def track_api_call(
+    api_type: str,
+    api_name: str,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    if not token_tracking_enabled():
+        return
+    event = {
+        "event": "api_call",
+        "component": _COMPONENT.get(),
+        "call_kind": _CALL_KIND.get(),
+        "api_type": api_type,
+        "api_name": api_name,
+        "metadata": metadata or {},
+    }
+    append_token_event(event)
+
+
+def track_report_summary(
+    metadata: dict[str, Any],
+) -> None:
+    if not token_tracking_enabled():
+        return
+    event = {
+        "event": "report_summary",
+        "component": "workflow",
+        "call_kind": "report",
+        "metadata": metadata,
     }
     append_token_event(event)
 

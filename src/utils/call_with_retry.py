@@ -20,6 +20,7 @@ from pydantic import BaseModel
 
 from .global_semaphore import get_global_semaphore
 from .instance import cfg
+from .token_tracking import reset_token_context, set_token_context
 
 endpoints = {"ep-20260212213128-4kwzl", "ep-20260205192925-9m7nq", "ep-20250318101605-5c67d"}
 _LLM_DEBUG_CALL_COUNTER = count(1)
@@ -141,7 +142,14 @@ async def call_chatbot_with_retry(
         for _ in range(max_retries):
             try:
                 _messages = await formatter.format(messages)
-                response = await model(_messages, structured_model=None if text_json_output else structured_model)
+                token_context = set_token_context(
+                    f"ChatModel {model_name or model.__class__.__name__}",
+                    "direct_chat",
+                )
+                try:
+                    response = await model(_messages, structured_model=None if text_json_output else structured_model)
+                finally:
+                    reset_token_context(token_context)
                 if debug_enabled:
                     output_text = getattr(response, "content", "")
                     if not output_text and getattr(response, "metadata", None):
@@ -225,9 +233,9 @@ async def call_agent_with_retry(
         semaphore = get_global_semaphore()
 
     last_exc: BaseException | None = None
+    agent_name = str(getattr(agent, "name", agent.__class__.__name__))
     debug_enabled = _llm_debug_enabled()
     if debug_enabled:
-        agent_name = str(getattr(agent, "name", agent.__class__.__name__))
         debug_call_id = _next_llm_debug_call_id()
         debug_title = f"LLM CALL #{debug_call_id} Agent {agent_name}"
         _debug_print_block(f"{debug_title} SYSTEM", _debug_agent_sys_prompt(agent))
@@ -238,7 +246,14 @@ async def call_agent_with_retry(
         exceed_tpm_models = set()
         for attempt in range(1, max_retries + 1):
             try:
-                result = await agent(msg)
+                token_context = set_token_context(
+                    f"Agent {agent_name or agent.__class__.__name__}",
+                    "agent",
+                )
+                try:
+                    result = await agent(msg)
+                finally:
+                    reset_token_context(token_context)
                 if debug_enabled:
                     _debug_print_block(f"{debug_title} OUTPUT", result)
                 return result

@@ -57,7 +57,8 @@ models:
 
   qwen3.6:
     provider: openrouter
-    model_name: qwen/qwen3.6-plus:free
+    model_name: qwen/qwen3.6-27b
+    openrouter_provider: Alibaba
     reasoning_only: true
     base_url_env: https://openrouter.ai/api/v1
     stream: false

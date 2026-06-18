@@ -64,7 +64,6 @@ async def run_case(
     from agentscope.message import Msg
     from agentscope.tool import Toolkit
     from src.memory.short_term import ShortTermMemoryStore
-    from src.tools.material_tools import MaterialTools
     from src.tools.search_tools import SearchTools
     from src.utils.call_with_retry import call_agent_with_retry
 
@@ -81,10 +80,9 @@ async def run_case(
         current_date=case.date.replace("-", ""),
     )
     toolkit = Toolkit()
-    material_tools = MaterialTools(short_term=short_term, long_term=long_term)
     search_tools = SearchTools(short_term=short_term, long_term=long_term)
     toolkit.register_tool_function(search_tools.search_engine)
-    toolkit.register_tool_function(material_tools.fetch_url_page_text)
+    toolkit.register_tool_function(search_tools.fetch_url_page_text)
     agent = ReActAgent(
         name="BaselineAgent",
         sys_prompt=BASELINE_SYS_PROMPT,
