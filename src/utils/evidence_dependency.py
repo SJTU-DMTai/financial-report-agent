@@ -31,20 +31,12 @@ A -> B
 """
 
 
-DEPENDENCY_TERMS = ["原因", "驱动", "影响", "风险", "假设", "预测", "解读", "优势", "机制", "对比", "估值"]
-
-SUPPORTING_DATA_TERMS = [
-    "数据", "规模", "增速", "数量", "用户", "客户", "成交额", "销量", "产量", "订单", "产能",
-    "收入", "费用", "现金流", "净利润", "合同负债", "政策", "文件", "排名", "市占率", "份额",
-]
-
-TOPIC_GROUPS = [
-    ["监管", "政策", "风险", "合规", "文件"],
-    ["用户", "客户", "活跃用户", "流量", "渠道", "排名", "市占率", "份额"],
-    ["市场", "行业", "规模", "增速", "成交额", "销量", "产量", "订单", "产能", "投资者", "活跃度"],
-    ["收入", "费用", "现金流", "净利润", "合同负债", "财务", "预测", "估值", "业绩"],
-    ["产品", "业务", "研发", "技术", "功能", "合作", "平台", "服务"],
-    ["竞争", "对手", "竞品", "格局", "排名", "优势"],
+FINANCIAL_TOPIC_KEYWORDS = [
+    "营业收入", "营业总收入", "营收", "收入", "利润", "净利润", "归母净利润", "扣非净利润",
+    "盈利", "业绩", "毛利", "毛利率", "净利率", "成本", "费用", "费用率", "销售费用",
+    "管理费用", "研发费用", "财务费用", "现金流", "现金流量", "经营活动现金流", "合同负债",
+    "增长", "增速", "EPS", "每股收益", "PE", "市盈率", "PB", "市净率", "ROE", "ROA",
+    "估值", "目标价",
 ]
 
 
@@ -77,8 +69,6 @@ def should_check_dependency(left: EvidenceRecord, right: EvidenceRecord) -> bool
     if _looks_like_explanation(left_text) != _looks_like_explanation(right_text):
         if _shares_financial_topic(left_text, right_text):
             return True
-    if _has_dependency_signal(left_text, right_text):
-        return True
     return False
 
 
@@ -131,29 +121,7 @@ def _looks_like_explanation(text: str) -> bool:
 
 
 def _shares_financial_topic(left_text: str, right_text: str) -> bool:
-    keywords = ["营业收入", "营收", "利润", "净利润", "毛利率", "增长", "费用率", "现金流"]
-    return any(keyword in left_text and keyword in right_text for keyword in keywords)
-
-
-def _contains_any(text: str, keywords: list[str]) -> bool:
-    return any(keyword in text for keyword in keywords)
-
-
-def _shares_topic_group(left_text: str, right_text: str) -> bool:
-    for group in TOPIC_GROUPS:
-        if _contains_any(left_text, group) and _contains_any(right_text, group):
-            return True
-    return False
-
-
-def _has_dependency_signal(left_text: str, right_text: str) -> bool:
-    if not _shares_topic_group(left_text, right_text):
-        return False
-    left_dependent = _contains_any(left_text, DEPENDENCY_TERMS)
-    right_dependent = _contains_any(right_text, DEPENDENCY_TERMS)
-    left_supporting = _contains_any(left_text, SUPPORTING_DATA_TERMS)
-    right_supporting = _contains_any(right_text, SUPPORTING_DATA_TERMS)
-    return (left_dependent and right_supporting) or (right_dependent and left_supporting)
+    return any(keyword in left_text and keyword in right_text for keyword in FINANCIAL_TOPIC_KEYWORDS)
 
 
 def build_dependency_user_prompt(candidates: list[dict[str, str]]) -> str:

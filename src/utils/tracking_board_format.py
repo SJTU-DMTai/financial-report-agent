@@ -84,14 +84,23 @@ def extract_json_object(text: str) -> dict[str, Any] | None:
 
 def parse_writer_issue(text: str) -> tuple[SegmentIssue, list[dict[str, Any]]] | None:
     payload = extract_json_object(text)
-    if not payload or "issue" not in payload:
+    if not payload:
         return None
-    issue_payload = payload.get("issue") or {}
+    evidences = payload.get("evidences")
+    if not isinstance(evidences, list):
+        return None
+    descriptions = []
+    for evidence in evidences:
+        if not isinstance(evidence, dict):
+            continue
+        description = str(evidence.get("description") or evidence.get("text") or "").strip()
+        if description:
+            descriptions.append(description)
     issue = SegmentIssue(
-        type=str(issue_payload.get("type") or "EVIDENCE_GAP"),
-        detail=str(issue_payload.get("detail") or ""),
-        action=str(issue_payload.get("action") or "RETRIEVE"),
-        evidences=list(payload.get("evidences") or issue_payload.get("evidences") or []),
+        type="EVIDENCE_GAP",
+        detail="缺少：" + "；".join(descriptions) if descriptions else "缺少关键证据。",
+        action="RETRIEVE",
+        evidences=evidences,
     )
     return issue, issue.evidences
 
@@ -106,7 +115,13 @@ def parse_replan_response(text: str) -> dict[str, Any]:
 def parse_section_polish_response(text: str):
     title = extract_tagged_text(text, "title")
     content = extract_tagged_text(text, "content")
-    assert title is not None and content is not None, "输出格式不对，答案没有被合适的标签包裹住。"
+    assert title is not None and content is not None, (
+        "输出格式错误，答案没有被正确的标签包裹。请严格按以下格式重新输出：\n"
+        "<title>润色后的章节标题</title>\n"
+        "<content>\n"
+        "完整章节正文。正文中必须保留原有引用标记[^cite_id:xxx]和图表标记![...](chart:chart_xxx)。\n"
+        "</content>"
+    )
     return _strip_section_number_prefix(title.strip().strip("#").strip()), content
 
 
@@ -164,4 +179,4 @@ def build_known_evidence_context(registry: EvidenceRegistry, evidence_ids: list[
             lines.append(_format_resolved_evidence_record(record, len(lines) + 1))
     if not lines:
         return ""
-    return "当前 evidence 依赖的已解决证据：\n" + "\n\n".join(lines) + "\n"
+    return "当前 evidence 可能依赖的证据：\n" + "\n\n".join(lines) + "\n"

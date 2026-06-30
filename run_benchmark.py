@@ -8,6 +8,7 @@ import argparse
 import traceback
 from pathlib import Path
 
+import config
 from src.pipelines.workflow_tracking_board import run_workflow
 from src.memory.long_term import LongTermMemoryStore
 from src.utils.get_entity_info import get_entity_info
@@ -25,6 +26,12 @@ async def process_single_task(item, idx, total, long_term_memory, semaphore):
 
         if not stock_code or not date:
             print(f"任务 {idx}: 缺少必要字段 (stock_code 或 date)，跳过")
+            return
+
+        cfg = config.Config()
+        report_md_path = Path(__file__).parent / "output" / "reports" / cfg.llm_name / f"{stock_code}_{date}.md"
+        if report_md_path.exists():
+            print(f"任务 {idx}/{total}: 已存在生成报告 md，跳过：{report_md_path}")
             return
 
         # 通过 get_entity_info 获取股票名称

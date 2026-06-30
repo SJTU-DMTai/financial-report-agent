@@ -91,6 +91,15 @@ def summarize_api_calls(events: list[dict[str, Any]]) -> dict[str, int]:
     return dict(rows)
 
 
+def count_tool_calls(events: list[dict[str, Any]], tool_name: str) -> int:
+    return sum(
+        1
+        for event in events
+        if event.get("event") == "tool_result"
+        and event.get("tool_name") == tool_name
+    )
+
+
 def summarize_reports(events: list[dict[str, Any]]) -> dict[str, Any]:
     reports = [
         event.get("metadata") or {}
@@ -104,6 +113,7 @@ def summarize_reports(events: list[dict[str, Any]]) -> dict[str, Any]:
     input_est = sum(int(event.get("input_tokens_est") or 0) for event in events if event.get("event") == "llm_call")
     output_est = sum(int(event.get("output_tokens_est") or 0) for event in events if event.get("event") == "llm_call")
     api_calls = summarize_api_calls(events)
+    search_engine_tool_calls = count_tool_calls(events, "search_engine")
     total_segments = sum(int(report.get("segment_total") or 0) for report in reports)
     finalized_segments = sum(int(report.get("segment_finalized") or 0) for report in reports)
     issue_segments = sum(int(report.get("issue_segment_total") or 0) for report in reports)
@@ -119,7 +129,7 @@ def summarize_reports(events: list[dict[str, Any]]) -> dict[str, Any]:
         "tokens_api_per_report": safe_div(token_api, report_count),
         "tokens_est_per_report": safe_div(token_est, report_count),
         "llm_calls_per_report": safe_div(llm_calls, report_count),
-        "search_engine_calls_per_report": safe_div(api_calls.get("search_engine", 0), report_count),
+        "search_engine_calls_per_report": safe_div(search_engine_tool_calls, report_count),
         "financial_api_calls_per_report": safe_div(api_calls.get("financial_api", 0), report_count),
         "report_chars_avg": safe_div(report_chars, report_count),
         "report_non_ws_chars_avg": safe_div(report_non_ws_chars, report_count),

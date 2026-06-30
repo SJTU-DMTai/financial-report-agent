@@ -10,16 +10,19 @@ import sys
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
+from agentscope.message import TextBlock
+from agentscope.tool import ToolResponse
+from ddgs import DDGS
 
 
 CURRENT_FILE = Path(__file__).resolve()
 PROJECT_ROOT = CURRENT_FILE.parent
 DEFAULT_BENCHMARK_PATH = PROJECT_ROOT / "benchmark.json"
-DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "output" / "reports" / "qwen3.6-27b-baseline"
-DEFAULT_MEMORY_ROOT = PROJECT_ROOT / "data" / "memory" / "short_term" / "simple_agent_baseline"
-DEFAULT_LLM_NAME = "qwen3.6"
+DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "output" / "reports" / "deepseek-v4-flash-baseline"
+DEFAULT_LLM_NAME = "deepseek-v4-flash"
 
 BASELINE_SYS_PROMPT = """你是一个金融研报撰写专家。
 你可以使用已注册工具 search_engine 和 fetch_url_page_text 获取网络信息。"""
@@ -44,6 +47,96 @@ class BenchmarkCase:
     prompt: str
 
 
+class SimpleBaselineSearchTools:
+    async def search_engine(self, query: str, max_results: int = 10) -> ToolResponse:
+        """使用搜索引擎搜索网页，返回标题、链接和摘要。
+        - 适合发现信息来源、新闻、公告、研报等网页线索。
+        Args:
+            query (str):
+                搜索关键词，例如 "同花顺 2026 业绩 机构研报"。
+            max_results (int):
+                返回的最大搜索结果数量，默认 10。
+        """
+        query = (query or "").strip()
+        try:
+            max_results = int(max_results)
+        except (TypeError, ValueError):
+            max_results = 10
+
+        if not query:
+            return ToolResponse(
+                content=[TextBlock(type="text", text="[search_engine] query 不能为空。")]
+            )
+
+        try:
+            raw_results = DDGS().text(
+                query=query,
+                backend="auto",
+                region="cn-zh",
+                max_results=max_results,
+            )
+        except Exception as exc:
+            return ToolResponse(
+                content=[TextBlock(type="text", text=f"[search_engine] 搜索失败：{exc}")]
+            )
+
+        lines = [
+            f"[search_engine] 搜索关键词：{query}",
+            "以下是搜索结果预览。如需正文，请对相关链接调用 fetch_url_page_text。",
+        ]
+        result_count = 0
+        for item in raw_results:
+            title = re.sub(r"\s+", " ", item.get("title", "") or "无标题").strip()
+            link = item.get("href", "") or ""
+            desc = re.sub(r"\s+", " ", item.get("body", "") or "").strip()
+            if not link.startswith("http"):
+                continue
+            result_count += 1
+            lines.append(f"{result_count}. {title}")
+            lines.append(f"   链接: {link}")
+            if desc:
+                lines.append(f"   摘要: {desc}")
+
+        if result_count == 0:
+            lines.append("未找到可用结果。")
+
+        return ToolResponse(content=[TextBlock(type="text", text="\n".join(lines))])
+
+    async def fetch_url_page_text(self, url: str) -> ToolResponse:
+        """抓取指定 URL 的网页正文并返回。
+        - 适合阅读 search_engine 返回的具体网页链接。
+
+        Args:
+            url (str):
+                要抓取的网页链接，必须以 http 或 https 开头。
+        """
+        from src.utils.web_scraping import fetch_page_html, extract_text_and_images
+
+        url = (url or "").strip()
+        if not url.startswith("http"):
+            return ToolResponse(
+                content=[TextBlock(type="text", text="[fetch_url_page_text] url 必须以 http 或 https 开头。")]
+            )
+
+        try:
+            html_bytes = fetch_page_html(url)
+            page_text, _ = extract_text_and_images(html_bytes, url)
+        except Exception as exc:
+            return ToolResponse(
+                content=[TextBlock(type="text", text=f"[fetch_url_page_text] 抓取失败：{exc}")]
+            )
+
+        page_text = re.sub(r"\s+", " ", page_text or "").strip()
+        domain = urlparse(url).netloc
+        if not page_text:
+            text = f"[fetch_url_page_text] {domain} 正文为空。"
+        else:
+            suffix = "\n\n[正文已截断，仅返回前 5000 个字符。]" if len(page_text) > 5000 else ""
+            text = f"[fetch_url_page_text] {domain} 网页正文：\n{page_text[:5000]}{suffix}"
+
+        return ToolResponse(content=[TextBlock(type="text", text=text)])
+
+
 def sanitize_filename_part(value: str) -> str:
     value = re.sub(r'[<>:"/\\|?*\r\n\t]+', "_", value.strip())
     value = re.sub(r"\s+", "", value)
@@ -56,15 +149,12 @@ async def run_case(
     formatter,
     long_term,
     output_dir: Path,
-    memory_root: Path,
     max_iters: int,
     overwrite: bool,
 ) -> Path:
     from agentscope.agent import ReActAgent
     from agentscope.message import Msg
     from agentscope.tool import Toolkit
-    from src.memory.short_term import ShortTermMemoryStore
-    from src.tools.search_tools import SearchTools
     from src.utils.call_with_retry import call_agent_with_retry
 
     stock_code = sanitize_filename_part(case.stock_code or f"prompt{case.index:02d}")
@@ -75,12 +165,8 @@ async def run_case(
         print(f"[{case.index:02d}] skip existing: {report_path}", flush=True)
         return report_path
 
-    short_term = ShortTermMemoryStore(
-        base_dir=memory_root / f"{case.stock_code}_{case.date}",
-        current_date=case.date.replace("-", ""),
-    )
     toolkit = Toolkit()
-    search_tools = SearchTools(short_term=short_term, long_term=long_term)
+    search_tools = SimpleBaselineSearchTools()
     toolkit.register_tool_function(search_tools.search_engine)
     toolkit.register_tool_function(search_tools.fetch_url_page_text)
     agent = ReActAgent(
@@ -124,11 +210,7 @@ async def run_baseline(args: argparse.Namespace) -> None:
     output_dir = Path(args.output_dir)
     if not output_dir.is_absolute():
         output_dir = PROJECT_ROOT / output_dir
-    memory_root = Path(args.memory_root)
-    if not memory_root.is_absolute():
-        memory_root = PROJECT_ROOT / memory_root
     output_dir.mkdir(parents=True, exist_ok=True)
-    memory_root.mkdir(parents=True, exist_ok=True)
 
     cfg = config.Config(llm_name=args.llm_name)
     model_cfg = cfg.get_model_cfg()
@@ -174,15 +256,12 @@ async def run_baseline(args: argparse.Namespace) -> None:
                 formatter=formatter,
                 long_term=long_term,
                 output_dir=output_dir,
-                memory_root=memory_root,
                 max_iters=args.max_iters,
                 overwrite=not args.skip_existing,
             )
         except Exception as exc:
             print(f"[{case.index:02d}] failed: {type(exc).__name__}: {exc}", flush=True)
             traceback.print_exc()
-            if not args.continue_on_error:
-                raise
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -196,17 +275,12 @@ def main() -> None:
     parser.add_argument(
         "--output-dir",
         default=str(DEFAULT_OUTPUT_DIR),
-        help="Markdown 报告输出目录，默认 output/reports/qwen3.6-27b。",
-    )
-    parser.add_argument(
-        "--memory-root",
-        default=str(DEFAULT_MEMORY_ROOT),
-        help="短期 memory 输出目录。",
+        help="Markdown 报告输出目录，默认 output/reports/deepseek-v4-flash-baseline。",
     )
     parser.add_argument(
         "--llm-name",
         default=os.getenv("LLM_NAME", DEFAULT_LLM_NAME),
-        help="config.yaml/config.local.yaml 中的模型 id，默认 qwen3.6 或环境变量 LLM_NAME。",
+        help="config.yaml/config.local.yaml 中的模型 id，默认 deepseek-v4-flash 或环境变量 LLM_NAME。",
     )
     parser.add_argument(
         "--start",
@@ -230,11 +304,6 @@ def main() -> None:
         "--skip-existing",
         action="store_true",
         help="如果目标 Markdown 已存在则跳过，默认覆盖写入。",
-    )
-    parser.add_argument(
-        "--continue-on-error",
-        action="store_true",
-        help="单条失败后继续后续 prompt，默认失败即停止。",
     )
     args = parser.parse_args()
     asyncio.run(run_baseline(args))

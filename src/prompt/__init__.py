@@ -179,6 +179,8 @@ prompt_dict["verifier_fact_prompt"] = """
 
 你必须使用 read_material 工具读取材料。
 
+注意：`normalized_text`和`factual` 字段只是对 `original_text` 的辅助结构化解析，可能存在抽取错误；如果存在冲突，必须以 `original_text` 为准进行核验。
+
 # 核心规则（必须遵守）
 
 1. 只允许使用 claim.cite_ids 对应的材料，不允许使用外部知识。
@@ -263,6 +265,8 @@ prompt_dict["verifier_numeric_prompt"] = """
 }
 
 你需要逐条验证 `claims` 中与数值、单位、期间、比较关系有关的信息。
+
+注意：`normalized_text`和`numeric` 字段只是对 `original_text` 的辅助结构化解析，可能存在抽取错误；如果存在冲突，必须以 `original_text` 为准进行核验。
 
 # 核心规则（必须遵守）
 
@@ -352,6 +356,8 @@ prompt_dict["verifier_temporal_prompt"] = """
 
 你需要逐条验证 `claims` 中与时间表达、事件时间、时间范围有关的信息。
 
+注意：`normalized_text`和`temporal` 字段只是对 `original_text` 的辅助结构化解析，可能存在抽取错误；如果存在冲突，必须以 `original_text` 为准进行核验。
+
 # 核心规则（必须遵守）
 
 1. 只允许使用 claim.cite_ids 对应材料，不允许使用外部知识。
@@ -371,7 +377,9 @@ prompt_dict["verifier_temporal_prompt"] = """
 - cross_period_inference：跨期推理（禁止）
 
 # severity 判定标准
-时间错误全部判定为 "critical"
+- critical：核心时间事实错误，例如事件发生年份/季度明显错误、把未发生在该期间的事件写入该期间、跨期推理导致结论错误、把预测期/历史期混淆。
+- major：重要时间范围或事件对应关系不准确，例如把季度写成年份导致范围过宽、时间区间边界不清、材料只支持“截至某日”但正文写成持续状态、事件与时间关系需要明确。
+- minor：轻微时间表述不严谨，不明显影响核心结论。
 
 # suggestion 撰写要求
 suggestion 必须是字符串，包含：
@@ -392,7 +400,7 @@ suggestion 必须是字符串，包含：
     "claim_id": "对应输入中的 claim_id",
     "type": "问题类型，例如 time_mismatch / event_time_conflict",
     "description": "问题描述",
-    "severity": "critical",
+    "severity": "critical|major|minor",
     "evidence": [{"cite_id": "证据材料 ID", "text": "包含时间信息的材料原文片段"}],
     "suggestion": "字符串形式的修改建议"
   }
@@ -599,6 +607,7 @@ prompt_dict["claim_extract_sys_prompt"] = """
   必须与原文中出现的所有 cite_id 完全一致
 - 不允许遗漏 cite_id
 - 不允许新增 cite_id
+- normalized_text和slots的提取结果不能背离或者曲解原文表达。
 
 # 输出格式（严格）
 必须严格按照输出格式输出，cite_ids必须输出成数组格式：

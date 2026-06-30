@@ -207,3 +207,72 @@ class EvidenceRegistry:
             for record in self.records_for_segment(segment_id)
             if record.required and record.state not in {"RESOLVED", "SKIPPED"}
         ]
+
+
+def repair_registry_citation_states(registry: EvidenceRegistry) -> int:
+    from src.utils.tracking_board_format import extract_cite_ids, normalize_cite_markers
+
+    repaired = 0
+    for record in registry.active_records():
+        if not record.search_result:
+            continue
+        normalized_result = normalize_cite_markers(record.search_result)
+        cite_ids = extract_cite_ids(normalized_result)
+        if not cite_ids:
+            continue
+        if normalized_result != record.search_result:
+            record.search_result = normalized_result
+            repaired += 1
+        for cite_id in cite_ids:
+            if cite_id not in record.cite_ids:
+                record.cite_ids.append(cite_id)
+                repaired += 1
+        if record.state == "UNAVAILABLE":
+            record.state = "RESOLVED"
+            repaired += 1
+    return repaired
+
+
+def apply_static_reference_citation(record: EvidenceRecord, reference_cite_id: str) -> None:
+    static_fact = str(record.fields.get("fact") or "").strip()
+    if not bool(record.fields.get("is_static", False)) or not static_fact:
+        return
+
+    marker = f"[^cite_id:{reference_cite_id}]"
+    description = record.description or str(record.fields.get("description") or "").strip()
+    record.search_result = f"{description}：{static_fact}{marker}"
+    if reference_cite_id not in record.cite_ids:
+        record.cite_ids.append(reference_cite_id)
+    record.state = "RESOLVED"
+
+
+def is_static_fact_record(record: EvidenceRecord) -> bool:
+    return bool(record.fields.get("is_static", False)) and bool(str(record.fields.get("fact") or "").strip())
+
+
+def evidence_record_to_evidence(record: EvidenceRecord) -> Evidence:
+    fields = dict(record.fields or {})
+    description = str(fields.get("description") or record.description or "").strip()
+    return Evidence(
+        text=description,
+        description=description,
+        entity=str(fields.get("entity") or "").strip() or None,
+        aspect=str(fields.get("aspect") or "").strip() or None,
+        period=str(fields.get("period") or "").strip() or None,
+        scope=str(fields.get("scope") or "").strip() or None,
+        required=bool(fields.get("required", record.required)),
+        fact=str(fields.get("fact") or "").strip() or None,
+        is_static=bool(fields.get("is_static", False)),
+    )
+
+
+def sync_segment_evidences_from_record(
+    record: "SegmentRecord",
+    binding: "SegmentBinding",
+    registry: EvidenceRegistry,
+) -> None:
+    binding.segment.evidences = [
+        evidence_record_to_evidence(registry.records[evidence_id])
+        for evidence_id in record.evidences
+        if evidence_id in registry.records
+    ] or None

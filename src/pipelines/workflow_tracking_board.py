@@ -16,7 +16,13 @@ import config
 from src.agents.searcher import build_searcher_toolkit, create_searcher_agent
 from src.agents.writer import build_writer_toolkit, create_writer_agent
 from src.evaluation.eval_content import _extract_score_suggestion
-from src.memory.evidence_registry import EvidenceRecord, EvidenceRegistry
+from src.memory.evidence_registry import (
+    EvidenceRecord,
+    EvidenceRegistry,
+    apply_static_reference_citation,
+    repair_registry_citation_states,
+    sync_segment_evidences_from_record,
+)
 from src.memory.long_term import LongTermMemoryStore
 from src.memory.short_term import ShortTermMemoryStore
 from src.memory.tracking_board import (
@@ -24,14 +30,29 @@ from src.memory.tracking_board import (
     SegmentIssue,
     SegmentRecord,
     TrackingBoard,
+    board_has_actionable_issues,
     build_tracking_board,
+    merge_loaded_board,
+    set_segment_issue,
+    set_segment_state,
+    sync_board_records_to_segments,
+    tracking_progress_snapshot,
 )
-from src.memory.working import Evidence, Section, load_section_from_json_text, _normalize_evidences
+from src.memory.working import (
+    Section,
+    _normalize_evidences,
+    count_section_segments,
+    load_section_from_json_text,
+    replace_unfinished_segments_with_outline,
+    section_has_unfinished,
+)
 from src.pipelines.planning import process_pdf_to_outline
 from src.prompt import prompt_dict
 from src.utils.call_with_retry import call_agent_with_retry, call_chatbot_with_retry
 from src.utils.evidence_batching import (
     EvidenceBatchResult,
+    build_batch_reference_context,
+    build_batch_segment_context,
     cluster_ready_evidence_records,
     format_evidence_batch_xml,
     parse_batch_search_xml,
@@ -68,9 +89,7 @@ from src.utils.tracking_board_format import (
     apply_search_result_to_evidence_record,
     build_evidence_context,
     build_known_evidence_context,
-    extract_cite_ids,
     is_unavailable_marker,
-    normalize_cite_markers,
     parse_replan_response,
     parse_section_polish_response,
     parse_writer_issue,
@@ -81,132 +100,18 @@ SAVE_LOCK = asyncio.Lock()
 BATCH_PARSE_REPAIR_ATTEMPTS = 2
 
 
-def set_segment_state(record: SegmentRecord, state: str, reason: str) -> None:
-    old_state = record.state
-    record.state = state
-    if old_state != state:
-        print(
-            f"[{time.strftime('%H:%M:%S')}] Segment state {record.segment_id}: "
-            f"{old_state} -> {state} ({reason})",
-            flush=True,
-        )
-
-
-def set_segment_issue(record: SegmentRecord, issue: SegmentIssue) -> None:
-    record.issue = issue
-    record.issue_seen = True
-
-
-def tracking_progress_snapshot(
+async def save_tracking_progress(
     board: TrackingBoard,
     registry: EvidenceRegistry,
-) -> tuple:
-    segment_items = []
-    for segment_id, record in sorted(board.records.items()):
-        issue = record.issue
-        issue_snapshot = None
-        if issue is not None:
-            issue_snapshot = (
-                issue.type,
-                issue.action,
-                issue.detail,
-                tuple(str(evidence) for evidence in issue.evidences),
-            )
-        segment_items.append(
-            (
-                segment_id,
-                record.state,
-                tuple(record.evidences),
-                issue_snapshot,
-                tuple(sorted(record.attempts.items())),
-                len(record.draft_versions),
-            )
-        )
-
-    evidence_items = []
-    for evidence_id, evidence_record in sorted(registry.records.items()):
-        if not evidence_record.used_by_segments:
-            continue
-        evidence_items.append(
-            (
-                evidence_id,
-                evidence_record.state,
-                tuple(evidence_record.used_by_segments),
-                tuple(evidence_record.cite_ids),
-                tuple(evidence_record.depends_on),
-            )
-        )
-    return tuple(segment_items), tuple(evidence_items)
+    board_path: Path,
+) -> None:
+    async with SAVE_LOCK:
+        registry.save()
+        board.save(board_path)
 
 
-def board_has_actionable_issues(board: TrackingBoard) -> bool:
-    for record in board.records.values():
-        if record.state in {"FINALIZED", "BLOCKED"}:
-            continue
-        if record.issue is not None:
-            return True
-    return False
-
-
-def repair_registry_citation_states(registry: EvidenceRegistry) -> int:
-    repaired = 0
-    for record in registry.active_records():
-        if not record.search_result:
-            continue
-        normalized_result = normalize_cite_markers(record.search_result)
-        cite_ids = extract_cite_ids(normalized_result)
-        if not cite_ids:
-            continue
-        if normalized_result != record.search_result:
-            record.search_result = normalized_result
-            repaired += 1
-        for cite_id in cite_ids:
-            if cite_id not in record.cite_ids:
-                record.cite_ids.append(cite_id)
-                repaired += 1
-        if record.state == "UNAVAILABLE":
-            record.state = "RESOLVED"
-            repaired += 1
-    return repaired
-
-
-def apply_static_reference_citation(record: EvidenceRecord, reference_cite_id: str) -> None:
-    static_fact = str(record.fields.get("fact") or "").strip()
-    if not bool(record.fields.get("is_static", False)) or not static_fact:
-        return
-
-    marker = f"[^cite_id:{reference_cite_id}]"
-    description = record.description or str(record.fields.get("description") or "").strip()
-    record.search_result = f"{description}：{static_fact}{marker}"
-    if reference_cite_id not in record.cite_ids:
-        record.cite_ids.append(reference_cite_id)
-    record.state = "RESOLVED"
-
-
-def is_static_fact_record(record: EvidenceRecord) -> bool:
-    return bool(record.fields.get("is_static", False)) and bool(str(record.fields.get("fact") or "").strip())
-
-
-def section_has_unfinished(section: Section) -> bool:
-    if section.segments:
-        for segment in section.segments:
-            if not segment.finished:
-                return True
-    if section.subsections:
-        for subsection in section.subsections:
-            if section_has_unfinished(subsection):
-                return True
-    return False
-
-
-def count_section_segments(section: Section) -> tuple[int, int]:
-    total = len(section.segments or [])
-    finalized = sum(1 for segment in section.segments or [] if segment.finished)
-    for subsection in section.subsections or []:
-        child_total, child_finalized = count_section_segments(subsection)
-        total += child_total
-        finalized += child_finalized
-    return total, finalized
+def writer_output_is_tool_call_only(text: str) -> bool:
+    return (text or "").strip().startswith("<｜｜DSML｜｜tool_calls>")
 
 
 def count_board_issue_segments(board: TrackingBoard | None) -> tuple[int, int]:
@@ -278,7 +183,10 @@ def create_evidence_searcher(
     )
 
 
-def create_segment_agents(short_term: ShortTermMemoryStore, long_term: LongTermMemoryStore):
+def create_segment_agents(
+    short_term: ShortTermMemoryStore,
+    long_term: LongTermMemoryStore,
+):
     writer_toolkit = build_writer_toolkit(short_term=short_term, long_term=long_term)
     writer = create_writer_agent(
         model=llm_reasoning,
@@ -320,67 +228,6 @@ def initialize_registry_for_board(
         print(f"[Evidence Registry] repaired citation states: {repaired_count}", flush=True)
     for evidence_record in registry.active_records():
         apply_static_reference_citation(evidence_record, reference_cite_id)
-
-
-def merge_loaded_board(
-    current_board: TrackingBoard,
-    loaded_board: TrackingBoard | None,
-) -> TrackingBoard:
-    if loaded_board is None:
-        return current_board
-    for segment_id, record in current_board.records.items():
-        loaded_record = loaded_board.records.get(segment_id)
-        if loaded_record is None:
-            continue
-        loaded_record.topic = record.topic
-        loaded_record.template = record.template
-        loaded_record.requirements = record.requirements
-        current_board.records[segment_id] = loaded_record
-    return current_board
-
-
-def sync_board_records_to_segments(
-    board: TrackingBoard,
-    bindings: dict[str, SegmentBinding],
-) -> None:
-    for segment_id, record in board.records.items():
-        binding = bindings.get(segment_id)
-        if binding is None:
-            continue
-        # Restore persisted drafts into the manuscript tree for resume runs.
-        latest_draft = record.latest_draft()
-        if latest_draft:
-            binding.segment.content = latest_draft
-        if record.state == "FINALIZED":
-            binding.segment.finished = True
-
-
-def evidence_record_to_evidence(record: EvidenceRecord) -> Evidence:
-    fields = dict(record.fields or {})
-    description = str(fields.get("description") or record.description or "").strip()
-    return Evidence(
-        text=description,
-        description=description,
-        entity=str(fields.get("entity") or "").strip() or None,
-        aspect=str(fields.get("aspect") or "").strip() or None,
-        period=str(fields.get("period") or "").strip() or None,
-        scope=str(fields.get("scope") or "").strip() or None,
-        required=bool(fields.get("required", record.required)),
-        fact=str(fields.get("fact") or "").strip() or None,
-        is_static=bool(fields.get("is_static", False)),
-    )
-
-
-def sync_segment_evidences_from_record(
-    record: SegmentRecord,
-    binding: SegmentBinding,
-    registry: EvidenceRegistry,
-) -> None:
-    binding.segment.evidences = [
-        evidence_record_to_evidence(registry.records[evidence_id])
-        for evidence_id in record.evidences
-        if evidence_id in registry.records
-    ] or None
 
 
 def apply_replan_payload(
@@ -470,49 +317,6 @@ async def replan_segment_after_not_found(
     )
     apply_replan_payload(payload, record, binding, registry, company_name)
     return True
-
-
-def build_batch_segment_context(
-    records: list[EvidenceRecord],
-    bindings: dict[str, SegmentBinding],
-) -> tuple[list[str], list[tuple[str, str, str]]]:
-    topics: list[str] = []
-    references: list[tuple[str, str, str]] = []
-    seen_references: set[str] = set()
-
-    for record in records:
-        for segment_id in record.used_by_segments:
-            binding = bindings.get(segment_id)
-            if binding is None:
-                continue
-            topic = binding.segment.topic or record.description
-            if topic and topic not in topics:
-                topics.append(topic)
-            reference = str(binding.segment.reference or "").strip()
-            reference_key = f"{segment_id}\n{reference}"
-            if reference and reference_key not in seen_references:
-                seen_references.add(reference_key)
-                references.append((segment_id, topic, reference))
-
-    return topics, references
-
-
-def build_batch_reference_context(
-    references: list[tuple[str, str, str]],
-    demo_date: str,
-) -> str:
-    if not references:
-        return ""
-    blocks = [
-        f"[{segment_id}] {topic}\n{reference}"
-        for segment_id, topic, reference in references
-    ]
-    return (
-        f"{demo_date}发布了一份历史研报，以下片段可能包含本批 evidence 所需材料：\n"
-        + "\n\n".join(blocks)
-        + "\n如果某个参考片段已覆盖 evidence 需求，并且该事实在当前撰写时间仍然成立，"
-        + f"可以摘取相关两三句话作为论据，并保留 [^cite_id:{demo_date}_reference_report]。"
-    )
 
 
 async def search_tracking_evidence_batch(
@@ -746,8 +550,10 @@ async def resolve_global_evidence_registry(
                 for record in cluster:
                     if record.state == "SEARCHING":
                         record.state = "PLANNED"
+                registry.save()
                 continue
             changed = bool(result) or changed
+            registry.save()
     return changed
 
 
@@ -789,34 +595,77 @@ async def write_segment_draft(
     writer,
     task_desc: str,
     reason: str,
+    max_retry_attempts: int,
 ) -> bool:
     evidence_context = build_evidence_context(registry, record.segment_id, short_term)
-    outline_context_intro = "写作要求和可用论据材料如下："
+    context_labels = []
+    if binding.segment.template:
+        context_labels.append("写作示例")
+    if binding.segment.requirements:
+        context_labels.append("写作要求")
+    if evidence_context:
+        context_labels.append("可用论据材料")
+    outline_context_intro = (
+        "、".join(context_labels) + "如下："
+        if context_labels
+        else "当前片段上下文如下："
+    )
     segment_parts = [binding.segment.__str__(with_evidence=False).strip()]
     if evidence_context:
         segment_parts.append(f"可用论据材料：\n{evidence_context}")
     segment_text = "\n\n".join(part for part in segment_parts if part)
-    writer_input = Msg(
-        name="user",
-        content=prompt_dict["segment_writer_user_prompt"].format(
+    continue_attempts = int(record.attempts.get("WRITER_TOOL_CALL_CONTINUE", 0))
+    if continue_attempts <= 0:
+        writer_content = prompt_dict["segment_writer_user_prompt"].format(
             task_desc=task_desc,
             segment_topic=record.topic or "未指定",
             outline_context_intro=outline_context_intro,
             segment_text=segment_text,
-        ),
-        role="user",
-    )
-    if hasattr(writer, "memory") and writer.memory is not None:
+        )
+    else:
+        writer_content = (
+            "请继续完成最终研报片段正文。\n\n"
+            f"任务：{task_desc}\n"
+            f"当前要点：{record.topic or '未指定'}\n\n"
+            "最终答案必须使用<content>和</content>包裹；"
+            "正文中如需引用图表，请使用 ![图表说明](chart:chart_id)。"
+        )
+
+    writer_input = Msg(name="user", content=writer_content, role="user")
+    if continue_attempts <= 0 and hasattr(writer, "memory") and writer.memory is not None:
         await writer.memory.clear()
     draft_msg = await call_agent_with_retry(writer, writer_input)
     raw_text = draft_msg.get_text_content()
     content = extract_writer_content(raw_text)
+    if writer_output_is_tool_call_only(content):
+        attempts = record.increment_attempt("WRITER_TOOL_CALL_CONTINUE")
+        print(
+            f"[{time.strftime('%H:%M:%S')}] Writer draft produced tool call only: "
+            f"{record.segment_id} continue_attempt={attempts}",
+            flush=True,
+        )
+        if attempts <= max_retry_attempts:
+            return False
+        record.attempts["WRITER_TOOL_CALL_CONTINUE"] = 0
+        set_segment_issue(
+            record,
+            SegmentIssue(
+                type="EXECUTION_ERROR",
+                detail="Writer 连续输出工具调用，未生成正文。",
+                action="RETRY",
+            ),
+        )
+        return False
     if content:
+        record.attempts.pop("WRITER_TOOL_CALL_CONTINUE", None)
+        draft_reason = reason
+        if reason == "initial_draft" and continue_attempts > 0:
+            draft_reason = "initial_draft_after_tool_call"
         binding.segment.content = content
         binding.parent.content = None
-        record.add_draft(content, reason)
+        record.add_draft(content, draft_reason)
         record.issue = None
-        set_segment_state(record, "DRAFTED", reason)
+        set_segment_state(record, "DRAFTED", draft_reason)
         return True
 
     set_segment_issue(
@@ -878,7 +727,7 @@ async def revise_segment_draft(
     task_desc: str,
     feedback: str,
     reason: str,
-) -> bool:
+) -> bool | None:
     current_text = (binding.segment.content or record.latest_draft() or "").strip()
     segment_topic = record.topic or binding.segment.topic or "未指定"
     segment_requirements = "\n".join(record.requirements).strip() or "未指定"
@@ -896,20 +745,28 @@ async def revise_segment_draft(
         ),
         role="user",
     )
-    if hasattr(writer, "memory") and writer.memory is not None:
+    initial_draft_from_tool_call = (
+        len(record.draft_versions) == 1
+        and record.draft_versions[0].reason == "initial_draft_after_tool_call"
+    )
+    if (
+        not initial_draft_from_tool_call
+        and hasattr(writer, "memory")
+        and writer.memory is not None
+    ):
         await writer.memory.clear()
     draft_msg = await call_agent_with_retry(writer, writer_input)
     content = extract_writer_content(draft_msg.get_text_content())
     if not content:
         return False
     stripped_content = content.strip()
-    if stripped_content.startswith("<｜｜DSML｜｜tool_calls>"):
+    if writer_output_is_tool_call_only(stripped_content):
         print(
             f"[{time.strftime('%H:%M:%S')}] Writer revise skipped: "
-            f"{record.segment_id} produced tool call only",
+            f"{record.segment_id} produced tool call only; will retry without counting revise attempt",
             flush=True,
         )
-        return False
+        return None
     if len(stripped_content) < len(current_text) * 0.2:
         print(
             f"[{time.strftime('%H:%M:%S')}] Writer revise skipped: "
@@ -917,7 +774,7 @@ async def revise_segment_draft(
             f"({len(stripped_content)}/{len(current_text)})",
             flush=True,
         )
-        return False
+        return None
     binding.segment.content = content
     binding.parent.content = None
     record.add_draft(content, reason)
@@ -1062,8 +919,7 @@ async def handle_segment_issue(
             if is_verifier_revise
             else int(tracking_cfg["max_quality_revise_attempts"])
         )
-        attempts = record.increment_attempt(attempt_key)
-        if attempts > max_attempts:
+        if int(record.attempts.get(attempt_key, 0)) >= max_attempts:
             set_segment_state(
                 record,
                 "BLOCKED",
@@ -1079,6 +935,9 @@ async def handle_segment_issue(
             record.issue.detail,
             reason,
         )
+        if ok is None:
+            return True
+        record.increment_attempt(attempt_key)
         if ok:
             record.issue = None
         return True
@@ -1096,6 +955,8 @@ async def process_segment_record(
     record: SegmentRecord,
     binding: SegmentBinding,
     registry: EvidenceRegistry,
+    board: TrackingBoard,
+    board_path: Path,
     short_term: ShortTermMemoryStore,
     writer,
     verifier: SegmentVerifier,
@@ -1122,20 +983,26 @@ async def process_segment_record(
                 company_name,
                 tracking_cfg,
             )
+            await save_tracking_progress(board, registry, board_path)
             if action == "RETRIEVE":
                 return
             continue
         if record.state in {"EMPTY", "PLANNED"}:
             set_segment_state(record, "RETRIEVING", "segment_needs_evidence")
             if not await check_segment_evidences_ready(record, registry):
+                await save_tracking_progress(board, registry, board_path)
                 return
+            await save_tracking_progress(board, registry, board_path)
             continue
         if record.state == "RETRIEVING":
             if not await check_segment_evidences_ready(record, registry):
+                await save_tracking_progress(board, registry, board_path)
                 return
+            await save_tracking_progress(board, registry, board_path)
             continue
         if record.state == "EVIDENCE_READY":
             if not await check_segment_evidences_ready(record, registry, preserve_state=True):
+                await save_tracking_progress(board, registry, board_path)
                 return
             if not await check_writer_evidence_sufficiency(
                 record,
@@ -1145,12 +1012,24 @@ async def process_segment_record(
                 task_desc,
                 cur_date,
             ):
+                await save_tracking_progress(board, registry, board_path)
                 continue
             set_segment_state(record, "WRITING", "writer_evidence_sufficient")
+            await save_tracking_progress(board, registry, board_path)
             continue
         if record.state == "WRITING":
             reason = "initial_draft" if not record.draft_versions else "continue_after_gap"
-            await write_segment_draft(record, binding, registry, short_term, writer, task_desc, reason)
+            await write_segment_draft(
+                record,
+                binding,
+                registry,
+                short_term,
+                writer,
+                task_desc,
+                reason,
+                int(tracking_cfg["max_retry_attempts"]),
+            )
+            await save_tracking_progress(board, registry, board_path)
             continue
         if record.state == "DRAFTED":
             suggestions = await evaluate_segment_quality(record, binding)
@@ -1159,12 +1038,15 @@ async def process_segment_record(
                     record,
                     SegmentIssue(type="QUALITY_GAP", detail=suggestions, action="REVISE"),
                 )
+                await save_tracking_progress(board, registry, board_path)
                 continue
             set_segment_state(record, "VERIFYING", "quality_check_passed")
+            await save_tracking_progress(board, registry, board_path)
             continue
         if record.state == "VERIFYING":
             if not multi_source_verification_enabled:
                 set_segment_state(record, "VERIFIED", "verification_disabled")
+                await save_tracking_progress(board, registry, board_path)
                 continue
             verified = await run_verifier_check(
                 record,
@@ -1176,15 +1058,19 @@ async def process_segment_record(
             if verified:
                 set_segment_state(record, "VERIFIED", "verifier_check_passed")
             else:
+                await save_tracking_progress(board, registry, board_path)
                 continue
+            await save_tracking_progress(board, registry, board_path)
             continue
         if record.state == "VERIFIED":
             binding.segment.finished = True
             record.issue = None
             set_segment_state(record, "FINALIZED", "segment_finished")
             print(f"[{time.strftime('%H:%M:%S')}] Tracking segment finalized: {record.segment_id}", flush=True)
+            await save_tracking_progress(board, registry, board_path)
             return
     set_segment_state(record, "BLOCKED", "state_loop_exhausted")
+    await save_tracking_progress(board, registry, board_path)
 
 
 async def run_verifier_check(
@@ -1214,6 +1100,7 @@ async def process_tracking_board(
     board: TrackingBoard,
     bindings: dict[str, SegmentBinding],
     registry: EvidenceRegistry,
+    board_path: Path,
     short_term: ShortTermMemoryStore,
     long_term: LongTermMemoryStore,
     task_desc: str,
@@ -1234,6 +1121,7 @@ async def process_tracking_board(
                 segment_record = board.records.get(segment_id)
                 if segment_record is not None and segment_record.state in {"EMPTY", "PLANNED"}:
                     set_segment_state(segment_record, "RETRIEVING", "global_evidence_pending")
+        await save_tracking_progress(board, registry, board_path)
         await resolve_global_evidence_registry(
             registry,
             bindings,
@@ -1244,6 +1132,7 @@ async def process_tracking_board(
             int(tracking_cfg["evidence_concurrency"]),
             int(tracking_cfg["evidence_batch_size"]),
         )
+        await save_tracking_progress(board, registry, board_path)
         tasks = []
         for segment_id, record in board.records.items():
             if record.state in {"FINALIZED", "BLOCKED"}:
@@ -1253,6 +1142,8 @@ async def process_tracking_board(
                 record,
                 bindings[segment_id],
                 registry,
+                board,
+                board_path,
                 short_term,
                 long_term,
                 task_desc,
@@ -1266,6 +1157,7 @@ async def process_tracking_board(
             return
         await asyncio.gather(*tasks)
         registry.prune_unlinked_records()
+        await save_tracking_progress(board, registry, board_path)
         after_snapshot = tracking_progress_snapshot(board, registry)
         if (
             before_snapshot == after_snapshot
@@ -1280,6 +1172,8 @@ async def process_tracking_segment_with_semaphore(
     record: SegmentRecord,
     binding: SegmentBinding,
     registry: EvidenceRegistry,
+    board: TrackingBoard,
+    board_path: Path,
     short_term: ShortTermMemoryStore,
     long_term: LongTermMemoryStore,
     task_desc: str,
@@ -1295,6 +1189,8 @@ async def process_tracking_segment_with_semaphore(
                 record,
                 binding,
                 registry,
+                board,
+                board_path,
                 short_term,
                 writer,
                 verifier,
@@ -1314,6 +1210,7 @@ async def process_tracking_segment_with_semaphore(
                     action="RETRY",
                 ),
             )
+            await save_tracking_progress(board, registry, board_path)
 
 
 async def polish_completed_sections(section: Section) -> None:
@@ -1337,24 +1234,6 @@ async def polish_completed_sections(section: Section) -> None:
     print_section_reference_warning(section.title, section_text, content)
     section.title = title
     section.content = content
-
-
-def replace_unfinished_segments_with_outline(manuscript: Section, outline: Section) -> None:
-    section_pairs = [(manuscript, outline)]
-    while section_pairs:
-        manuscript_section, outline_section = section_pairs.pop()
-        replaced_segment = False
-        if manuscript_section.segments and outline_section.segments:
-            for index, segment in enumerate(manuscript_section.segments):
-                if not segment.finished and index < len(outline_section.segments):
-                    manuscript_section.segments[index] = outline_section.segments[index]
-                    replaced_segment = True
-        if replaced_segment:
-            manuscript_section.content = None
-        if manuscript_section.subsections and outline_section.subsections:
-            for index, subsection in enumerate(manuscript_section.subsections):
-                if index < len(outline_section.subsections):
-                    section_pairs.append((subsection, outline_section.subsections[index]))
 
 
 async def load_or_build_outline(
@@ -1469,6 +1348,9 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
             board = merge_loaded_board(board, loaded_board)
             sync_board_records_to_segments(board, bindings)
             registry = EvidenceRegistry.load(short_term.base_dir / f"{cfg.llm_name}_evidence_registry.json")
+            for evidence_record in registry.records.values():
+                if evidence_record.state == "SEARCHING":
+                    evidence_record.state = "PLANNED"
             initialize_registry_for_board(
                 registry,
                 board,
@@ -1477,12 +1359,13 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
                 f"{demo_date}_reference_report",
             )
             await build_evidence_dependencies(registry, llm_instruct, formatter)
-            registry.save()
+            await save_tracking_progress(board, registry, board_path)
 
             await process_tracking_board(
                 board,
                 bindings,
                 registry,
+                board_path,
                 short_term,
                 long_term,
                 task_desc,
@@ -1492,8 +1375,7 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
                 cfg.get_tracking_board_cfg(),
                 cfg.is_multi_source_verification_enabled(),
             )
-            registry.save()
-            board.save(board_path)
+            await save_tracking_progress(board, registry, board_path)
             async with SAVE_LOCK:
                 manuscript_path.write_text(manuscript.to_json(ensure_ascii=False), encoding="utf-8")
 
@@ -1504,12 +1386,6 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
         manuscript_path.write_text(manuscript.to_json(ensure_ascii=False), encoding="utf-8")
         markdown_text = section_to_markdown(manuscript)
         (output_pth / f"{filename}.md").write_text(markdown_text, encoding="utf-8")
-        md_to_pdf(
-            markdown_text,
-            short_term=short_term,
-            pdf_path=output_pth / f"{filename}.pdf",
-            header_title=_infer_report_title(task_desc, entity),
-        )
         track_report_summary(
             build_report_summary_metadata(
                 manuscript,
@@ -1520,6 +1396,12 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
                 company_name,
                 cur_date,
             )
+        )
+        md_to_pdf(
+            markdown_text,
+            short_term=short_term,
+            pdf_path=output_pth / f"{filename}.pdf",
+            header_title=_infer_report_title(task_desc, entity),
         )
     finally:
         try:

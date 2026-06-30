@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Optional
@@ -116,6 +117,106 @@ class TrackingBoard:
                 attempts=dict(raw_record.get("attempts") or {}),
             )
         return cls(records=records)
+
+
+def set_segment_state(record: SegmentRecord, state: str, reason: str) -> None:
+    old_state = record.state
+    record.state = state
+    if old_state != state:
+        print(
+            f"[{time.strftime('%H:%M:%S')}] Segment state {record.segment_id}: "
+            f"{old_state} -> {state} ({reason})",
+            flush=True,
+        )
+
+
+def set_segment_issue(record: SegmentRecord, issue: SegmentIssue) -> None:
+    record.issue = issue
+    record.issue_seen = True
+
+
+def tracking_progress_snapshot(
+    board: TrackingBoard,
+    registry: "EvidenceRegistry",
+) -> tuple:
+    segment_items = []
+    for segment_id, record in sorted(board.records.items()):
+        issue = record.issue
+        issue_snapshot = None
+        if issue is not None:
+            issue_snapshot = (
+                issue.type,
+                issue.action,
+                issue.detail,
+                tuple(str(evidence) for evidence in issue.evidences),
+            )
+        segment_items.append(
+            (
+                segment_id,
+                record.state,
+                tuple(record.evidences),
+                issue_snapshot,
+                tuple(sorted(record.attempts.items())),
+                len(record.draft_versions),
+            )
+        )
+
+    evidence_items = []
+    for evidence_id, evidence_record in sorted(registry.records.items()):
+        if not evidence_record.used_by_segments:
+            continue
+        evidence_items.append(
+            (
+                evidence_id,
+                evidence_record.state,
+                tuple(evidence_record.used_by_segments),
+                tuple(evidence_record.cite_ids),
+                tuple(evidence_record.depends_on),
+            )
+        )
+    return tuple(segment_items), tuple(evidence_items)
+
+
+def board_has_actionable_issues(board: TrackingBoard) -> bool:
+    for record in board.records.values():
+        if record.state in {"FINALIZED", "BLOCKED"}:
+            continue
+        if record.issue is not None:
+            return True
+    return False
+
+
+def merge_loaded_board(
+    current_board: TrackingBoard,
+    loaded_board: TrackingBoard | None,
+) -> TrackingBoard:
+    if loaded_board is None:
+        return current_board
+    for segment_id, record in current_board.records.items():
+        loaded_record = loaded_board.records.get(segment_id)
+        if loaded_record is None:
+            continue
+        loaded_record.topic = record.topic
+        loaded_record.template = record.template
+        loaded_record.requirements = record.requirements
+        current_board.records[segment_id] = loaded_record
+    return current_board
+
+
+def sync_board_records_to_segments(
+    board: TrackingBoard,
+    bindings: dict[str, SegmentBinding],
+) -> None:
+    for segment_id, record in board.records.items():
+        binding = bindings.get(segment_id)
+        if binding is None:
+            continue
+        # Restore persisted drafts into the manuscript tree for resume runs.
+        latest_draft = record.latest_draft()
+        if latest_draft:
+            binding.segment.content = latest_draft
+        if record.state == "FINALIZED":
+            binding.segment.finished = True
 
 
 def split_requirements(requirements: str | None) -> list[str]:

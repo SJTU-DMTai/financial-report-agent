@@ -6,11 +6,6 @@
 
 如果关键证据不足，只输出一个 JSON 对象，不要输出 Markdown 或额外解释：
 {
-  "issue": {
-    "type": "EVIDENCE_GAP",
-    "detail": "缺少的关键信息",
-    "action": "RETRIEVE"
-  },
   "evidences": [
     {
       "description": "需要补充搜索的证据",
@@ -22,3 +17,5 @@
     }
   ]
 }
+
+其中 required 使用布尔值，可以为true或者false，表示该 evidence 是否为当前 segment 的必须关键证据。

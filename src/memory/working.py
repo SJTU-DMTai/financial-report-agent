@@ -350,6 +350,46 @@ def _normalize_evidences(evidences) -> Optional[List[Evidence]]:
     return deduped
 
 
+def section_has_unfinished(section: Section) -> bool:
+    if section.segments:
+        for segment in section.segments:
+            if not segment.finished:
+                return True
+    if section.subsections:
+        for subsection in section.subsections:
+            if section_has_unfinished(subsection):
+                return True
+    return False
+
+
+def count_section_segments(section: Section) -> tuple[int, int]:
+    total = len(section.segments or [])
+    finalized = sum(1 for segment in section.segments or [] if segment.finished)
+    for subsection in section.subsections or []:
+        child_total, child_finalized = count_section_segments(subsection)
+        total += child_total
+        finalized += child_finalized
+    return total, finalized
+
+
+def replace_unfinished_segments_with_outline(manuscript: Section, outline: Section) -> None:
+    section_pairs = [(manuscript, outline)]
+    while section_pairs:
+        manuscript_section, outline_section = section_pairs.pop()
+        replaced_segment = False
+        if manuscript_section.segments and outline_section.segments:
+            for index, segment in enumerate(manuscript_section.segments):
+                if not segment.finished and index < len(outline_section.segments):
+                    manuscript_section.segments[index] = outline_section.segments[index]
+                    replaced_segment = True
+        if replaced_segment:
+            manuscript_section.content = None
+        if manuscript_section.subsections and outline_section.subsections:
+            for index, subsection in enumerate(manuscript_section.subsections):
+                if index < len(outline_section.subsections):
+                    section_pairs.append((subsection, outline_section.subsections[index]))
+
+
 def evidence_texts(evidences: Optional[List[Evidence]]) -> List[str]:
     if not evidences:
         return []

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from xml.sax.saxutils import escape
 
 from src.memory.evidence_registry import EvidenceRecord, EvidenceRegistry
+from src.memory.tracking_board import SegmentBinding
 
 
 @dataclass(frozen=True)
@@ -117,6 +118,49 @@ def _segment_ids_are_adjacent(segment_ids: set[str]) -> bool:
         if index is not None
     )
     return not indexes or indexes[-1] - indexes[0] + 1 == len(set(indexes))
+
+
+def build_batch_segment_context(
+    records: list[EvidenceRecord],
+    bindings: dict[str, SegmentBinding],
+) -> tuple[list[str], list[tuple[str, str, str]]]:
+    topics: list[str] = []
+    references: list[tuple[str, str, str]] = []
+    seen_references: set[str] = set()
+
+    for record in records:
+        for segment_id in record.used_by_segments:
+            binding = bindings.get(segment_id)
+            if binding is None:
+                continue
+            topic = binding.segment.topic or record.description
+            if topic and topic not in topics:
+                topics.append(topic)
+            reference = str(binding.segment.reference or "").strip()
+            reference_key = f"{segment_id}\n{reference}"
+            if reference and reference_key not in seen_references:
+                seen_references.add(reference_key)
+                references.append((segment_id, topic, reference))
+
+    return topics, references
+
+
+def build_batch_reference_context(
+    references: list[tuple[str, str, str]],
+    demo_date: str,
+) -> str:
+    if not references:
+        return ""
+    blocks = [
+        f"[{segment_id}] {topic}\n{reference}"
+        for segment_id, topic, reference in references
+    ]
+    return (
+        f"{demo_date}发布了一份历史研报，以下片段可能包含本批 evidence 所需材料：\n"
+        + "\n\n".join(blocks)
+        + "\n如果某个参考片段已覆盖 evidence 需求，并且确定该事实在当前撰写时间仍然成立，"
+        + f"可以摘取相关内容作为论据，并保留 [^cite_id:{demo_date}_reference_report]。"
+    )
 
 
 def format_evidence_batch_xml(

@@ -522,7 +522,7 @@ def format_verifier_feedback_for_writer(
         else:
             type_label = type_labels.get(issue_type, "事实错误")
 
-        severity_label = "必须修改" if issue.severity == "critical" else "重点修改"
+        severity_label = "重点修改" if issue.severity == "critical" else "修改"
         evidence_items = []
         for item in issue.evidence[:3]:
             if not isinstance(item, dict):
