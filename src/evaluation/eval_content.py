@@ -4,12 +4,9 @@ from __future__ import annotations
 
 import re
 import json
-import traceback
-from dataclasses import dataclass
-from typing import Dict, Tuple, Optional, TYPE_CHECKING
+from typing import Dict, Optional
 
 from agentscope.formatter import FormatterBase
-from agentscope.message import Msg
 from agentscope.model import ChatModelBase
 
 from src.prompt import prompt_dict

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from agentscope.agent import ReActAgent
 from agentscope.memory import InMemoryMemory
-from agentscope.tool import Toolkit, ToolResponse
+from agentscope.tool import Toolkit
 
 from ..tools.material_tools import MaterialTools
 from ..memory.short_term import ShortTermMemoryStore

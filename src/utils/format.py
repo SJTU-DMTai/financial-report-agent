@@ -10,7 +10,6 @@ from agentscope.formatter import OpenAIChatFormatter
 from abc import abstractmethod
 from typing import Any, List
 
-from agentscope.formatter import OpenAIChatFormatter
 from agentscope._utils._common import _save_base64_data
 from agentscope.formatter._openai_formatter import _to_openai_image_url, _to_openai_audio_data, logger
 from agentscope.message import Msg, AudioBlock, ImageBlock, TextBlock
@@ -107,6 +106,10 @@ def extract_writer_content(text: str) -> str:
     if tagged_text is not None:
         return tagged_text
     return (text or "").strip()
+
+
+def writer_output_is_tool_call_only(text: str) -> bool:
+    return (text or "").strip().startswith("<｜｜DSML｜｜tool_calls>")
 
 
 def extract_cite_ids(text: str) -> list[str]:

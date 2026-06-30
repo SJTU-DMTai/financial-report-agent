@@ -4,8 +4,6 @@ from __future__ import annotations
 from agentscope.agent import ReActAgent
 from agentscope.memory import InMemoryMemory
 from agentscope.tool import Toolkit
-from agentscope.model import DashScopeChatModel
-from agentscope.model import OpenAIChatModel
 from ..prompt import prompt_dict
 
 from ..tools.financial_data_tools import FinancialDataTools

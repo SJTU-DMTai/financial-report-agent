@@ -41,7 +41,6 @@ from src.memory.tracking_board import (
 from src.memory.working import (
     Section,
     _normalize_evidences,
-    count_section_segments,
     load_section_from_json_text,
     replace_unfinished_segments_with_outline,
     section_has_unfinished,
@@ -65,6 +64,7 @@ from src.utils.format import (
     _normalize_section_titles,
     extract_writer_content,
     print_section_reference_warning,
+    writer_output_is_tool_call_only,
 )
 from src.utils.get_entity_info import get_entity_info
 from src.utils.instance import (
@@ -84,6 +84,7 @@ from src.utils.multi_types_verification import (
     set_verifier_trace_path,
 )
 from src.utils.outline_refine import refine_outline
+from src.utils.report_summary import build_report_summary_metadata
 from src.utils.token_tracking import track_report_summary
 from src.utils.tracking_board_format import (
     apply_search_result_to_evidence_record,
@@ -108,60 +109,6 @@ async def save_tracking_progress(
     async with SAVE_LOCK:
         registry.save()
         board.save(board_path)
-
-
-def writer_output_is_tool_call_only(text: str) -> bool:
-    return (text or "").strip().startswith("<｜｜DSML｜｜tool_calls>")
-
-
-def count_board_issue_segments(board: TrackingBoard | None) -> tuple[int, int]:
-    if board is None:
-        return 0, 0
-    issue_segments = [
-        record
-        for record in board.records.values()
-        if record.issue_seen
-    ]
-    recovered = [
-        record
-        for record in issue_segments
-        if record.state == "FINALIZED"
-    ]
-    return len(issue_segments), len(recovered)
-
-
-def safe_rate(numerator: int, denominator: int) -> float | None:
-    if denominator <= 0:
-        return None
-    return numerator / denominator
-
-
-def build_report_summary_metadata(
-    manuscript: Section,
-    board: TrackingBoard | None,
-    markdown_text: str,
-    task_desc: str,
-    stock_symbol: str,
-    company_name: str,
-    cur_date: str,
-) -> dict[str, Any]:
-    total_segments, finalized_segments = count_section_segments(manuscript)
-    issue_segments, recovered_issue_segments = count_board_issue_segments(board)
-    return {
-        "task_desc": task_desc,
-        "stock_symbol": stock_symbol,
-        "company_name": company_name,
-        "cur_date": cur_date,
-        "segment_total": total_segments,
-        "segment_finalized": finalized_segments,
-        "segment_success_rate": safe_rate(finalized_segments, total_segments),
-        "issue_segment_total": issue_segments,
-        "issue_segment_finalized": recovered_issue_segments,
-        "issue_recovery_rate": safe_rate(recovered_issue_segments, issue_segments),
-        "report_chars": len(markdown_text),
-        "report_non_ws_chars": len("".join(markdown_text.split())),
-        "report_lines": len(markdown_text.splitlines()),
-    }
 
 
 def evidence_searcher_max_iters(evidence_count: int) -> int:
@@ -1285,16 +1232,29 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
     company_name = str(entity.get("name") or "").strip()
     cfg = config.Config()
     now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = open(f"log_tracking_{stock_symbol}_{now_str}.txt", "w", encoding="utf-8")
+    logs_dir = project_root / "logs"
+    log_tracking_dir = logs_dir / "log_tracking"
+    llm_debug_tracking_dir = logs_dir / "llm_debug_tracking"
+    usage_tracking_dir = logs_dir / "usage_tracking"
+    verifier_trace_tracking_dir = logs_dir / "verifier_trace_tracking"
+    for tracking_dir in (
+        log_tracking_dir,
+        llm_debug_tracking_dir,
+        usage_tracking_dir,
+        verifier_trace_tracking_dir,
+    ):
+        tracking_dir.mkdir(parents=True, exist_ok=True)
+
+    log_file = open(log_tracking_dir / f"log_tracking_{stock_symbol}_{now_str}.txt", "w", encoding="utf-8")
     original_stdout = sys.stdout
     original_stderr = sys.stderr
     previous_llm_debug = os.environ.get("FRA_LLM_DEBUG")
     previous_llm_debug_file = os.environ.get("FRA_LLM_DEBUG_FILE")
     previous_usage_tracking_file = os.environ.get("FRA_USAGE_TRACKING_FILE")
     os.environ["FRA_LLM_DEBUG"] = "1"
-    os.environ["FRA_LLM_DEBUG_FILE"] = str(project_root / f"llm_debug_tracking_{stock_symbol}_{now_str}.txt")
-    os.environ["FRA_USAGE_TRACKING_FILE"] = str(project_root / f"usage_tracking_{stock_symbol}_{now_str}.jsonl")
-    set_verifier_trace_path(project_root / f"verifier_trace_tracking_{stock_symbol}_{now_str}.txt")
+    os.environ["FRA_LLM_DEBUG_FILE"] = str(llm_debug_tracking_dir / f"llm_debug_tracking_{stock_symbol}_{now_str}.txt")
+    os.environ["FRA_USAGE_TRACKING_FILE"] = str(usage_tracking_dir / f"usage_tracking_{stock_symbol}_{now_str}.jsonl")
+    set_verifier_trace_path(verifier_trace_tracking_dir / f"verifier_trace_tracking_{stock_symbol}_{now_str}.txt")
     sys.stdout = log_file
     sys.stderr = log_file
 

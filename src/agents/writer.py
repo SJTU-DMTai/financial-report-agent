@@ -3,18 +3,11 @@ from __future__ import annotations
 
 from agentscope.agent import ReActAgent
 from agentscope.memory import InMemoryMemory
-from agentscope.formatter import DashScopeChatFormatter
 from agentscope.tool import Toolkit
-from agentscope.model import DashScopeChatModel
 
-from pathlib import Path
-from agentscope.agent import ReActAgent
-from agentscope.message import Msg, TextBlock
-from agentscope.tool import Toolkit
-from ..tools.material_tools import *
-from ..tools.graphic_tools import *
-from ..tools.search_tools import *
-from ..tools.calculate_tools import *
+from ..tools.material_tools import MaterialTools
+from ..tools.graphic_tools import GraphicTools
+from ..tools.calculate_tools import CalculateTools
 from ..memory.short_term import ShortTermMemoryStore
 from ..memory.long_term import LongTermMemoryStore
 from ..prompt import prompt_dict

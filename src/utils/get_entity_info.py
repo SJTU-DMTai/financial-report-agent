@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import re
-from typing import Optional, Dict, List, Iterable, Tuple
+from typing import Optional, Dict, List
 from src.memory.long_term import LongTermMemoryStore
 import jieba
 

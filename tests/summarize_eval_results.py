@@ -27,7 +27,7 @@ METRIC_GROUPS: tuple[tuple[str, tuple[tuple[str, tuple[str, ...]], ...]], ...] =
         (
             ("coverage_ratio", ("evidence", "coverage_ratio")),
             ("accurate_count", ("evidence", "accurate_count")),
-            ("citiation_density", ("evidence", "citiation_density")),
+            ("citation_density", ("evidence", "citation_density")),
         ),
     ),
     (

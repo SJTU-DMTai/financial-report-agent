@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import ast
-import os
 import shutil
 from pathlib import Path
 
@@ -71,14 +70,17 @@ def collect_report_targets(stem: str, report_dirs: list[Path]) -> list[Path]:
 
 
 def collect_log_targets(stock_code: str) -> list[Path]:
-    patterns = [
-        f"log_tracking_{stock_code}_*.txt",
-        f"llm_debug_tracking_{stock_code}_*.txt",
-        f"verifier_trace_tracking_{stock_code}_*.txt",
+    log_specs = [
+        ("log_tracking", f"log_tracking_{stock_code}_*.txt"),
+        ("llm_debug_tracking", f"llm_debug_tracking_{stock_code}_*.txt"),
+        ("usage_tracking", f"usage_tracking_{stock_code}_*.jsonl"),
+        ("verifier_trace_tracking", f"verifier_trace_tracking_{stock_code}_*.txt"),
     ]
     targets: list[Path] = []
-    for pattern in patterns:
+    for _, pattern in log_specs:
         targets.extend(PROJECT_ROOT.glob(pattern))
+    for dirname, pattern in log_specs:
+        targets.extend((PROJECT_ROOT / "logs" / dirname).glob(pattern))
     return targets
 
 

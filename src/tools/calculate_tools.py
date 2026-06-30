@@ -3,7 +3,7 @@
 import re
 from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Union
 
 import json
 import math

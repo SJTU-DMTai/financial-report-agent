@@ -8,7 +8,6 @@ Benchmark评估流程
 """
 import argparse
 import sys
-import os
 import json
 import asyncio
 import re
@@ -68,7 +67,7 @@ class EvidenceMetrics:
     coverage_ratio: float  # 覆盖率
     accuracy_ratio: float  # 准确率
     accurate_count: int = 0  # 计算accuracy_ratio时判断为准确的数量
-    citiation_density: float = 0.0  # 每千字引用数
+    citation_density: float = 0.0  # 每千字引用数
 
 
 @dataclass
@@ -629,7 +628,7 @@ async def benchmark_single_pair(
             coverage_ratio=coverage_ratio,
             accuracy_ratio=accuracy_ratio,
             accurate_count=accurate_count,
-            citiation_density=citation_density,
+            citation_density=citation_density,
         ),
         content=content_metrics,
     )
@@ -833,7 +832,7 @@ def print_benchmark_summary(results_json_path: Path) -> None:
     evidence_coverage = [r["evidence"]["coverage_ratio"] for r in results]
     evidence_accuracy = [r["evidence"]["accuracy_ratio"] for r in results]
     evidence_accurate_count = [r["evidence"].get("accurate_count", 0) for r in results]
-    evidence_citation_density = [r["evidence"].get("citiation_density", 0.0) for r in results]
+    evidence_citation_density = [r["evidence"].get("citation_density", 0.0) for r in results]
     segment_content = [_get_content_level(r["content"], "segment_level") for r in results]
     report_content = [_get_content_level(r["content"], "report_level") for r in results]
     segment_content_scores = [_get_content_average(content) for content in segment_content]
@@ -888,7 +887,7 @@ def print_benchmark_summary(results_json_path: Path) -> None:
         print(f"    Evidence: {r['evidence']['coverage_ratio']:.2%} coverage, "
               f"{r['evidence']['accuracy_ratio']:.2%} accuracy, "
               f"accurate_count={r['evidence'].get('accurate_count', 0)}, "
-              f"citiation_density={r['evidence'].get('citiation_density', 0.0):.2f}/千字")
+              f"citation_density={r['evidence'].get('citation_density', 0.0):.2f}/千字")
         segment_score = _get_content_level(r["content"], "segment_level")
         report_score = _get_content_level(r["content"], "report_level")
         print(f"    Content segment-level: {_get_content_average(segment_score):.2f}/10 overall, "

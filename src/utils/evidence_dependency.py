@@ -12,23 +12,8 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 from src.memory.evidence_registry import EvidenceRecord, EvidenceRegistry
+from src.prompt import prompt_dict
 from src.utils.call_with_retry import call_chatbot_with_retry
-
-
-DEPENDENCY_SYS_PROMPT = """
-你负责判断金融研报中论据（evidence）之间是否存在检索依赖关系。
-
-定义：
-若 evidence B 的搜索、解释或计算需要使用 evidence A 的结果，则认为 B 依赖 A，记为：
-A -> B
-
-判定原则：
-1. **依赖关系的判断应该保守**，仅当 B 明显需要 A 的结果时，才能建立依赖关系。
-2. 背景信息、弱相关参考或仅有帮助但非必要的信息，不构成依赖。
-3. 依赖关系必须形成有向无环图（DAG），不允许产生循环依赖。若发现双向依赖，应仅保留依赖更强的一条边。
-4. 只允许判断输入 candidate_pairs 中列出的候选对，不要自行组合其它 evidence。
-5. 输出符合要求的JSON格式。
-"""
 
 
 FINANCIAL_TOPIC_KEYWORDS = [
@@ -182,7 +167,7 @@ async def build_evidence_dependencies(
     response = await call_chatbot_with_retry(
         model,
         formatter,
-        DEPENDENCY_SYS_PROMPT,
+        prompt_dict["evidence_dependency_sys_prompt"],
         user_prompt,
         hook=parse_dependency_response,
         handle_hook_exceptions=(json.JSONDecodeError, KeyError, TypeError),

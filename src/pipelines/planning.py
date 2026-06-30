@@ -1,10 +1,6 @@
-import os
 import asyncio
 from functools import partial
-from datetime import datetime
 
-from agentscope.formatter import OpenAIChatFormatter
-from agentscope.message import Msg
 from pathlib import Path
 
 from agentscope.model import ChatModelBase
@@ -20,6 +16,65 @@ from src.utils.call_with_retry import call_chatbot_with_retry
 from src.utils.file_converter import pdf_to_markdown, markdown_to_sections
 from src.utils.image_analyze import inject_vlm_into_demo_markdown
 from src.utils.instance import create_agent_formatter, create_vlm_model
+
+
+async def _process_outline_section(
+    section: Section,
+    llm_reasoning: ChatModelBase,
+    llm_instruct: ChatModelBase,
+    formatter,
+    only_evidence: bool,
+    another_stock: bool,
+    demo_date: str,
+    demo_name: str,
+) -> None:
+    if section.subsections:
+        await asyncio.gather(
+            *[
+                _process_outline_section(
+                    subsection,
+                    llm_reasoning,
+                    llm_instruct,
+                    formatter,
+                    only_evidence,
+                    another_stock,
+                    demo_date,
+                    demo_name,
+                )
+                for subsection in section.subsections
+            ]
+        )
+
+    if section.segments and len(section.segments) > 0 and section.segments[0].reference:
+        decomposed_segments_text = await call_chatbot_with_retry(
+            llm_reasoning, formatter,
+            prompt_dict["decompose"], section.segments[0].reference.replace("<SEP>", "")
+        )
+        if decomposed_segments_text is None:
+            raise AssertionError("Decomposed segments text is None")
+        decomposed_segments_text = decomposed_segments_text.split("<SEP>")
+        processed_segments = []
+        parse_segment_response = partial(_parse_segment_response, only_evidence=only_evidence)
+        for segment_text in decomposed_segments_text:
+            if not segment_text.strip():
+                continue
+            segment_res = await call_chatbot_with_retry(
+                llm_instruct, formatter,
+                prompt_dict["extract_evidence" if only_evidence else "plan_outline"],
+                f"为了撰写一份新研报，我找到了某机构在过去{demo_date}撰写的一份研报"
+                f"（{'可能是不同公司' if another_stock else '同一公司'}），名为{demo_name}。"
+                f"从中摘出的一段参考片段如下：\n<reference>{segment_text}</reference>\n\n"
+                f"请你考虑时间差和公司异同，抽取用于当前新任务的论据{'' if only_evidence else '、撰写模版、写作要求'}和主题。\n"
+                "\n",
+                hook=parse_segment_response,
+                handle_hook_exceptions=(AssertionError,)
+            )
+            if isinstance(segment_res, str) and "<skip>true</skip>" in segment_res.lower():
+                continue
+            segment = segment_res
+            segment.reference = segment_text
+            processed_segments.append(segment)
+        section.segments = processed_segments
 
 
 async def process_pdf_to_outline(pdf_path: Path, save_dir: Path,
@@ -65,43 +120,15 @@ async def process_pdf_to_outline(pdf_path: Path, save_dir: Path,
 
     print("    - 步骤 3/3: 调用大模型分解并填充内容...", flush=True)
 
-    async def dfs_process_section(section: Section):
-        if section.subsections:
-            await asyncio.gather(*[dfs_process_section(subsection) for subsection in section.subsections])
-
-        if section.segments and len(section.segments) > 0 and section.segments[0].reference:
-            decomposed_segments_text = await call_chatbot_with_retry(
-                llm_reasoning, formatter,
-                prompt_dict["decompose"], section.segments[0].reference.replace("<SEP>", "")
-            )
-            if decomposed_segments_text is None:
-                raise AssertionError("Decomposed segments text is None")
-            decomposed_segments_text = decomposed_segments_text.split("<SEP>")
-            processed_segments = []
-            parse_segment_response = partial(_parse_segment_response, only_evidence=only_evidence)
-            for i, segment_text in enumerate(decomposed_segments_text):
-                if not segment_text.strip(): continue
-                segment_res = await call_chatbot_with_retry(
-                    llm_instruct, formatter,
-                    prompt_dict["extract_evidence" if only_evidence else "plan_outline"],
-                    f"为了撰写一份新研报，我找到了某机构在过去{demo_date}撰写的一份研报"
-                    f"（{'可能是不同公司' if another_stock else '同一公司'}），名为{demo_name}。"
-                    f"从中摘出的一段参考片段如下：\n<reference>{segment_text}</reference>\n\n"
-                    f"请你考虑时间差和公司异同，抽取用于当前新任务的论据{'' if only_evidence else '、撰写模版、写作要求'}和主题。\n"
-                    "\n",
-                    hook=parse_segment_response,
-                    handle_hook_exceptions=(AssertionError,)
-                )
-                if isinstance(segment_res, str) and "<skip>true</skip>" in segment_res.lower():
-                    continue
-                segment = segment_res
-                segment.reference = segment_text
-                processed_segments.append(segment)
-            section.segments = processed_segments
-
-    await dfs_process_section(manuscript)
-    # outline = manuscript.read(read_subsections=True, with_reference=True, with_content=True, with_evidence=True,
-    #                           fold_other=False)
-    # print(outline)
+    await _process_outline_section(
+        manuscript,
+        llm_reasoning,
+        llm_instruct,
+        formatter,
+        only_evidence,
+        another_stock,
+        demo_date,
+        demo_name,
+    )
     outline_json_path.write_text(manuscript.to_json(ensure_ascii=False), encoding="utf-8")
     return manuscript

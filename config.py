@@ -57,33 +57,27 @@ class Config:
         if "base_color" not in style:
             style["base_color"] = "#498ECE"
         return style
-         
-    def get_model_cfg(self):
-        models = self.data["models"]
-        model_id = self.llm_name
-        model_cfg = deepcopy(models[model_id])
-        model_cfg.setdefault("reasoning_only", False)
-        model_cfg.setdefault("non_reasoning_model_name", None)
-        return model_cfg
-    
-    def get_vlm_cfg(self):
-        models = self.data["models"]
-        model_id = self.vlm_name
-        if model_id is None:
-            raise KeyError("未配置 models.vlm_default/models.default，且未设置 VLM_NAME")
-        model_cfg = deepcopy(models[model_id])
+
+    def _get_model_cfg(self, model_id: str) -> dict:
+        model_cfg = deepcopy(self.data["models"][model_id])
         model_cfg.setdefault("reasoning_only", False)
         model_cfg.setdefault("non_reasoning_model_name", None)
         return model_cfg
 
+    def get_model_cfg(self):
+        return self._get_model_cfg(self.llm_name)
+    
+    def get_vlm_cfg(self):
+        model_id = self.vlm_name
+        if model_id is None:
+            raise KeyError("未配置 models.vlm_default/models.default，且未设置 VLM_NAME")
+        return self._get_model_cfg(model_id)
+
     def get_outline_refine_model_cfg(self):
-        models = self.data["models"]
         model_id = self.outline_refine_name
         if model_id is None:
             raise KeyError("未配置 models.outline_refine_default/models.default，且未设置 OUTLINE_REFINE_NAME")
-        model_cfg = deepcopy(models[model_id])
-        model_cfg.setdefault("reasoning_only", False)
-        model_cfg.setdefault("non_reasoning_model_name", None)
+        model_cfg = self._get_model_cfg(model_id)
         model_cfg.setdefault("api_key_env", "OUTLINE_REFINE_API_KEY")
         return model_cfg
 

@@ -3,7 +3,7 @@ from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
 from trafilatura import extract
-from typing import Optional, Callable, Any, Dict, Union, List, Tuple
+from typing import List, Tuple
 
 def fetch_page_html(url: str, timeout: int = 10) -> bytes:
     """用 requests 获取网页 HTML 内容"""

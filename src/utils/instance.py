@@ -3,11 +3,8 @@ from __future__ import annotations
 
 import os
 import inspect
-from agentscope.model import DashScopeChatModel
-from agentscope.token import HuggingFaceTokenCounter
 from agentscope.formatter import (
     DashScopeChatFormatter,
-    DashScopeMultiAgentFormatter,
     DeepSeekChatFormatter,
     OpenAIChatFormatter
 )

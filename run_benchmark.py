@@ -3,7 +3,6 @@ from dotenv import load_dotenv
 load_dotenv()
 import asyncio
 import json
-import os
 import argparse
 import traceback
 from pathlib import Path

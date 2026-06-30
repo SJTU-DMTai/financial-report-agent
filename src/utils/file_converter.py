@@ -34,8 +34,6 @@ from typing import Optional, Union, List, Dict, Tuple, Any
 import time
 from datetime import datetime
 
-import sys
-import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 import config
 from src.utils.format import _has_renderable_content, _strip_section_number_prefix
