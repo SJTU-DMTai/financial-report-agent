@@ -23,7 +23,7 @@ Edit `.env` and `config.local.yaml` as needed. `config.local.yaml` is preferred 
 
 - `data/`: runtime memory and reference data.
   - `data/memory/long_term/`: long-term memory, stock code mapping, and demonstration reports.
-  - `data/memory/short_term/`: per-run intermediate materials.
+  - `data/memory/short_term/<model_name>/<stock_code>_<date>/`: per-run intermediate materials.
 - `output/`: generated reports and evaluation results.
   - `output/reports/<model_name>/`: generated `.json`, `.md`, and `.pdf` reports.
   - `output/<method_name>_<evaluator_llm_name>_benchmark_results.json`: benchmark evaluation outputs.
