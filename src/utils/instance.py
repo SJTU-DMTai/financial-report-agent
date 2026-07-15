@@ -261,7 +261,7 @@ def create_vlm_model():
     elif provider in ["ark"]:
         return _meter_model(_create_openai_chat_model(
             model_name=model_name,
-            api_key="7e3cde63-e447-4a63-9445-69c8942fdfa9",
+            api_key=os.environ.get("VLM_API_KEY") or os.environ.get("ARK_API_KEY") or os.environ.get("API_KEY"),
             stream=stream,
             client_kwargs={"base_url": base_url},
         ))

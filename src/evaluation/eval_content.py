@@ -209,14 +209,6 @@ def _build_report_level_content_user_prompt(report_text: str, report_title: str 
 请你从整篇研报层面仔细思考分析后进行打分。"""
 
 
-def _build_section_level_content_user_prompt(section_text: str, section_title: str) -> str:
-    return f"""# 章节content评估任务
-**章节标题:** {section_title}
-**章节内容:**
-{section_text}
-
-请你从该章节层面仔细思考分析后进行打分。"""
-
 
 def _append_section_content_lines(section: Section, lines: list[str], read_subsections: bool) -> None:
     title = (section.title or "").strip()
@@ -316,52 +308,3 @@ async def get_report_level_content_score(
     )
     _print_content_score_io(label, prompt_dict["eval_content_report_level"], user_prompt, scores)
     return scores
-
-
-async def get_section_level_content_score(
-    model: ChatModelBase,
-    formatter: FormatterBase,
-    section_title: str,
-    section_text: str,
-    label: str = "[section-level]",
-) -> ContentScoreWithReasons:
-    user_prompt = _build_section_level_content_user_prompt(section_text, section_title)
-    scores = await call_chatbot_with_retry(
-        model,
-        formatter,
-        prompt_dict["eval_content_section_level"],
-        user_prompt,
-        structured_model=ContentScoreWithReasons,
-    )
-    _print_content_score_io(label, prompt_dict["eval_content_section_level"], user_prompt, scores)
-    return scores
-
-
-async def get_section_level_content_scores(
-    model: ChatModelBase,
-    formatter: FormatterBase,
-    report: Section,
-    include_root: bool = False,
-) -> list[SectionContentScore]:
-    section_tasks = _collect_sections_for_content(report, include_root=include_root)
-    results: list[SectionContentScore] = []
-    total = len(section_tasks)
-
-    for idx, (section, section_text) in enumerate(section_tasks, 1):
-        scores = await get_section_level_content_score(
-            model,
-            formatter,
-            section.title,
-            section_text,
-            label=f"[section-level {idx}/{total}]",
-        )
-        results.append(
-            SectionContentScore(
-                section_id=section.section_id,
-                level=section.level,
-                title=section.title,
-                content=scores,
-            )
-        )
-
-    return results

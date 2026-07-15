@@ -131,23 +131,6 @@ prompt_dict["section_polish_user_prompt"] = """
 请你根据初稿重新起一个标题，用<title>和</title>包裹住，并在初稿基础上整合、重构并最终润色，完成后的章节正文内容用<content>和</content>包裹住。禁止删除和篡改图表标记和引用标记。
 """
 
-from .criteria_prompt_zh import (
-    generate_eval_dimension_weight_prompt,
-    generate_eval_criteria_prompt_comp,
-    generate_eval_criteria_prompt_insight,
-    generate_eval_criteria_prompt_Inst,
-    generate_eval_criteria_prompt_readability,
-    generate_eval_criteria_prompt_sufficiency,
-)
-
-prompt_dict["eval_weight_prompt"] = generate_eval_dimension_weight_prompt
-prompt_dict["eval_criteria_comprehensiveness"] = generate_eval_criteria_prompt_comp
-prompt_dict["eval_criteria_insight"] = generate_eval_criteria_prompt_insight
-prompt_dict["eval_criteria_instruction_following"] = generate_eval_criteria_prompt_Inst
-prompt_dict["eval_criteria_readability"] = generate_eval_criteria_prompt_readability
-prompt_dict["eval_criteria_sufficiency"] = generate_eval_criteria_prompt_sufficiency
-
-
 prompt_dict["verifier_fact_prompt"] = """
 你是金融研报系统中的事实核查员（Fact Checker）。
 

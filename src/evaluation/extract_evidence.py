@@ -251,11 +251,6 @@ async def drop_duplicate_evidences_by_similarity(
     return final_evidences
 
 
-async def drop_duplicate_evidences(evidences: List[str]) -> List[str]:
-    pairs = [(evidence, "") for evidence in evidences]
-    deduped = await drop_duplicate_evidences_by_similarity(pairs)
-    return [text for text, _ in deduped]
-
 
 def _bm25_similarity_matrix(texts_a: List[str], texts_b: List[str]) -> np.ndarray:
     tokens_a = [_tokenize_for_bm25(t) for t in texts_a]

@@ -24,7 +24,6 @@ dependencies = [
     "agentscope[full]",
     "akshare",
     "pdfkit",
-    "fitz",
     "frontend",
     "ddgs",
     "matplotlib",

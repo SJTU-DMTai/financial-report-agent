@@ -20,6 +20,7 @@ from src.memory.evidence_registry import (
     EvidenceRecord,
     EvidenceRegistry,
     apply_static_reference_citation,
+    is_static_fact_record,
     repair_registry_citation_states,
     sync_segment_evidences_from_record,
 )
@@ -1191,6 +1192,7 @@ async def load_or_build_outline(
     task_desc: str,
     cur_date: str,
     cfg: config.Config,
+    llm_name: str,
 ) -> Section:
     before_refine_outline_path = output_pth / f"{filename}_before_refine_outline.json"
     after_refine_outline_path = output_pth / f"{filename}_after_refine_outline.json"
@@ -1204,6 +1206,7 @@ async def load_or_build_outline(
         llm_reasoning,
         llm_instruct,
         formatter,
+        cache_model_name=llm_name,
     )
     _normalize_section_titles(outline)
     before_refine_outline_path.write_text(outline.to_json(ensure_ascii=False), encoding="utf-8")
@@ -1261,7 +1264,7 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
     try:
         board = None
         filename = f"{stock_symbol}_{cur_date}"
-        short_term_dir = project_root / "data" / "memory" / "short_term" / filename
+        short_term_dir = project_root / "data" / "memory" / "short_term" / cfg.llm_name / filename
         short_term = ShortTermMemoryStore(base_dir=short_term_dir, current_date=cur_date)
         if demo_pdf_path is None:
             demo_pdf_path = STOCK_REPORT_PATHS[stock_symbol][-1]
@@ -1285,6 +1288,7 @@ async def run_workflow(task_desc: str, cur_date=None, demo_pdf_path=None):
                 task_desc,
                 cur_date,
                 cfg,
+                cfg.llm_name,
             )
             _normalize_section_titles(outline)
 

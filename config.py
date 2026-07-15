@@ -97,7 +97,7 @@ class Config:
     def is_multi_source_verification_enabled(self) -> bool:
         verify_config = self.data.get("verify_config", {}) or {}
         return bool(verify_config.get("enable_multi_source_verification", False))
-    
+
     def get_wkhtmltopdf_path(self) -> str | None:
         wkhtmltopdf_cfg = self.data.get("wkhtmltopdf_path", {})
         return wkhtmltopdf_cfg.get("path")
@@ -126,4 +126,9 @@ class Config:
     def get_report_processing_llm_name(self) -> str:
         evaluation_cfg = self.data.get("evaluation", {}) or {}
         return str(evaluation_cfg.get("report_processing_llm_name") or self.llm_name)
+
+    def get_report_processing_model_cfg(self) -> dict:
+        model_cfg = self._get_model_cfg(self.get_report_processing_llm_name())
+        model_cfg["api_key_env"] = "REPORT_PROCESSING_API_KEY"
+        return model_cfg
 

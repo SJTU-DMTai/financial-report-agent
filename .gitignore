@@ -5,6 +5,7 @@ log*.txt
 logs/*
 *.out
 *.png
+paper/
 eval*.txt
 benchmark_prompts.txt
 data/memory/long_term/demonstration/*
@@ -12,7 +13,6 @@ data/memory/long_term/evidences/*
 data/memory/short_term/*
 data/output/reports/*
 data/output/*
-paper/
 .idea/
 cache.db
 .vscode/ 
@@ -21,6 +21,7 @@ verifier_trace_*
 llm_debug_*
 token_usage_*
 usage_tracking_*
+tests/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

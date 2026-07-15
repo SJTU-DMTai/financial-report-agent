@@ -1,3 +1,4 @@
+import json
 from typing import Tuple
 
 from agentscope.formatter import FormatterBase
@@ -42,16 +43,42 @@ def num_of_segment(report: Section) -> Tuple[int, float]:
     return total_segments, avg_segments_per_section
 
 
+class StructureDimensionScore(BaseModel):
+    score: int | float
+    reason: str
+
+
 class StructureScore(BaseModel):
-    comprehensiveness: int
-    logicality: int
+    comprehensiveness: StructureDimensionScore
+    logicality: StructureDimensionScore
+
+
+def _structure_score_output_to_text(scores: StructureScore) -> str:
+    if hasattr(scores, "model_dump"):
+        return json.dumps(scores.model_dump(), ensure_ascii=False, indent=2)
+    if hasattr(scores, "dict"):
+        return json.dumps(scores.dict(), ensure_ascii=False, indent=2)
+    return str(scores)
+
+
+def _print_structure_score_io(label: str, sys_prompt: str, user_prompt: str, scores: StructureScore) -> None:
+    print(
+        f"\n====== Structure Score LLM {label} ======\n"
+        f"[system]\n{sys_prompt}\n"
+        f"[user]\n{user_prompt}\n"
+        f"[output]\n{_structure_score_output_to_text(scores)}\n"
+        f"====== End Structure Score LLM {label} ======",
+        flush=True,
+    )
+
 
 async def structure_score(
     report: Section,
     reference_report: Section,
     model: ChatModelBase,
     formatter: FormatterBase,
-) -> Tuple[int, int]:
+    label: str = "",
+) -> Tuple[int | float, int | float]:
     """
     调用LLM基于参考研报评估新研报结构的完整性和逻辑性。
 
@@ -91,6 +118,7 @@ async def structure_score(
     )
     if isinstance(scores, dict):
         scores = StructureScore(**scores)
-    comprehensiveness = scores.comprehensiveness
-    logicality = scores.logicality
+    _print_structure_score_io(label, prompt_dict["eval_structure"], user_prompt, scores)
+    comprehensiveness = scores.comprehensiveness.score
+    logicality = scores.logicality.score
     return comprehensiveness, logicality

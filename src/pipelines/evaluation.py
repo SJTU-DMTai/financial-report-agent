@@ -34,8 +34,7 @@ import config
 
 CONFIG = config.Config()
 REPORT_PROCESSING_LLM_NAME = CONFIG.get_report_processing_llm_name()
-REPORT_PROCESSING_CONFIG = config.Config(llm_name=REPORT_PROCESSING_LLM_NAME)
-REPORT_PROCESSING_MODEL_CFG = REPORT_PROCESSING_CONFIG.get_model_cfg()
+REPORT_PROCESSING_MODEL_CFG = CONFIG.get_report_processing_model_cfg()
 report_processing_llm_reasoning = create_chat_model(model_cfg=REPORT_PROCESSING_MODEL_CFG)
 report_processing_llm_instruct = create_chat_model(reasoning=False, model_cfg=REPORT_PROCESSING_MODEL_CFG)
 report_processing_formatter = create_agent_formatter(model_cfg=REPORT_PROCESSING_MODEL_CFG)
@@ -443,7 +442,12 @@ def _resolve_report_paths(
     return ref_path, matching_files[0], None, None
 
 
-async def evaluate_structure(new_section: Section, human_section: Section, text_units: int) -> StructureMetrics:
+async def evaluate_structure(
+    new_section: Section,
+    human_section: Section,
+    text_units: int,
+    label: str = "",
+) -> StructureMetrics:
     """评估结构指标（包括完整性和逻辑性）"""
     print(f"    - 正在评估structure指标...")
     total_segments, avg_segments_per_section = num_of_segment(new_section)
@@ -455,6 +459,7 @@ async def evaluate_structure(new_section: Section, human_section: Section, text_
         human_section,
         evaluation_judge_llm,
         evaluation_judge_formatter,
+        label=label,
     )
 
     return StructureMetrics(
@@ -608,7 +613,12 @@ async def benchmark_single_pair(
 
     print(f"[3/4] 评估指标...")
     citation_density, text_units = _compute_citation_density_and_text_units(new_report_path)
-    structure_metrics = await evaluate_structure(sanitized_new_section, sanitized_human_section, text_units)
+    structure_metrics = await evaluate_structure(
+        sanitized_new_section,
+        sanitized_human_section,
+        text_units,
+        label=f"[structure {stock_code} {date}]",
+    )
     coverage_ratio, accuracy_ratio, accurate_count = await evidence_coverage_and_accuracy(
         sanitized_new_evidences,
         sanitized_human_evidences,

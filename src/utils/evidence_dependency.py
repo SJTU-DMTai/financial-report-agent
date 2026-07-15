@@ -118,7 +118,6 @@ def build_dependency_user_prompt(candidates: list[dict[str, str]]) -> str:
                 {
                     "evidence_id": "后置 evidence_id",
                     "depends_on": "前置 evidence_id",
-                    "reason": "简短原因",
                 }
             ]
         },
